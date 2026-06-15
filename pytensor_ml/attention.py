@@ -183,15 +183,10 @@ class MultiheadAttention(Layer):
         self.out_proj = Linear(f"{self.name}_out_proj", n_head * self.head_dim, n_embd, bias)
 
     def _split_heads(self, x: pt.TensorVariable, n_head: int) -> pt.TensorVariable:
-        # (..., seq, n_head * head_dim) -> (..., n_head, seq, head_dim). Keep statically known leading
-        # dims as literals so the reshaped tensor retains its full static shape -- a symbolic
-        # ``x.shape[i]`` would erase it. A static core shape is what lets the numba backend vectorize
-        # attention (e.g. under ``vectorize_graph``) instead of falling back to object mode.
-        lead = tuple(
-            size if size is not None else x.shape[i] for i, size in enumerate(x.type.shape[:-1])
-        )
-        x = x.reshape((*lead, n_head, self.head_dim))
-        return x.swapaxes(-3, -2)
+        # (..., seq, n_head * head_dim) -> (..., n_head, seq, head_dim). split_dims keeps the static
+        # shape a plain reshape would erase, which lets the numba backend vectorize attention (e.g. under
+        # vectorize_graph) instead of falling back to object mode.
+        return pt.split_dims(x, shape=(n_head, self.head_dim), axis=-1).swapaxes(-3, -2)
 
     def __call__(self, x: pt.TensorLike, mask: pt.TensorLike | None = None) -> pt.TensorVariable:
         x = pt.as_tensor(x)
@@ -205,8 +200,7 @@ class MultiheadAttention(Layer):
         attn = scaled_dot_product_attention(q, k, v, mask=mask, is_causal=self.is_causal)
 
         # (..., n_head, seq, head_dim) -> (..., seq, n_head * head_dim)
-        attn = attn.swapaxes(-3, -2)
-        attn = attn.reshape((*tuple(attn.shape[:-2]), self.n_head * self.head_dim))
+        attn = pt.join_dims(attn.swapaxes(-3, -2), start_axis=-2, n_axes=2)
 
         out = self.out_proj(attn)
         out.name = f"{self.name}_output"
