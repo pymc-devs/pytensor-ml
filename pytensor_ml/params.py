@@ -98,7 +98,7 @@ def collect_graph_inputs(
 
     return list(
         filter(
-            lambda var: not isinstance(var, Constant | SharedVariable),  # type: ignore[arg-type]
+            lambda var: not isinstance(var, Constant | SharedVariable),
             graph_inputs(list(outputs)),
         )
     )
@@ -224,4 +224,4 @@ def collect_data_inputs(
     data_inputs : list of TensorVariable
         Graph inputs that are not SharedVariables (i.e., data like X, y_true).
     """
-    return collect_graph_inputs(outputs)  # type: ignore[arg-type]
+    return collect_graph_inputs(outputs)
