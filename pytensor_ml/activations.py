@@ -133,10 +133,12 @@ class GELU(Activation):
 
     def __call__(self, x: pt.TensorLike) -> pt.TensorVariable:
         x = pt.as_tensor(x)
+        # float(...) keeps these Python floats: numpy's float64 scalars would upcast a float32 input to
+        # float64, but a Python float casts by value and preserves the input dtype.
         if self.approximate:
-            out = 0.5 * x * (1 + pt.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x**3)))
+            out = 0.5 * x * (1 + pt.tanh(float(np.sqrt(2.0 / np.pi)) * (x + 0.044715 * x**3)))
         else:
-            out = 0.5 * x * (1 + pt.erf(x / np.sqrt(2.0)))
+            out = 0.5 * x * (1 + pt.erf(x / float(np.sqrt(2.0))))
         out.name = "GELU"
         return out
 
