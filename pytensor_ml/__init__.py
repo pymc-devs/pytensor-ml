@@ -1,6 +1,8 @@
 import logging
 import sys
 
+import pytensor_ml.dispatch  # noqa: F401  (installs the lazy backend-dispatch registration hook)
+
 from pytensor_ml._version import __version__
 from pytensor_ml.checkpoint import load_state, save_state
 from pytensor_ml.pretrained import from_pretrained, load_network, save_network, save_pretrained

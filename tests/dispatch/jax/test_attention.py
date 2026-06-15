@@ -53,3 +53,12 @@ def test_additive_mask(is_causal, rng):
         q_sym, k_sym, v_sym, mask=pt.as_tensor(mask), is_causal=is_causal
     )
     compare_jax_and_py([q_sym, k_sym, v_sym], out, [q, k, v], assert_fn=assert_close)
+
+
+def test_dispatch_auto_registers():
+    """Loading JAX's dispatch must auto-register ours -- no `import pytensor_ml.dispatch.jax` needed."""
+    from pytensor.link.jax.dispatch import jax_funcify
+
+    from pytensor_ml.attention import AttentionLayer
+
+    assert AttentionLayer in jax_funcify.registry

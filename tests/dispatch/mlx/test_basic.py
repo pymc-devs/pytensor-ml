@@ -12,8 +12,6 @@ from pytensor.link.mlx.linker import MLXLinker
 
 mx = pytest.importorskip("mlx.core")
 
-import pytensor_ml.dispatch.mlx  # noqa: E402, F401  (registers pytensor_ml's MLX dispatches)
-
 optimizer = RewriteDatabaseQuery(include=["mlx"], exclude=MLX._optimizer.exclude)
 mlx_mode = Mode(linker=MLXLinker(), optimizer=optimizer)
 py_mode = Mode(linker="py", optimizer=None)

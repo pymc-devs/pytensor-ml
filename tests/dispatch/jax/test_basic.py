@@ -12,8 +12,6 @@ from pytensor.link.jax.linker import JAXLinker
 
 jax = pytest.importorskip("jax")
 
-import pytensor_ml.dispatch.jax  # noqa: E402, F401  (registers pytensor_ml's JAX dispatches)
-
 optimizer = RewriteDatabaseQuery(include=["jax"], exclude=JAX._optimizer.exclude)
 jax_mode = Mode(linker=JAXLinker(), optimizer=optimizer)
 py_mode = Mode(linker="py", optimizer=None)
