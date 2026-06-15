@@ -15,6 +15,7 @@ from pytensor.scalar.basic import constant as scalar_constant
 from pytensor.tensor.random.op import RandomVariable
 from pytensor.tensor.random.type import RandomGeneratorType
 from pytensor.tensor.type import TensorType
+from pytensor.tensor.type_other import NoneConst, NoneTypeT
 
 
 def type_to_json(graph_type: Type) -> dict:
@@ -24,6 +25,8 @@ def type_to_json(graph_type: Type) -> dict:
         return {"kind": "scalar", "dtype": graph_type.dtype}
     if isinstance(graph_type, RandomGeneratorType):
         return {"kind": "random_generator"}
+    if isinstance(graph_type, NoneTypeT):
+        return {"kind": "none"}
     raise TypeError(f"Unserializable type: {graph_type!r}")
 
 
@@ -34,6 +37,8 @@ def type_from_json(type_dict: dict):
         return ScalarType(type_dict["dtype"])
     if type_dict["kind"] == "random_generator":
         return RandomGeneratorType()
+    if type_dict["kind"] == "none":
+        return NoneTypeT()
     raise ValueError(f"Unknown type kind: {type_dict['kind']!r}")
 
 
@@ -76,12 +81,16 @@ def _decode_nonfinite(value):
 
 
 def const_to_json(constant: Constant) -> dict:
+    if isinstance(constant.type, NoneTypeT):
+        return {"type": {"kind": "none"}}
     value = _encode_nonfinite(np.asarray(constant.data).tolist())
     return {"type": type_to_json(constant.type), "value": value}
 
 
 def const_from_json(const_dict: dict):
     graph_type = type_from_json(const_dict["type"])
+    if isinstance(graph_type, NoneTypeT):
+        return NoneConst
     value = np.asarray(_decode_nonfinite(const_dict["value"]), dtype=graph_type.dtype)
     # Use the type-specific constant wrappers: a raw Constant holds an unhashable ndarray and breaks the
     # FrozenApply interning that reconstruction relies on.

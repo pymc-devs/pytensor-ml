@@ -119,6 +119,14 @@ def test_concatenate_roundtrips():
     )
 
 
+def test_specify_shape_with_unknown_dim_roundtrips():
+    # An unspecified (None) dim in specify_shape is a NoneTypeT constant -- exactly what the grad and
+    # canonicalize rewrites inside compile_train bake into a real model's graph.
+    X = pt.matrix("X")
+    output = pt.specify_shape(X, (None, 4))
+    assert_outputs_roundtrip([X], output, [np.random.default_rng(0).normal(size=(5, 4))])
+
+
 def test_embedding_roundtrips():
     ids = pt.lmatrix("ids")
     embedding = Embedding("emb", n_embeddings=8, n_features=5)
