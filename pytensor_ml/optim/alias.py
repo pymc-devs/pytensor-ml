@@ -6,6 +6,7 @@ from pytensor_ml.optim.rules import (
     adagrad_updates,
     adam_updates,
     adamw_updates,
+    rmsprop_updates,
     sgd_updates,
 )
 from pytensor_ml.optim.transform import scale, trace
@@ -82,6 +83,30 @@ def adamw(
     def rule(loss_or_gradients, parameters):
         return adamw_updates(
             loss_or_gradients, parameters, learning_rate, weight_decay, beta1, beta2, epsilon, mask
+        )
+
+    return rule
+
+
+def rmsprop(
+    learning_rate: float = 1e-2,
+    rho: float = 0.9,
+    momentum: float = 0.0,
+    epsilon: float = 1e-8,
+    centered: bool = False,
+) -> UpdateRule:
+    """
+    RMSProp optimizer. See :func:`~pytensor_ml.optim.rules.rmsprop_updates`.
+
+    Returns
+    -------
+    UpdateRule
+        A configured optimizer ``(loss_or_gradients, parameters) -> Updates``.
+    """
+
+    def rule(loss_or_gradients, parameters):
+        return rmsprop_updates(
+            loss_or_gradients, parameters, learning_rate, rho, momentum, epsilon, centered
         )
 
     return rule

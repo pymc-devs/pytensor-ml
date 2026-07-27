@@ -220,6 +220,77 @@ def adagrad_updates(
     return updates
 
 
+def rmsprop_updates(
+    loss_or_gradients: TensorVariable | Sequence[TensorVariable],
+    parameters: Sequence[Parameter],
+    learning_rate: float = 1e-2,
+    rho: float = 0.9,
+    momentum: float = 0.0,
+    epsilon: float = 1e-8,
+    centered: bool = False,
+) -> Updates:
+    r"""
+    RMSProp: per-parameter learning rate scaled by a decaying average of squared gradients.
+
+    .. math::
+
+        v &\leftarrow \rho v + (1 - \rho) g^2 \\
+        p &\leftarrow p - \eta \frac{g}{\sqrt{v + \epsilon}}
+
+    When ``centered`` is set the variance estimate is centered by a decaying average of the gradient,
+    :math:`\sqrt{v - \bar{g}^2 + \epsilon}`. When ``momentum`` is nonzero the scaled gradient is accumulated
+    into a velocity buffer before the step.
+
+    Parameters
+    ----------
+    loss_or_gradients : TensorVariable or sequence of TensorVariable
+        Scalar loss to differentiate, or precomputed gradients.
+    parameters : sequence of shared tensor variable
+        Parameters to update.
+    learning_rate : float
+        Step size :math:`\eta`. Default 1e-2.
+    rho : float
+        Decay rate for the running average of squared gradients. Default 0.9.
+    momentum : float
+        Momentum coefficient. A value of 0 (the default) gives plain RMSProp.
+    epsilon : float
+        Constant added under the root for numerical stability. Default 1e-8.
+    centered : bool
+        Center the variance estimate by the squared running mean of the gradient. Default False.
+
+    Returns
+    -------
+    Updates
+        Mapping from each parameter and its state buffers to their next values.
+    """
+    gradients = get_gradients(loss_or_gradients, parameters)
+
+    updates: Updates = {}
+    for parameter, gradient in zip(parameters, gradients):
+        mean_squared_gradient = state_for(parameter, "rmsprop/mean_squared_gradient")
+        new_mean_squared_gradient = rho * mean_squared_gradient + (1 - rho) * gradient**2
+        updates[mean_squared_gradient] = new_mean_squared_gradient
+
+        variance = new_mean_squared_gradient
+        if centered:
+            mean_gradient = state_for(parameter, "rmsprop/mean_gradient")
+            new_mean_gradient = rho * mean_gradient + (1 - rho) * gradient
+            updates[mean_gradient] = new_mean_gradient
+            variance = variance - new_mean_gradient**2
+
+        scaled_gradient = gradient / pt.sqrt(variance + epsilon)
+
+        if momentum:
+            velocity = state_for(parameter, "rmsprop/velocity")
+            new_velocity = momentum * velocity + scaled_gradient
+            updates[velocity] = new_velocity
+            updates[parameter] = parameter - learning_rate * new_velocity
+        else:
+            updates[parameter] = parameter - learning_rate * scaled_gradient
+
+    return updates
+
+
 def adadelta_updates(
     loss_or_gradients: TensorVariable | Sequence[TensorVariable],
     parameters: Sequence[Parameter],

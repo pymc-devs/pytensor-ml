@@ -10,6 +10,8 @@ from pytensor_ml.optim import (
     adam,
     adam_updates,
     adamw,
+    rmsprop,
+    rmsprop_updates,
     sgd,
     sgd_updates,
 )
@@ -27,8 +29,22 @@ from pytensor_ml.pytensorf import function
         adamw(learning_rate=1e-2, weight_decay=1e-2),
         adagrad(learning_rate=1e-1),
         adadelta(learning_rate=1.0),
+        rmsprop(learning_rate=1e-2),
+        rmsprop(learning_rate=1e-2, momentum=0.9),
+        rmsprop(learning_rate=1e-2, centered=True),
     ],
-    ids=["sgd", "sgd_momentum", "sgd_nesterov", "adam", "adamw", "adagrad", "adadelta"],
+    ids=[
+        "sgd",
+        "sgd_momentum",
+        "sgd_nesterov",
+        "adam",
+        "adamw",
+        "adagrad",
+        "adadelta",
+        "rmsprop",
+        "rmsprop_momentum",
+        "rmsprop_centered",
+    ],
 )
 def test_rule_reduces_loss(run_training, rule):
     history = run_training(rule, n_steps=100)
@@ -96,6 +112,38 @@ def test_adadelta_is_invariant_to_gradient_scale():
         return np.array(values)
 
     np.testing.assert_allclose(trajectory(1.0), trajectory(100.0), rtol=1e-4)
+
+
+def test_rmsprop_first_step_normalizes_gradient_magnitude():
+    """RMSProp's defining behavior: the first step size depends on ``learning_rate`` and ``rho`` alone, not
+    on the gradient magnitude. With ``v_1 = (1 - rho) g**2`` the step is ``lr * g / sqrt((1 - rho) g**2) =
+    lr / sqrt(1 - rho)`` along ``-sign(g)`` — identical for every coordinate no matter how large its gradient.
+    """
+    start = np.array([1.0, -2.0, 100.0])  # gradients span two orders of magnitude
+    p = trainable(start.copy(), name="w")
+    loss = 0.5 * (p**2).sum()  # gradient is exactly p
+    lr, rho = 0.1, 0.9
+    function([], loss, updates=rmsprop_updates(loss, [p], learning_rate=lr, rho=rho))()
+
+    step = start - p.get_value()
+    expected_magnitude = lr / np.sqrt(1 - rho)
+    np.testing.assert_allclose(step, expected_magnitude * np.sign(start), rtol=1e-4)
+
+
+def test_rmsprop_centered_first_step_uses_centered_variance():
+    """Centering subtracts the squared running-mean gradient from the second moment. After one step the
+    variance is ``(1 - rho) * rho * g**2``, so the step magnitude is ``lr / sqrt(rho * (1 - rho))`` — larger
+    than the uncentered ``lr / sqrt(1 - rho)`` by ``1 / sqrt(rho)``, and still independent of gradient scale.
+    """
+    start = np.array([1.0, -2.0, 100.0])  # gradients span two orders of magnitude
+    p = trainable(start.copy(), name="w")
+    loss = 0.5 * (p**2).sum()  # gradient is exactly p
+    lr, rho = 0.1, 0.9
+    function([], loss, updates=rmsprop_updates(loss, [p], learning_rate=lr, rho=rho, centered=True))()
+
+    step = start - p.get_value()
+    expected_magnitude = lr / np.sqrt(rho * (1 - rho))
+    np.testing.assert_allclose(step, expected_magnitude * np.sign(start), rtol=1e-4)
 
 
 def test_precomputed_gradients_accepted():

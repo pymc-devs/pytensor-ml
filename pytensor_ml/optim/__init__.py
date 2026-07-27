@@ -1,4 +1,4 @@
-from pytensor_ml.optim.alias import adadelta, adagrad, adam, adamw, sgd
+from pytensor_ml.optim.alias import adadelta, adagrad, adam, adamw, rmsprop, sgd
 from pytensor_ml.optim.base import Transform, UpdateRule, Updates, chain, get_gradients
 from pytensor_ml.optim.clipping import clip_by_global_norm, clip_by_value
 from pytensor_ml.optim.rules import (
@@ -6,6 +6,7 @@ from pytensor_ml.optim.rules import (
     adagrad_updates,
     adam_updates,
     adamw_updates,
+    rmsprop_updates,
     sgd_updates,
 )
 from pytensor_ml.optim.train import compile_train
@@ -29,6 +30,8 @@ __all__ = [
     "clip_by_value",
     "compile_train",
     "get_gradients",
+    "rmsprop",
+    "rmsprop_updates",
     "scale",
     "scale_by_schedule",
     "sgd",
