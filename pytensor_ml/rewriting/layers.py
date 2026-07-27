@@ -68,7 +68,7 @@ def rewrite_batch_stats_to_running_average_stats(
 
     X_normalized = batch_norm_op(X, loc, scale, running_mean, running_var)
 
-    return [X_normalized, None, None]
+    return [X_normalized, None, None]  # type: ignore[list-item]
 
 
 predict_db.register(

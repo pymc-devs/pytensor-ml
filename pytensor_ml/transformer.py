@@ -160,8 +160,8 @@ class TransformerBlock(Layer):
             x = self.norm1(x + self.attn_dropout(self.attn(x, mask=mask)))
             x = self.norm2(x + self.ff_dropout(self.ff(x)))
 
-        x.name = f"{self.name}_output"
-        return x
+        x.name = f"{self.name}_output"  # type: ignore[union-attr]
+        return x  # type: ignore[return-value]
 
 
 __all__ = [

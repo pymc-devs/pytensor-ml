@@ -1,6 +1,7 @@
 import warnings
 
 from collections.abc import Iterable, Sequence
+from typing import cast
 
 import numpy as np
 import pytensor
@@ -242,7 +243,8 @@ def function(
     )
 
     if rng_updates:
-        reseed_rngs(list(rng_updates), random_seed)
+        rngs = cast(list[SharedVariable], list(rng_updates))
+        reseed_rngs(rngs, random_seed)
 
     mode = get_mode(mode)
     opt_qry = mode.provided_optimizer.including("random_make_inplace")

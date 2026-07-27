@@ -51,7 +51,7 @@ def get_gradients(
         if len(gradients) != len(parameters):
             raise ValueError(f"Got {len(gradients)} gradients for {len(parameters)} parameters.")
         return gradients
-    return grad(rewrite_pregrad(loss_or_gradients), list(parameters))
+    return grad(rewrite_pregrad(loss_or_gradients), list(parameters))  # type: ignore[return-value]
 
 
 def state_for(parameter: Parameter, slot: str, fill_value: float = 0.0) -> Parameter:
