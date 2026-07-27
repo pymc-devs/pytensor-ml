@@ -1,5 +1,3 @@
-import pytensor.tensor as pt
-
 from pytensor.graph.basic import Apply
 from pytensor.graph.fg import FunctionGraph
 from pytensor.graph.rewriting.basic import node_rewriter
@@ -60,12 +58,7 @@ def rewrite_batch_stats_to_running_average_stats(
     """
     X, loc, scale, running_mean, running_var = node.inputs
 
-    res = (X - running_mean) / pt.sqrt(running_var + node.op.epsilon)  # type: ignore[operator]
-    res = loc + res * scale
-
     batch_norm_op = PredictionBatchNormLayer(
-        inputs=[X, loc, scale, running_mean, running_var],
-        outputs=[res],
         name=f"{node.op.name}",
         n_in=node.op.n_in,
         momentum=node.op.momentum,

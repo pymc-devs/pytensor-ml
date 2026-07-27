@@ -11,6 +11,9 @@ from pytensor_ml.pytensorf import UnaryLayerOp
 class AttentionLayer(UnaryLayerOp):
     __props__ = ("is_causal", "scale")
 
+    def build_inner_graph(self, q, k, v, mask=None):
+        return [_sdpa_graph(q, k, v, mask, self.is_causal, self.scale)]
+
 
 def _repeat_kv(x: TensorVariable, n_head: int | None, n_kv_head: int | None) -> TensorVariable:
     """Broadcast ``n_kv_head`` key/value heads up to ``n_head`` query heads (grouped-query attention).
@@ -117,11 +120,7 @@ def scaled_dot_product_attention(
         mask = pt.as_tensor(mask)
         inputs.append(mask)
 
-    out = _sdpa_graph(q, k, v, mask, is_causal, scale)
-
     op = AttentionLayer(
-        inputs=inputs,
-        outputs=[out],
         name="ScaledDotProductAttention",
         is_causal=is_causal,
         scale=scale,
@@ -184,8 +183,14 @@ class MultiheadAttention(Layer):
         self.out_proj = Linear(f"{self.name}_out_proj", n_head * self.head_dim, n_embd, bias)
 
     def _split_heads(self, x: pt.TensorVariable, n_head: int) -> pt.TensorVariable:
-        # (..., seq, n_head * head_dim) -> (..., n_head, seq, head_dim)
-        x = x.reshape((*tuple(x.shape[:-1]), n_head, self.head_dim))
+        # (..., seq, n_head * head_dim) -> (..., n_head, seq, head_dim). Keep statically known leading
+        # dims as literals so the reshaped tensor retains its full static shape -- a symbolic
+        # ``x.shape[i]`` would erase it. A static core shape is what lets the numba backend vectorize
+        # attention (e.g. under ``vectorize_graph``) instead of falling back to object mode.
+        lead = tuple(
+            size if size is not None else x.shape[i] for i, size in enumerate(x.type.shape[:-1])
+        )
+        x = x.reshape((*lead, n_head, self.head_dim))
         return x.swapaxes(-3, -2)
 
     def __call__(self, x: pt.TensorLike, mask: pt.TensorLike | None = None) -> pt.TensorVariable:

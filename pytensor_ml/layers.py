@@ -31,6 +31,12 @@ class Layer(ABC):
 class LinearLayer(UnaryLayerOp):
     __props__ = ("n_in", "n_out", "bias")
 
+    def build_inner_graph(self, X, W, b=None):
+        res = X @ W
+        if self.bias:
+            res = res + b
+        return [res]
+
 
 class Linear(Layer):
     def __init__(self, name: str | None, n_in: int, n_out: int, bias: bool = True):
@@ -49,20 +55,15 @@ class Linear(Layer):
     def __call__(self, X: pt.TensorLike) -> pt.TensorVariable:
         X = pt.as_tensor(X)
 
-        init_st_shape = shape_to_str(X.type.shape)
-
-        res = X @ self.W
         inputs = [X, self.W]
         if self.bias:
-            res += self.b
             inputs.append(self.b)
 
-        final_st_shape = shape_to_str(res.type.shape)
+        input_shape = shape_to_str(X.type.shape)
+        output_shape = shape_to_str((X @ self.W).type.shape)
 
         ofg = LinearLayer(
-            inputs=inputs,
-            outputs=[res],
-            name=f"{self.name}[{init_st_shape} -> {final_st_shape}]",
+            name=f"{self.name}[{input_shape} -> {output_shape}]",
             n_in=self.n_in,
             n_out=self.n_out,
             bias=self.bias,
@@ -75,6 +76,9 @@ class Linear(Layer):
 
 class EmbeddingLayer(UnaryLayerOp):
     __props__ = ("n_embeddings", "n_features")
+
+    def build_inner_graph(self, ids, W):
+        return [W[ids]]
 
 
 class Embedding(Layer):
@@ -107,8 +111,6 @@ class Embedding(Layer):
         ids = pt.as_tensor(ids)
 
         out = EmbeddingLayer(
-            inputs=[ids, self.W],
-            outputs=[self.W[ids]],
             name=self.name,
             n_embeddings=self.n_embeddings,
             n_features=self.n_features,
@@ -120,6 +122,9 @@ class Embedding(Layer):
 
 class DropoutLayer(UnaryLayerOp):
     __props__ = ("p",)
+
+    def build_inner_graph(self, X, mask):
+        return [pt.where(mask, ift=X / (1 - self.p), iff=0)]
 
 
 class Dropout(Layer):
@@ -137,8 +142,6 @@ class Dropout(Layer):
         mask = mask.astype(config.floatX)
 
         X_masked = DropoutLayer(
-            inputs=[X, mask],
-            outputs=[pt.where(mask, ift=X / (1 - p), iff=0)],
             name=f"{self.name}[p = {self.p}]",
             p=self.p,
         )(X, mask)
@@ -147,19 +150,51 @@ class Dropout(Layer):
         return X_masked
 
 
+def _batch_normalize(X, epsilon):
+    mu = X.mean(axis=0)
+    sigma_sq = X.var(axis=0)
+    return (X - mu) / pt.sqrt(sigma_sq + epsilon), mu, sigma_sq
+
+
 class BatchNormLayer(LayerOp):
     __props__ = ("n_in", "epsilon", "momentum", "affine")
 
     def update_map(self):
+        # Outputs 1 and 2 (the new running mean and variance) update inputs 3 and 4 (the old ones).
         return {1: 3, 2: 4}
+
+    def build_inner_graph(self, X, *rest):
+        if self.affine:
+            loc, scale, running_mean, running_var = rest
+        else:
+            running_mean, running_var = rest
+
+        X_normalized, mu, sigma_sq = _batch_normalize(X, self.epsilon)
+        X_rescaled = X_normalized * scale + loc if self.affine else X_normalized
+
+        new_running_mean = self.momentum * mu + (1 - self.momentum) * running_mean
+        new_running_var = self.momentum * sigma_sq + (1 - self.momentum) * running_var
+
+        return [X_rescaled, new_running_mean, new_running_var]
 
 
 class NoRunningStatsBatchNormLayer(UnaryLayerOp):
     __props__ = ("n_in", "epsilon", "momentum", "affine")
 
+    def build_inner_graph(self, X, *rest):
+        X_normalized, _, _ = _batch_normalize(X, self.epsilon)
+        if self.affine:
+            loc, scale = rest
+            return [X_normalized * scale + loc]
+        return [X_normalized]
+
 
 class PredictionBatchNormLayer(UnaryLayerOp):
     __props__ = ("n_in", "epsilon", "momentum", "affine")
+
+    def build_inner_graph(self, X, loc, scale, running_mean, running_var):
+        res = (X - running_mean) / pt.sqrt(running_var + self.epsilon)
+        return [loc + res * scale]
 
 
 class BatchNorm2D(Layer):
@@ -261,26 +296,14 @@ class BatchNorm2D(Layer):
 
         self._initialize_params(X)
 
-        mu = X.mean(axis=0)
-        sigma_sq = X.var(axis=0)
-
-        X_normalized = (X - mu) / pt.sqrt(sigma_sq + self.epsilon)
-
         if self.affine:
             assert self.scale is not None and self.loc is not None
-            X_rescaled = X_normalized * self.scale + self.loc
             inputs.extend([self.loc, self.scale])
-        else:
-            X_rescaled = X_normalized
 
         if self.track_running_stats:
             assert self.running_mean is not None and self.running_var is not None
-            new_running_mean = self.momentum * mu + (1 - self.momentum) * self.running_mean
-            new_running_var = self.momentum * sigma_sq + (1 - self.momentum) * self.running_var
 
             batch_norm_op: LayerOp = BatchNormLayer(
-                inputs=[*inputs, self.running_mean, self.running_var],
-                outputs=[X_rescaled, new_running_mean, new_running_var],
                 name=self.name,
                 n_in=self.n_in,
                 epsilon=self.epsilon,
@@ -294,8 +317,6 @@ class BatchNorm2D(Layer):
 
         else:
             batch_norm_op = NoRunningStatsBatchNormLayer(
-                inputs=inputs,
-                outputs=[X_rescaled],
                 name=self.name,
                 n_in=self.n_in,
                 epsilon=self.epsilon,
@@ -314,6 +335,18 @@ class BatchNorm2D(Layer):
 
 class LayerNormLayer(UnaryLayerOp):
     __props__ = ("n_in", "epsilon", "affine")
+
+    def build_inner_graph(self, X, *rest):
+        mu = X.mean(axis=-1, keepdims=True)
+        # Biased variance (ddof=0), matching torch.nn.LayerNorm; pretrained weights assume it. Do
+        # not "correct" to the unbiased estimator -- it would diverge from every pretrained model.
+        sigma_sq = X.var(axis=-1, keepdims=True)
+        X_normalized = (X - mu) / pt.sqrt(sigma_sq + self.epsilon)
+
+        if self.affine:
+            scale, loc = rest
+            return [X_normalized * scale + loc]
+        return [X_normalized]
 
 
 class LayerNorm(Layer):
@@ -380,23 +413,12 @@ class LayerNorm(Layer):
         X = pt.as_tensor(X)
         self._initialize_params(X)
 
-        mu = X.mean(axis=-1, keepdims=True)
-        # Biased variance (ddof=0), matching torch.nn.LayerNorm; pretrained weights assume it. Do
-        # not "correct" to the unbiased estimator -- it would diverge from every pretrained model.
-        sigma_sq = X.var(axis=-1, keepdims=True)
-        X_normalized = (X - mu) / pt.sqrt(sigma_sq + self.epsilon)
-
         inputs = [X]
         if self.affine:
             assert self.scale is not None and self.loc is not None
-            X_rescaled = X_normalized * self.scale + self.loc
             inputs.extend([self.scale, self.loc])
-        else:
-            X_rescaled = X_normalized
 
         X_transformed = LayerNormLayer(
-            inputs=inputs,
-            outputs=[X_rescaled],
             name=self.name,
             n_in=self.n_in,
             epsilon=self.epsilon,
