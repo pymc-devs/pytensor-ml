@@ -40,9 +40,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/jessegrabowski/pytensor_ml"
-Source = "https://github.com/jessegrabowski/pytensor_ml"
-Tracker = "https://github.com/jessegrabowski/pytensor_ml/issues"
+Homepage = "https://github.com/pymc-devs/pytensor_ml"
+Source = "https://github.com/pymc-devs/pytensor_ml"
+Tracker = "https://github.com/pymc-devs/pytensor_ml/issues"
 
 [project.optional-dependencies]
 dev = [
