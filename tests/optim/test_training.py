@@ -10,7 +10,8 @@ from pytensor_ml.activations import LeakyReLU
 from pytensor_ml.layers import BatchNorm2D, Linear, Sequential
 from pytensor_ml.loss import CrossEntropy, SquaredError, supervised_loss
 from pytensor_ml.optim import adam, compile_train, sgd
-from pytensor_ml.params import collect_non_trainable_params, collect_trainable_params
+from pytensor_ml.optim.base import state_for
+from pytensor_ml.params import collect_non_trainable_params, collect_trainable_params, trainable
 from pytensor_ml.state import initialize_params
 from pytensor_ml.util import DataLoader
 
@@ -116,6 +117,24 @@ def test_compile_train_infers_parameters_and_inputs():
     step = compile_train(loss, sgd(1e-2))  # parameters and inputs collected from the graph
 
     assert callable(step)
+
+
+def test_state_for_requires_named_parameter():
+    # An unnamed parameter would leave every state buffer named by its bare slot, so distinct parameters
+    # would silently share state at serialization boundaries.
+    anonymous = trainable(np.zeros(2))
+    with pytest.raises(ValueError, match="unnamed parameter"):
+        state_for(anonymous, "adam/first_moment")
+
+
+def test_compile_train_rejects_duplicate_parameter_names():
+    # Two parameters sharing a name give their optimizer state colliding names; compile_train refuses to
+    # build a training step whose checkpointed state cannot be told apart.
+    first = trainable(np.zeros(1), name="dup")
+    second = trainable(np.zeros(1), name="dup")
+    loss = ((first + second) ** 2).sum()
+    with pytest.raises(ValueError, match="share the name"):
+        compile_train(loss, adam(1e-3), parameters=[first, second], inputs=[])
 
 
 def test_compile_train_includes_non_trainable_updates():

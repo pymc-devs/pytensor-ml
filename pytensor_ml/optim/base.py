@@ -76,9 +76,39 @@ def state_for(parameter: Parameter, slot: str, fill_value: float = 0.0) -> Param
     shared tensor variable
         A freshly allocated state variable.
     """
+    if parameter.name is None:
+        raise ValueError(
+            f"Cannot allocate optimizer state {slot!r} for an unnamed parameter. Stateful optimizers rely on "
+            "parameter names to identify their state at serialization boundaries; give the parameter a name."
+        )
     value = parameter.get_value(borrow=True)
-    name = f"{parameter.name}/{slot}" if parameter.name is not None else slot
-    return pytensor.shared(np.full_like(value, fill_value), name=name)
+    return pytensor.shared(np.full_like(value, fill_value), name=f"{parameter.name}/{slot}")
+
+
+def require_unique_state_names(updates: Updates) -> None:
+    """
+    Raise if two distinct shared variables in ``updates`` share a name.
+
+    Optimizer state is matched by name at serialization boundaries, so two buffers with the same name would
+    silently alias each other on save or restore. Runtime is unaffected — the updates dict is keyed by object
+    identity — so this guards only the serialization contract.
+
+    Parameters
+    ----------
+    updates : Updates
+        The assembled updates dict whose shared-variable keys are checked.
+    """
+    seen: set[str] = set()
+    for variable in updates:
+        name = variable.name
+        if name is None:
+            continue
+        if name in seen:
+            raise ValueError(
+                f"Two distinct shared variables share the name {name!r}. Optimizer state is matched by name "
+                "at serialization boundaries and would collide; ensure parameters have unique names."
+            )
+        seen.add(name)
 
 
 def counter(name: str) -> Parameter:

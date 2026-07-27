@@ -3,7 +3,7 @@ from collections.abc import Sequence
 from pytensor.compile import Function, SharedVariable
 from pytensor.tensor import TensorVariable
 
-from pytensor_ml.optim.base import Parameter, UpdateRule
+from pytensor_ml.optim.base import Parameter, UpdateRule, require_unique_state_names
 from pytensor_ml.params import (
     collect_data_inputs,
     collect_non_trainable_updates,
@@ -56,5 +56,7 @@ def compile_train(
     updates: dict[SharedVariable, TensorVariable] = dict(rule(loss, parameters))
     for parameter, new_value in collect_non_trainable_updates(loss).items():
         updates[parameter] = new_value
+
+    require_unique_state_names(updates)
 
     return function(list(inputs), loss, updates=updates, **(compile_kwargs or {}))
