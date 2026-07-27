@@ -34,7 +34,7 @@ keywords = [
 ]
 
 dependencies = [
-  "pytensor>=3.0.0,<4.0.0",
+  "pytensor>=3.2.3,<4.0.0",
   "numpy",
   "safetensors"
 ]
