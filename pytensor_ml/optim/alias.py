@@ -5,8 +5,11 @@ from pytensor_ml.optim.rules import (
     adadelta_updates,
     adagrad_updates,
     adam_updates,
+    adamax_updates,
     adamw_updates,
+    nadam_updates,
     rmsprop_updates,
+    rprop_updates,
     sgd_updates,
 )
 from pytensor_ml.optim.transform import scale, trace
@@ -46,6 +49,7 @@ def adam(
     beta1: float = 0.9,
     beta2: float = 0.999,
     epsilon: float = 1e-8,
+    amsgrad: bool = False,
 ) -> UpdateRule:
     """
     Adam optimizer. See :func:`~pytensor_ml.optim.rules.adam_updates` for the update rule.
@@ -57,7 +61,9 @@ def adam(
     """
 
     def rule(loss_or_gradients, parameters):
-        return adam_updates(loss_or_gradients, parameters, learning_rate, beta1, beta2, epsilon)
+        return adam_updates(
+            loss_or_gradients, parameters, learning_rate, beta1, beta2, epsilon, amsgrad
+        )
 
     return rule
 
@@ -68,6 +74,7 @@ def adamw(
     beta1: float = 0.9,
     beta2: float = 0.999,
     epsilon: float = 1e-8,
+    amsgrad: bool = False,
     mask: Callable[[Parameter], bool] | None = None,
 ) -> UpdateRule:
     """
@@ -82,7 +89,83 @@ def adamw(
 
     def rule(loss_or_gradients, parameters):
         return adamw_updates(
-            loss_or_gradients, parameters, learning_rate, weight_decay, beta1, beta2, epsilon, mask
+            loss_or_gradients,
+            parameters,
+            learning_rate,
+            weight_decay,
+            beta1,
+            beta2,
+            epsilon,
+            amsgrad,
+            mask,
+        )
+
+    return rule
+
+
+def nadam(
+    learning_rate: float = 2e-3,
+    beta1: float = 0.9,
+    beta2: float = 0.999,
+    epsilon: float = 1e-8,
+) -> UpdateRule:
+    """
+    Nadam optimizer (Adam with Nesterov momentum). See
+    :func:`~pytensor_ml.optim.rules.nadam_updates`.
+
+    Returns
+    -------
+    UpdateRule
+        A configured optimizer ``(loss_or_gradients, parameters) -> Updates``.
+    """
+
+    def rule(loss_or_gradients, parameters):
+        return nadam_updates(loss_or_gradients, parameters, learning_rate, beta1, beta2, epsilon)
+
+    return rule
+
+
+def adamax(
+    learning_rate: float = 2e-3,
+    beta1: float = 0.9,
+    beta2: float = 0.999,
+    epsilon: float = 1e-8,
+) -> UpdateRule:
+    """
+    AdaMax optimizer (Adam with an infinity-norm denominator). See
+    :func:`~pytensor_ml.optim.rules.adamax_updates`.
+
+    Returns
+    -------
+    UpdateRule
+        A configured optimizer ``(loss_or_gradients, parameters) -> Updates``.
+    """
+
+    def rule(loss_or_gradients, parameters):
+        return adamax_updates(loss_or_gradients, parameters, learning_rate, beta1, beta2, epsilon)
+
+    return rule
+
+
+def rprop(
+    learning_rate: float = 1e-2,
+    eta_minus: float = 0.5,
+    eta_plus: float = 1.2,
+    step_min: float = 1e-6,
+    step_max: float = 50.0,
+) -> UpdateRule:
+    """
+    Rprop optimizer (resilient backpropagation). See :func:`~pytensor_ml.optim.rules.rprop_updates`.
+
+    Returns
+    -------
+    UpdateRule
+        A configured optimizer ``(loss_or_gradients, parameters) -> Updates``.
+    """
+
+    def rule(loss_or_gradients, parameters):
+        return rprop_updates(
+            loss_or_gradients, parameters, learning_rate, eta_minus, eta_plus, step_min, step_max
         )
 
     return rule

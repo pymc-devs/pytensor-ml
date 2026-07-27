@@ -9,9 +9,15 @@ from pytensor_ml.optim import (
     adagrad_updates,
     adam,
     adam_updates,
+    adamax,
+    adamax_updates,
     adamw,
+    nadam,
+    nadam_updates,
     rmsprop,
     rmsprop_updates,
+    rprop,
+    rprop_updates,
     sgd,
     sgd_updates,
 )
@@ -26,24 +32,34 @@ from pytensor_ml.pytensorf import function
         sgd(learning_rate=1e-2, momentum=0.9),
         sgd(learning_rate=1e-2, momentum=0.9, nesterov=True),
         adam(learning_rate=1e-2),
+        adam(learning_rate=1e-2, amsgrad=True),
         adamw(learning_rate=1e-2, weight_decay=1e-2),
+        adamw(learning_rate=1e-2, weight_decay=1e-2, amsgrad=True),
         adagrad(learning_rate=1e-1),
         adadelta(learning_rate=1.0),
         rmsprop(learning_rate=1e-2),
         rmsprop(learning_rate=1e-2, momentum=0.9),
         rmsprop(learning_rate=1e-2, centered=True),
+        nadam(learning_rate=1e-2),
+        adamax(learning_rate=1e-2),
+        rprop(learning_rate=1e-2),
     ],
     ids=[
         "sgd",
         "sgd_momentum",
         "sgd_nesterov",
         "adam",
+        "adam_amsgrad",
         "adamw",
+        "adamw_amsgrad",
         "adagrad",
         "adadelta",
         "rmsprop",
         "rmsprop_momentum",
         "rmsprop_centered",
+        "nadam",
+        "adamax",
+        "rprop",
     ],
 )
 def test_rule_reduces_loss(run_training, rule):
@@ -139,11 +155,103 @@ def test_rmsprop_centered_first_step_uses_centered_variance():
     p = trainable(start.copy(), name="w")
     loss = 0.5 * (p**2).sum()  # gradient is exactly p
     lr, rho = 0.1, 0.9
-    function([], loss, updates=rmsprop_updates(loss, [p], learning_rate=lr, rho=rho, centered=True))()
+    function(
+        [], loss, updates=rmsprop_updates(loss, [p], learning_rate=lr, rho=rho, centered=True)
+    )()
 
     step = start - p.get_value()
     expected_magnitude = lr / np.sqrt(rho * (1 - rho))
     np.testing.assert_allclose(step, expected_magnitude * np.sign(start), rtol=1e-4)
+
+
+def test_nadam_first_step_scales_by_one_plus_beta1():
+    """The Nesterov look-ahead makes Nadam's first step ``lr * (1 + beta1) * sign(g)`` per coordinate: at
+    t = 1 the numerator ``beta1 * m_hat + (1 - beta1) * g / (1 - beta1)`` reduces to ``(1 + beta1) g`` while
+    ``v_hat = g**2`` normalizes the magnitude away. This is Adam's ``lr * sign(g)`` amplified by ``1 + beta1``.
+    """
+    start = np.array([1.0, -2.0, 100.0])  # gradients span two orders of magnitude
+    p = trainable(start.copy(), name="w")
+    loss = 0.5 * (p**2).sum()  # gradient is exactly p
+    lr, beta1 = 0.1, 0.9
+    function([], loss, updates=nadam_updates(loss, [p], learning_rate=lr, beta1=beta1))()
+
+    step = start - p.get_value()
+    np.testing.assert_allclose(step, lr * (1 + beta1) * np.sign(start), rtol=1e-6)
+
+
+def test_adamax_takes_constant_step_under_constant_gradient():
+    """AdaMax's infinity-norm denominator saturates at ``|g|`` under a constant gradient while bias
+    correction drives the corrected first moment to ``g``, so every step is exactly ``lr * sign(g)`` — it
+    never decays the way AdaGrad's does, and is independent of the gradient magnitude."""
+    start = np.array([5.0, -3.0])
+    p = trainable(start.copy(), name="w")
+    g0 = np.array([2.0, -0.5])  # 4x apart, yet both coordinates take the same step size
+    loss = (pt.constant(g0) * p).sum()  # constant gradient g0, independent of p
+    lr, n_steps = 0.1, 6
+    fn = function([], loss, updates=adamax_updates(loss, [p], learning_rate=lr))
+
+    previous = start.copy()
+    for _ in range(n_steps):
+        fn()
+        current = p.get_value()
+        np.testing.assert_allclose(np.abs(current - previous), lr, rtol=1e-4)
+        previous = current
+
+
+def test_rprop_step_grows_geometrically_under_constant_sign():
+    """Rprop ignores gradient magnitude and steps by a per-parameter step size that grows by ``eta_plus``
+    each time the gradient keeps its sign. Under a constant gradient the step at iteration t is therefore
+    ``lr * eta_plus ** (t - 1)``, identical for every coordinate regardless of its gradient."""
+    start = np.array([5.0, -3.0])
+    p = trainable(start.copy(), name="w")
+    g0 = np.array([2.0, -0.5])  # 4x apart, yet both coordinates take the same step size
+    loss = (pt.constant(g0) * p).sum()  # constant gradient g0, independent of p
+    lr, eta_plus, n_steps = 0.01, 1.2, 5
+    fn = function([], loss, updates=rprop_updates(loss, [p], learning_rate=lr, eta_plus=eta_plus))
+
+    previous = start.copy()
+    for t in range(1, n_steps + 1):
+        fn()
+        current = p.get_value()
+        np.testing.assert_allclose(np.abs(current - previous), lr * eta_plus ** (t - 1), rtol=1e-6)
+        previous = current
+
+
+def test_rprop_shrinks_and_skips_on_sign_flip():
+    """When the gradient reverses sign, Rprop shrinks that coordinate's step by ``eta_minus``, skips the
+    update for that iteration, and zeroes the remembered gradient so the next step is treated as neutral (no
+    further size change)."""
+    g = pt.vector("g")
+    p = trainable(np.zeros(1), name="w")
+    lr, eta_minus = 0.1, 0.5
+    fn = function([g], p, updates=rprop_updates([g], [p], learning_rate=lr, eta_minus=eta_minus))
+
+    fn([1.0])  # neutral start: step by lr against the gradient sign
+    np.testing.assert_allclose(p.get_value(), [-lr])
+    fn([-1.0])  # sign flip: update skipped, step size shrinks to lr * eta_minus
+    np.testing.assert_allclose(p.get_value(), [-lr])
+    fn([-1.0])  # remembered gradient was zeroed, so this step is neutral at the shrunk size
+    np.testing.assert_allclose(p.get_value(), [-lr + lr * eta_minus])
+
+
+def test_amsgrad_caps_step_after_gradient_spike():
+    """AMSGrad divides by the running maximum of the second moment, so a large gradient permanently caps the
+    denominator. Once gradients shrink it therefore takes a smaller step than plain Adam, whose decaying
+    second moment lets the effective step size grow back."""
+    g = pt.vector("g")
+
+    def step_after_spike(amsgrad):
+        p = trainable(np.zeros(1), name="w")
+        updates = adam_updates([g], [p], learning_rate=0.1, beta2=0.9, amsgrad=amsgrad)
+        fn = function([g], p, updates=updates)
+        fn([10.0])
+        for _ in range(20):
+            fn([1e-3])
+        before = p.get_value().copy()
+        fn([1e-3])
+        return np.abs(p.get_value() - before)[0]
+
+    assert step_after_spike(amsgrad=True) < step_after_spike(amsgrad=False)
 
 
 def test_precomputed_gradients_accepted():
