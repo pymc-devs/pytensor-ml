@@ -1,4 +1,3 @@
-from pytensor.graph.fg import FrozenFunctionGraph
 from pytensor.scan.op import Scan, ScanInfo
 
 from pytensor_ml.json_serialize import (
@@ -19,7 +18,7 @@ _SCAN_INFO_FIELDS = tuple(ScanInfo.__annotations__)
 def _scan_to_json(op: Scan) -> dict:
     return {
         "family": "scan",
-        "inner": graph_to_json(FrozenFunctionGraph(op.inner_inputs, op.inner_outputs)),
+        "inner": graph_to_json(op.inner_inputs, op.inner_outputs),
         "info": {field: prop_to_json(getattr(op.info, field)) for field in _SCAN_INFO_FIELDS},
         "truncate_gradient": op.truncate_gradient,
         "name": op.name,

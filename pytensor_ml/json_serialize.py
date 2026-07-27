@@ -7,7 +7,6 @@ import numpy as np
 import pytensor.tensor as pt
 
 from pytensor.graph.basic import Constant, Variable
-from pytensor.graph.fg import FrozenFunctionGraph
 from pytensor.graph.op import Op
 from pytensor.graph.traversal import io_toposort
 from pytensor.graph.type import Type
@@ -136,12 +135,10 @@ def _resolve_class(path: str):
     return getattr(importlib.import_module(module), name)
 
 
-def graph_to_json(frozen: FrozenFunctionGraph) -> dict:
-    """Serialize a frozen graph to a dict of input types, op nodes, and output references."""
-    nodes = io_toposort(frozen.inputs, frozen.outputs)
-    var_ref: dict[int, dict] = {
-        id(inp): {"input": index} for index, inp in enumerate(frozen.inputs)
-    }
+def graph_to_json(inputs: Sequence[Variable], outputs: Sequence[Variable]) -> dict:
+    """Serialize a graph to a dict of input types, op nodes, and output references."""
+    nodes = io_toposort(inputs, outputs)
+    var_ref: dict[int, dict] = {id(inp): {"input": index} for index, inp in enumerate(inputs)}
     for node_index, node in enumerate(nodes):
         for output_index, out in enumerate(node.outputs):
             var_ref[id(out)] = {"node": node_index, "out": output_index}
@@ -155,7 +152,7 @@ def graph_to_json(frozen: FrozenFunctionGraph) -> dict:
         raise ValueError(f"Unresolved variable while serializing graph: {variable!r}")
 
     return {
-        "inputs": [type_to_json(inp.type) for inp in frozen.inputs],
+        "inputs": [type_to_json(inp.type) for inp in inputs],
         "nodes": [
             {
                 "op": op_to_json(node.op),
@@ -164,7 +161,7 @@ def graph_to_json(frozen: FrozenFunctionGraph) -> dict:
             }
             for node in nodes
         ],
-        "outputs": [make_ref(out) for out in frozen.outputs],
+        "outputs": [make_ref(out) for out in outputs],
     }
 
 
@@ -221,8 +218,7 @@ def serialize_graph(inputs: Sequence[Variable], outputs: Sequence[Variable]) -> 
     dict
         A JSON-native description of the graph's structure (no parameter values).
     """
-    frozen = FrozenFunctionGraph(list(inputs), list(outputs))
-    return graph_to_json(frozen)
+    return graph_to_json(list(inputs), list(outputs))
 
 
 def deserialize_graph(

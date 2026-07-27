@@ -1,5 +1,4 @@
 from pytensor.compile.builders import OpFromGraph, SymbolicOp
-from pytensor.graph.fg import FrozenFunctionGraph
 
 from pytensor_ml.json_serialize import (
     _qualname,
@@ -34,7 +33,7 @@ def _ofg_to_json(op: OpFromGraph) -> dict:
         "inline": bool(op.is_inline),
         "name": op.name,
         "props": {name: prop_to_json(getattr(op, name)) for name in getattr(op, "__props__", ())},
-        "inner": graph_to_json(FrozenFunctionGraph(op.inner_inputs, op.inner_outputs)),
+        "inner": graph_to_json(op.inner_inputs, op.inner_outputs),
     }
 
 
