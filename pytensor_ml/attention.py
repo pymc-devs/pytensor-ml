@@ -5,7 +5,7 @@ from pytensor import config
 from pytensor.tensor.variable import TensorVariable
 
 from pytensor_ml.layers import Layer, Linear
-from pytensor_ml.pytensorf import UnaryLayerOp
+from pytensor_ml.ops import UnaryLayerOp
 
 
 class AttentionLayer(UnaryLayerOp):

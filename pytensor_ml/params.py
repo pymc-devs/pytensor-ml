@@ -10,7 +10,7 @@ from pytensor.tensor import TensorVariable
 from pytensor.tensor.sharedvar import TensorSharedVariable
 from pytensor.tensor.type import TensorType
 
-from pytensor_ml.pytensorf import LayerOp
+from pytensor_ml.ops import LayerOp
 
 
 class TrainableParameter(TensorSharedVariable):

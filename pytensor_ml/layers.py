@@ -15,7 +15,7 @@ from pytensor_ml.params import (
     non_trainable,
     trainable,
 )
-from pytensor_ml.pytensorf import LayerOp, UnaryLayerOp
+from pytensor_ml.ops import LayerOp, UnaryLayerOp
 
 
 def shape_to_str(shape):
