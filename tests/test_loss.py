@@ -51,12 +51,15 @@ def test_cross_entropy(reduction: Reductions, expect_logits, expect_onehot_label
     "reduction, expected", [("mean", 4.25 / 3), ("sum", 4.25), (lambda x: x, [0.25, 0.0, 4.0])]
 )
 def test_squared_error(reduction, expected):
-    y_true = pt.as_tensor([1.0, 2.0, 3.0])
-    y_pred = pt.as_tensor([1.5, 2.0, 1.0])
+    # Plain sequences, not tensors: SquaredError coerces its inputs like CrossEntropy does, so even a
+    # non-reducing reduction returns a TensorVariable rather than a bare ndarray.
+    y_true = [1.0, 2.0, 3.0]
+    y_pred = [1.5, 2.0, 1.0]
 
-    loss_value = SquaredError(reduction=reduction)(y_true, y_pred).eval()
+    loss = SquaredError(reduction=reduction)(y_true, y_pred)
 
-    np.testing.assert_allclose(loss_value, expected)
+    assert isinstance(loss, pt.TensorVariable)
+    np.testing.assert_allclose(loss.eval(), expected)
 
 
 def test_cross_entropy_accepts_a_callable_reduction():

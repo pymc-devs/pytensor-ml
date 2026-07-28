@@ -32,6 +32,8 @@ class SquaredError(Loss):
         self.reduction = _as_reduction(reduction)
 
     def loss(self, y_true, y_pred) -> pt.TensorVariable:
+        y_true = as_tensor_variable(y_true)
+        y_pred = as_tensor_variable(y_pred)
         return self.reduction((y_true - y_pred) ** 2)
 
 
