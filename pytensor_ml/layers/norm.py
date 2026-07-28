@@ -31,6 +31,35 @@ def _standardize(X, epsilon, axis, keepdims=False):
     return (X - mu) / pt.sqrt(sigma_sq + epsilon), mu, sigma_sq
 
 
+def _affine_input_count(affine: bool) -> int:
+    """Number of inputs the learned affine transform contributes, which every norm op places directly
+    after ``X``. Both the graph builders and :meth:`BatchNormLayer.update_map` index around it."""
+    return 2 if affine else 0
+
+
+def _split_affine(affine: bool, rest: tuple) -> tuple[tuple, tuple]:
+    """
+    Split an op's inputs after ``X`` into the affine pair and whatever that op expects behind it.
+
+    Returns
+    -------
+    affine_params : tuple
+        ``(loc, scale)``, or empty when the layer has no affine transform.
+    extras : tuple
+        The remaining inputs, such as batch norm's running statistics.
+    """
+    n_affine = _affine_input_count(affine)
+    return rest[:n_affine], rest[n_affine:]
+
+
+def _rescale(X_normalized, affine_params: tuple):
+    if not affine_params:
+        return X_normalized
+
+    loc, scale = affine_params
+    return X_normalized * scale + loc
+
+
 def _resolve_n_in(name: str, n_in: int | None, X: pt.TensorVariable | None) -> int | None:
     """Resolve the feature-axis size, or ``None`` while the layer is still waiting for an input to
     infer it from."""
@@ -60,22 +89,17 @@ class BatchNormLayer(LayerOp):
     def update_map(self):
         # Outputs 1 and 2 are the new running mean and variance; they write back to the running
         # statistics they were computed from, which follow X and the affine pair.
-        running_mean_index = 1 + (2 if self.affine else 0)
+        running_mean_index = 1 + _affine_input_count(self.affine)
         return {1: running_mean_index, 2: running_mean_index + 1}
 
     def build_inner_graph(self, X, *rest):
-        if self.affine:
-            loc, scale, running_mean, running_var = rest
-        else:
-            running_mean, running_var = rest
-
+        affine_params, (running_mean, running_var) = _split_affine(self.affine, rest)
         X_normalized, mu, sigma_sq = _standardize(X, self.epsilon, axis=0)
-        X_rescaled = X_normalized * scale + loc if self.affine else X_normalized
 
         new_running_mean = self.momentum * mu + (1 - self.momentum) * running_mean
         new_running_var = self.momentum * sigma_sq + (1 - self.momentum) * running_var
 
-        return [X_rescaled, new_running_mean, new_running_var]
+        return [_rescale(X_normalized, affine_params), new_running_mean, new_running_var]
 
 
 class NoRunningStatsBatchNormLayer(LayerOp):
@@ -84,24 +108,20 @@ class NoRunningStatsBatchNormLayer(LayerOp):
     def build_inner_graph(self, X, *rest):
         # Reports the batch statistics to match BatchNormLayer's arity; declaring no update_map is what
         # keeps them from being written back to anything.
+        affine_params, _ = _split_affine(self.affine, rest)
         X_normalized, mu, sigma_sq = _standardize(X, self.epsilon, axis=0)
-        if self.affine:
-            loc, scale = rest
-            return [X_normalized * scale + loc, mu, sigma_sq]
-        return [X_normalized, mu, sigma_sq]
+
+        return [_rescale(X_normalized, affine_params), mu, sigma_sq]
 
 
 class PredictionBatchNormLayer(UnaryLayerOp):
     __props__ = ("n_in", "epsilon", "affine")
 
     def build_inner_graph(self, X, *rest):
-        if self.affine:
-            loc, scale, running_mean, running_var = rest
-        else:
-            running_mean, running_var = rest
-
+        affine_params, (running_mean, running_var) = _split_affine(self.affine, rest)
         X_normalized = (X - running_mean) / pt.sqrt(running_var + self.epsilon)
-        return [X_normalized * scale + loc] if self.affine else [X_normalized]
+
+        return [_rescale(X_normalized, affine_params)]
 
 
 class BatchNorm2D(Layer):
@@ -233,12 +253,10 @@ class LayerNormLayer(UnaryLayerOp):
     __props__ = ("n_in", "epsilon", "affine")
 
     def build_inner_graph(self, X, *rest):
+        affine_params, _ = _split_affine(self.affine, rest)
         X_normalized, _, _ = _standardize(X, self.epsilon, axis=-1, keepdims=True)
 
-        if self.affine:
-            loc, scale = rest
-            return [X_normalized * scale + loc]
-        return [X_normalized]
+        return [_rescale(X_normalized, affine_params)]
 
 
 class LayerNorm(Layer):
