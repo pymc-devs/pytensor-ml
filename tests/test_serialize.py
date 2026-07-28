@@ -225,6 +225,32 @@ def test_register_type_takes_precedence_over_a_registered_supertype(isolated_typ
     assert isinstance(type_from_json(encoded), CountingType)
 
 
+# A config captured from a previous release, kept verbatim. An op's serialized "type" is its class's import
+# path, so moving a layer op to another module silently stops old saved models from loading; this is the only
+# test that would notice. Regenerate it only alongside a deliberate GRAPH_FORMAT_VERSION bump.
+PREVIOUSLY_SERIALIZED_LINEAR = """
+{"inputs": [{"kind": "tensor", "dtype": "float64", "shape": [2, 3]},
+            {"kind": "tensor", "dtype": "float64", "shape": [2]},
+            {"kind": "tensor", "dtype": "float64", "shape": [3, 2]}],
+ "nodes": [{"op": {"family": "leaf", "type": "pytensor_ml.layers.LinearLayer",
+                   "props": {"n_in": 3, "n_out": 2, "bias": true}},
+            "inputs": [{"input": 0}, {"input": 2}, {"input": 1}],
+            "outputs": [{"kind": "tensor", "dtype": "float64", "shape": [2, 2]}]}],
+ "outputs": [{"node": 0, "out": 0}]}
+"""
+
+
+def test_previously_serialized_graph_still_deserializes():
+    inputs, outputs = deserialize_graph(json.loads(PREVIOUSLY_SERIALIZED_LINEAR))
+
+    X_values = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    bias = np.array([1.0, -1.0])
+    weight = np.arange(6, dtype="float64").reshape(3, 2)
+    result = pytensor.function(inputs, outputs)(X_values, bias, weight)
+
+    np.testing.assert_allclose(result[0], X_values @ weight + bias)
+
+
 def test_unregistered_scalar_op_raises_loudly():
     with pytest.raises(NotImplementedError, match="Unregistered scalar op"):
         op_from_json({"family": "scalar", "type": "NoSuchScalarOp"})
