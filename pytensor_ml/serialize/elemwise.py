@@ -1,13 +1,13 @@
 from pytensor.tensor.elemwise import CAReduce, Elemwise
 
-from pytensor_ml.json_serialize import (
-    _qualname,
-    _resolve_class,
+from pytensor_ml.serialize.base import (
     op_from_json,
     op_to_json,
     prop_from_json,
     prop_to_json,
+    qualname,
     register_from_json,
+    resolve_class,
 )
 
 # The math an Elemwise applies lives entirely in its scalar_op; inplace_pattern is a compilation artifact
@@ -28,9 +28,9 @@ def _elemwise_from_json(op_dict: dict) -> Elemwise:
 # defined by the axis. The result dtype is re-inferred from the inputs on reconstruction.
 @op_to_json.register(CAReduce)
 def _careduce_to_json(op: CAReduce) -> dict:
-    return {"family": "careduce", "type": _qualname(op), "axis": prop_to_json(op.axis)}
+    return {"family": "careduce", "type": qualname(op), "axis": prop_to_json(op.axis)}
 
 
 @register_from_json("careduce")
 def _careduce_from_json(op_dict: dict):
-    return _resolve_class(op_dict["type"])(axis=prop_from_json(op_dict["axis"]))
+    return resolve_class(op_dict["type"])(axis=prop_from_json(op_dict["axis"]))

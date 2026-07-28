@@ -2,7 +2,7 @@ import importlib
 
 from pytensor.scalar.basic import Cast, Composite, ScalarOp, get_scalar_type
 
-from pytensor_ml.json_serialize import op_to_json, register_from_json
+from pytensor_ml.serialize.base import op_to_json, register_from_json
 
 # Most scalar ops are singletons identified by class (one Tanh, one Add) and carry an unpicklable
 # output_types_preference function, so they are rebuilt from their canonical module-level instances rather

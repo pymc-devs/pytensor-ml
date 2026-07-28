@@ -1,6 +1,6 @@
 from pytensor.scan.op import Scan, ScanInfo
 
-from pytensor_ml.json_serialize import (
+from pytensor_ml.serialize.base import (
     graph_from_json,
     graph_to_json,
     op_to_json,
