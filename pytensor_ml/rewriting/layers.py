@@ -12,21 +12,21 @@ predict_db = EquilibriumDB()
 @node_rewriter([DropoutLayer])
 def remove_dropout_for_prediction(fgraph: FunctionGraph, node: Apply) -> list[Variable] | None:
     """
-    Set dropout probability to zero for all dropout layers.
+    Replace a dropout layer with its input, dropping it from the graph.
 
     Parameters
     ----------
-    fgraph: FunctionGraph
-        Graph being rewritten
-    node: Node
-        Node being rewritten
+    fgraph : FunctionGraph
+        Graph being rewritten.
+    node : Apply
+        Node being rewritten.
 
     Returns
     -------
-    X: Variable
-        The input to the dropout layer, removing the dropout from the graph
+    X : Variable
+        The dropout layer's input, which becomes the layer's replacement.
     """
-    X, rng = node.inputs
+    X, _mask = node.inputs
     return [X]
 
 
@@ -46,15 +46,19 @@ def rewrite_batch_stats_to_running_average_stats(
 
     Parameters
     ----------
-    fgraph: FunctionGraph
-        Graph being rewritten
-    node: Node
-        Node being rewritten
+    fgraph : FunctionGraph
+        Graph being rewritten.
+    node : Apply
+        Node being rewritten.
 
     Returns
     -------
-    X_normalized: Variable
-
+    X_normalized : Variable
+        The input normalized by the accumulated running statistics instead of the batch statistics.
+    running_mean : None
+        Replaces the running-mean output, which a prediction graph does not update.
+    running_variance : None
+        Replaces the running-variance output, which a prediction graph does not update.
     """
     X, loc, scale, running_mean, running_var = node.inputs
 
