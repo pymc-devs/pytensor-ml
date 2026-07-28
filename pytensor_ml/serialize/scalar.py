@@ -4,17 +4,26 @@ from pytensor.scalar.basic import Cast, Composite, ScalarOp, get_scalar_type
 
 from pytensor_ml.serialize.base import op_to_json, register_from_json
 
-# Most scalar ops are singletons identified by class (one Tanh, one Add) and carry an unpicklable
-# output_types_preference function, so they are rebuilt from their canonical module-level instances rather
-# than by class-call. Cast is the exception: it is parameterized by its target dtype, with one instance per
-# dtype, so it gets its own rule below.
-_SCALAR_INSTANCES: dict[str, ScalarOp] = {}
-for _module_name in ("pytensor.scalar.basic", "pytensor.scalar.math"):
-    _module = importlib.import_module(_module_name)
-    for _name in dir(_module):
-        _obj = getattr(_module, _name)
-        if isinstance(_obj, ScalarOp) and not isinstance(_obj, Composite | Cast):
-            _SCALAR_INSTANCES.setdefault(type(_obj).__name__, _obj)
+
+def _canonical_scalar_instances() -> dict[str, ScalarOp]:
+    """Index pytensor's module-level ScalarOp singletons by class name.
+
+    Most scalar ops are singletons identified by class (one Tanh, one Add) and carry an unpicklable
+    ``output_types_preference`` function, so they are rebuilt from these canonical instances rather than by
+    calling the class. Cast is excluded because it is parameterized by its target dtype, with one instance
+    per dtype, and gets its own rule below.
+    """
+    instances: dict[str, ScalarOp] = {}
+    for module_name in ("pytensor.scalar.basic", "pytensor.scalar.math"):
+        module = importlib.import_module(module_name)
+        for name in dir(module):
+            candidate = getattr(module, name)
+            if isinstance(candidate, ScalarOp) and not isinstance(candidate, Composite | Cast):
+                instances.setdefault(type(candidate).__name__, candidate)
+    return instances
+
+
+_SCALAR_INSTANCES = _canonical_scalar_instances()
 
 
 @op_to_json.register(ScalarOp)
@@ -27,7 +36,7 @@ def _scalar_from_json(op_dict: dict) -> ScalarOp:
     try:
         return _SCALAR_INSTANCES[op_dict["type"]]
     except KeyError:
-        raise NotImplementedError(f"Unregistered scalar op: {op_dict['type']!r}")
+        raise NotImplementedError(f"Unregistered scalar op: {op_dict['type']!r}") from None
 
 
 @op_to_json.register(Cast)
