@@ -217,13 +217,17 @@ def _leaf_from_json(op_dict: dict):
 def graph_to_json(inputs: Sequence[Variable], outputs: Sequence[Variable]) -> dict:
     """Serialize a graph to a dict of input types, op nodes, and output references."""
     nodes = io_toposort(inputs, outputs)
-    var_ref: dict[int, dict] = {id(inp): {"input": index} for index, inp in enumerate(inputs)}
+    # Keyed by id() rather than by the variable: a Constant wraps an ndarray and is not reliably hashable,
+    # so it cannot be a dict key. Safe here because every variable stays alive for the call.
+    reference_by_id: dict[int, dict] = {
+        id(inp): {"input": index} for index, inp in enumerate(inputs)
+    }
     for node_index, node in enumerate(nodes):
         for output_index, out in enumerate(node.outputs):
-            var_ref[id(out)] = {"node": node_index, "out": output_index}
+            reference_by_id[id(out)] = {"node": node_index, "out": output_index}
 
     def make_ref(variable: Variable) -> dict:
-        existing = var_ref.get(id(variable))
+        existing = reference_by_id.get(id(variable))
         if existing is not None:
             return existing
         if isinstance(variable, Constant):
@@ -249,14 +253,14 @@ def graph_from_json(
 ) -> tuple[list[Variable], list[Variable]]:
     """Rebuild a graph from :func:`graph_to_json` output, onto ``inputs`` if given, else fresh leaves."""
     if inputs is None:
-        inputs = [type_from_json(type_dict)() for type_dict in graph_dict["inputs"]]
+        input_leaves = [type_from_json(type_dict)() for type_dict in graph_dict["inputs"]]
     else:
-        inputs = list(inputs)
+        input_leaves = list(inputs)
     built: dict[tuple[int, int], Variable] = {}
 
     def resolve_ref(reference: dict):
         if "input" in reference:
-            return inputs[reference["input"]]
+            return input_leaves[reference["input"]]
         if "node" in reference:
             return built[(reference["node"], reference["out"])]
         if "const" in reference:
@@ -277,4 +281,4 @@ def graph_from_json(
         for output_index, out in enumerate(node_outputs):
             built[(node_index, output_index)] = out
 
-    return list(inputs), [resolve_ref(reference) for reference in graph_dict["outputs"]]
+    return input_leaves, [resolve_ref(reference) for reference in graph_dict["outputs"]]
