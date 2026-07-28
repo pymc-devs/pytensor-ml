@@ -186,22 +186,27 @@ def function(
     """
     Compile a Pytensor function, including specialized rewrites.
 
+    Threads the default next-RNG update for every shared generator the graph draws from, so repeated calls
+    advance their state instead of repeating draws.
+
     Parameters
     ----------
-    inputs: list of TensorVariables, optional
-        Inputs of the compiled PyTensor function
-    outputs: list of TensorVariables, optional
-        Outputs of the compiled PyTensor function
-    random_seed: int, array-like of int or SeedSequence, optional
-        Seed used to override any RandomState/Generator shared variables in the graph.
-        If not specified, the value of original shared variables will still be overwritten.
-    mode: optional
-        PyTensor mode used to compile the function
+    inputs : list of Variable
+        Inputs of the compiled function.
+    outputs : Variable or list of Variable
+        Outputs of the compiled function.
+    random_seed : int, array-like of int, or SeedSequence, optional
+        Seed used to reseed the graph's shared generators. They are replaced whether or not a seed is
+        given, so omitting it reseeds from fresh entropy rather than leaving them untouched.
+    mode : Mode or str, optional
+        PyTensor mode used to compile the function.
+    **kwargs
+        Forwarded to :func:`pytensor.function`. Any ``updates`` entry is merged after the RNG updates.
 
     Returns
     -------
-    pytensor_function: Function
-        Compiled function
+    Function
+        The compiled function.
     """
     rng_updates = collect_default_updates(
         inputs=[inp.variable if isinstance(inp, pytensor.In) else inp for inp in inputs],
@@ -214,17 +219,19 @@ def function(
         rngs = cast(list[SharedVariable], list(rng_updates))
         reseed_rngs(rngs, random_seed)
 
-    mode = get_mode(mode)
-    opt_qry = mode.provided_optimizer.including("random_make_inplace")
-    mode = Mode(linker=mode.linker, optimizer=opt_qry)
-    pytensor_function = pytensor.function(
+    base_mode = get_mode(mode)
+    mode = Mode(
+        linker=base_mode.linker,
+        optimizer=base_mode.provided_optimizer.including("random_make_inplace"),
+    )
+
+    return pytensor.function(
         inputs,
         outputs,
         updates={**rng_updates, **kwargs.pop("updates", {})},
         mode=mode,
         **kwargs,
     )
-    return pytensor_function
 
 
 def rewrite_pregrad(graph):
