@@ -9,13 +9,13 @@ import pytensor.tensor.random as ptr
 from pytensor import config
 from pytensor.compile.sharedvalue import shared
 
+from pytensor_ml.ops import LayerOp, UnaryLayerOp
 from pytensor_ml.params import (
     NonTrainableParameter,
     TrainableParameter,
     non_trainable,
     trainable,
 )
-from pytensor_ml.ops import LayerOp, UnaryLayerOp
 
 
 def shape_to_str(shape):
