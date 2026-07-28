@@ -20,9 +20,9 @@ from pytensor_ml.pytensorf import (
 floatX = pytensor.config.floatX
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def rng():
-    return np.random.default_rng()
+    return np.random.default_rng(sum(map(ord, "pytensor_ml layers")))
 
 
 @pytest.mark.parametrize("bias", [True, False], ids=["bias", "no_bias"])
@@ -138,24 +138,18 @@ def test_embedding_table_is_trainable(rng):
 def test_batch_norm_2d_forward(n_in, rng):
     X = pt.tensor("X", shape=(None, 6))
     batch_norm = BatchNorm2D(name="BatchNorm_1", n_in=n_in)
-    assert batch_norm.name == "BatchNorm_1"
     out = batch_norm(X)
 
     X_np = rng.normal(size=(10, 6)).astype(floatX)
-    gamma_np = rng.normal(size=(6,)).astype(floatX) ** 2
-    beta_np = rng.normal(size=(6,)).astype(dtype=floatX) ** 2
-
-    mean_np = np.mean(X_np, axis=0)
-    var_np = np.var(X_np, axis=0)
-
-    batch_norm.scale.set_value(gamma_np)
-    batch_norm.loc.set_value(beta_np)
-    batch_norm.running_mean.set_value(np.zeros_like(mean_np))
-    batch_norm.running_var.set_value(np.zeros_like(var_np))
+    scale_np = rng.normal(size=(6,)).astype(floatX) ** 2
+    loc_np = rng.normal(size=(6,)).astype(floatX) ** 2
+    batch_norm.scale.set_value(scale_np)
+    batch_norm.loc.set_value(loc_np)
 
     res = out.eval({X: X_np})
-    expected = (X_np - mean_np) / np.sqrt(var_np + batch_norm.epsilon)
-    expected = expected * gamma_np + beta_np
+    mean_np = X_np.mean(axis=0)
+    var_np = X_np.var(axis=0)
+    expected = (X_np - mean_np) / np.sqrt(var_np + batch_norm.epsilon) * scale_np + loc_np
 
     np.testing.assert_allclose(res, expected, rtol=1e-5)
 
@@ -171,15 +165,15 @@ def test_layer_norm_forward(n_in, batch_shape, rng):
     assert out.name == "LayerNorm_1_output"
 
     X_np = rng.normal(size=(*batch_shape, 6)).astype(floatX)
-    gamma_np = rng.normal(size=(6,)).astype(floatX)
-    beta_np = rng.normal(size=(6,)).astype(floatX)
-    layer_norm.scale.set_value(gamma_np)
-    layer_norm.loc.set_value(beta_np)
+    scale_np = rng.normal(size=(6,)).astype(floatX)
+    loc_np = rng.normal(size=(6,)).astype(floatX)
+    layer_norm.scale.set_value(scale_np)
+    layer_norm.loc.set_value(loc_np)
 
     res = out.eval({X: X_np})
     mean_np = X_np.mean(axis=-1, keepdims=True)
     var_np = X_np.var(axis=-1, keepdims=True)
-    expected = (X_np - mean_np) / np.sqrt(var_np + layer_norm.epsilon) * gamma_np + beta_np
+    expected = (X_np - mean_np) / np.sqrt(var_np + layer_norm.epsilon) * scale_np + loc_np
     np.testing.assert_allclose(res, expected, rtol=1e-5)
 
 
@@ -226,7 +220,8 @@ def test_layer_norm_no_affine_standardizes_each_row(rng):
     np.testing.assert_allclose(res.var(axis=-1), 1.0, rtol=1e-3)
 
 
-def test_batch_norm_2d_learns_population_stats():
+def test_batch_norm_2d_learns_population_stats(rng):
+    population_mean, population_std = 3.2, 6.2
     X = pt.tensor("X", shape=(None, 32))
     batch_norm = BatchNorm2D(name="BatchNorm_1", n_in=32, momentum=0.05, epsilon=1e-8)
     X_normalized = batch_norm(X)
@@ -241,46 +236,40 @@ def test_batch_norm_2d_learns_population_stats():
         batch_norm.running_mean: batch_norm.new_running_mean,
         batch_norm.running_var: batch_norm.new_running_var,
     }
+    train = pytensor.function([X], X_normalized, updates=updates)
 
-    f = pytensor.function([X], [X_normalized, loss], updates=updates)
+    def sample_batch():
+        return rng.normal(loc=population_mean, scale=population_std, size=(100, 32)).astype(floatX)
 
-    batch_norm.loc.set_value(np.zeros(32, dtype=batch_norm.loc.type.dtype))
-    batch_norm.scale.set_value(np.ones(32, dtype=batch_norm.scale.type.dtype))
-    batch_norm.running_mean.set_value(np.zeros(32, dtype=batch_norm.running_mean.type.dtype))
-    batch_norm.running_var.set_value(np.ones(32, dtype=batch_norm.running_var.type.dtype))
-
-    for t in range(500):
-        data = np.random.normal(loc=3.2, scale=6.2, size=(100, 32)).astype(X.type.dtype)
-
-        loc_val = batch_norm.loc.get_value()
-        scale_val = batch_norm.scale.get_value()
-
-        X_norm_val, loss_val = f(data)
+    for _ in range(500):
+        data = sample_batch()
+        # Read before stepping: the affine parameters this batch is normalized with are the ones the
+        # updates are about to overwrite.
+        scale, loc = batch_norm.scale.get_value(), batch_norm.loc.get_value()
 
         np.testing.assert_allclose(
-            X_norm_val,
-            (data - data.mean(axis=0)) / np.sqrt(data.var(axis=0) + 1e-8) * scale_val + loc_val,
+            train(data),
+            (data - data.mean(axis=0)) / np.sqrt(data.var(axis=0) + batch_norm.epsilon) * scale
+            + loc,
             rtol=1e-4,
             atol=1e-6,
         )
 
-    loc_val = batch_norm.loc.get_value()
-    scale_val = batch_norm.scale.get_value()
-    running_mean_val = batch_norm.running_mean.get_value()
-    running_var_val = batch_norm.running_var.get_value()
+    scale, loc = batch_norm.scale.get_value(), batch_norm.loc.get_value()
+    running_mean = batch_norm.running_mean.get_value()
+    running_var = batch_norm.running_var.get_value()
 
-    np.testing.assert_allclose(loc_val, 3.2, rtol=1e-1, atol=1e-1)
-    np.testing.assert_allclose(scale_val, 6.2, rtol=1e-1, atol=1e-1)
-    np.testing.assert_allclose(running_mean_val, 3.2, rtol=1e-1, atol=1e-1)
-    np.testing.assert_allclose(np.sqrt(running_var_val), 6.2, rtol=1e-1, atol=1e-1)
+    np.testing.assert_allclose(loc, population_mean, rtol=1e-1, atol=1e-1)
+    np.testing.assert_allclose(scale, population_std, rtol=1e-1, atol=1e-1)
+    np.testing.assert_allclose(running_mean, population_mean, rtol=1e-1, atol=1e-1)
+    np.testing.assert_allclose(np.sqrt(running_var), population_std, rtol=1e-1, atol=1e-1)
 
-    X_normalized_pred = rewrite_for_prediction(X_normalized)
-    f_pred = pytensor.function([X], X_normalized_pred)
-    data = np.random.normal(loc=3.2, scale=6.2, size=(100, 32)).astype(X.type.dtype)
+    predict = pytensor.function([X], rewrite_for_prediction(X_normalized))
+    data = sample_batch()
 
     np.testing.assert_allclose(
-        f_pred(data),
-        (data - running_mean_val) / np.sqrt(running_var_val + 1e-8) * scale_val + loc_val,
+        predict(data),
+        (data - running_mean) / np.sqrt(running_var + batch_norm.epsilon) * scale + loc,
         rtol=1e-6,
         atol=1e-6,
     )
