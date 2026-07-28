@@ -10,7 +10,7 @@ from pytensor.tensor import TensorVariable
 from pytensor.tensor.sharedvar import TensorSharedVariable
 from pytensor.tensor.type import TensorType
 
-from pytensor_ml.ops import StatefulOp
+from pytensor_ml.base import StatefulOp
 
 
 class TrainableParameter(TensorSharedVariable):
@@ -191,7 +191,7 @@ def collect_non_trainable_updates(
     -------
     non_trainable_updates : dict
         Mapping from NonTrainableParameter to its new value, for every update an op declares through
-        :meth:`~pytensor_ml.ops.StatefulOp.update_map`.
+        :meth:`~pytensor_ml.base.StatefulOp.update_map`.
     """
     if isinstance(outputs, Variable):
         outputs = [outputs]
