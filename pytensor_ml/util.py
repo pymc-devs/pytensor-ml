@@ -42,20 +42,22 @@ class DataLoader:
         self.rng.shuffle(self.indices)
 
     def move_cursor(self):
-        start, stop = self.cursor, self.cursor + self.batch_size
-        n_wraps, stop = divmod(stop, self.n)
+        start = self.cursor
+        n_wraps, stop = divmod(start + self.batch_size, self.n)
 
         batch_slice = slice(start, None if n_wraps else stop)
-        # Copy, not a view: the wrap branch reshuffles self.indices in place and would rewrite these rows.
+        # Copy, not a view: the refill below reshuffles self.indices in place and would rewrite these rows.
         batch_indices = self.indices[batch_slice].copy()
 
-        if n_wraps:
-            shortfall = self.batch_size - batch_indices.shape[0]
+        # One refilled pass per wrap, since a single pass supplies at most n rows and a batch wider than
+        # the dataset crosses several.
+        for _ in range(n_wraps):
             self.shuffle()
             self.epoch += 1
+            shortfall = self.batch_size - batch_indices.shape[0]
             batch_indices = np.r_[batch_indices, self.indices[:shortfall]]
 
-        self.cursor = (self.cursor + self.batch_size) % self.n
+        self.cursor = (start + self.batch_size) % self.n
 
         return batch_indices
 

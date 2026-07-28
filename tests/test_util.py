@@ -32,6 +32,21 @@ def test_batches_are_full_size_when_n_is_not_divisible_by_batch_size():
         assert y_batch.shape[0] == batch_size
 
 
+def test_a_batch_wider_than_the_dataset_is_built_from_whole_passes():
+    # One refilled pass supplies at most n rows, so a batch this wide needs several, one epoch apiece.
+    n, batch_size = 3, 25
+    loader = DataLoader(*make_data(n=n), batch_size=batch_size, random_state=0)
+
+    _, y_batch = loader()
+
+    assert y_batch.shape[0] == batch_size
+    assert loader.epoch == batch_size // n
+
+    # Whole passes rather than a repeated prefix, so no row is over-sampled relative to another.
+    counts = np.bincount(y_batch.astype(int), minlength=n)
+    assert counts.max() - counts.min() <= 1
+
+
 def test_epoch_increments_once_per_pass():
     batches_per_pass = 2
     loader = DataLoader(*make_data(n=10), batch_size=5, random_state=0)
