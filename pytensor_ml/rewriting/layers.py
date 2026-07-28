@@ -56,9 +56,10 @@ def rewrite_batch_stats_to_running_average_stats(
     X_normalized : Variable
         The input normalized by the accumulated running statistics instead of the batch statistics.
     running_mean : None
-        Replaces the running-mean output, which a prediction graph does not update.
+        Declares the running-mean output unused rather than substituting for it. Pytensor raises if the
+        output has clients, which holds for a prediction graph because it carries no updates.
     running_variance : None
-        Replaces the running-variance output, which a prediction graph does not update.
+        Declares the running-variance output unused, on the same terms.
     """
     X, loc, scale, running_mean, running_var = node.inputs
 
