@@ -7,13 +7,9 @@ import pytest
 
 from pytensor_ml.activations import ReLU
 from pytensor_ml.layers import BatchNorm2D, Dropout, Linear, Sequential
-from pytensor_ml.params import (
-    NonTrainableParameter,
-    TrainableParameter,
-    collect_shared_variables,
-    collect_trainable_params,
-)
+from pytensor_ml.params import NonTrainableParameter, TrainableParameter
 from pytensor_ml.pretrained import from_pretrained, load_network, save_network, save_pretrained
+from pytensor_ml.pytensorf import collect_shared_variables, collect_trainable_params
 
 
 def build_initialized_network(seed=0):

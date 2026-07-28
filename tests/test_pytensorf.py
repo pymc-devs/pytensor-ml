@@ -5,8 +5,7 @@ from pytensor import config
 from pytensor.graph.traversal import ancestors
 
 from pytensor_ml.layers import Dropout, DropoutLayer, Linear, Sequential
-from pytensor_ml.params import collect_trainable_params
-from pytensor_ml.pytensorf import compile_predict, rewrite_for_prediction
+from pytensor_ml.pytensorf import collect_trainable_params, compile_predict, rewrite_for_prediction
 from pytensor_ml.state import initialize_params
 
 

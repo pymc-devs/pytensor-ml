@@ -7,7 +7,7 @@ from pytensor import Mode
 from pytensor.compile import Function, SharedVariable, get_mode
 from pytensor.tensor.variable import Variable
 
-from pytensor_ml.params import collect_graph_inputs
+from pytensor_ml.pytensorf.collect import collect_graph_inputs
 from pytensor_ml.pytensorf.rewrite import rewrite_for_prediction
 from pytensor_ml.pytensorf.rng import (
     SeedSequenceSeed,

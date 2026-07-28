@@ -11,8 +11,7 @@ import pytensor_ml.layers
 
 from pytensor_ml.activations import ReLU
 from pytensor_ml.layers import BatchNorm2D, Dropout, Embedding, Input, LayerNorm, Linear, Sequential
-from pytensor_ml.params import collect_trainable_params
-from pytensor_ml.pytensorf import rewrite_for_prediction
+from pytensor_ml.pytensorf import collect_trainable_params, rewrite_for_prediction
 
 floatX = pytensor.config.floatX
 

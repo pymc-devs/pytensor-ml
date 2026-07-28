@@ -1,6 +1,5 @@
-from pytensor_ml.params import (
-    NonTrainableParameter,
-    TrainableParameter,
+from pytensor_ml.params import NonTrainableParameter, TrainableParameter
+from pytensor_ml.pytensorf import (
     collect_data_inputs,
     collect_graph_inputs,
     collect_non_trainable_params,

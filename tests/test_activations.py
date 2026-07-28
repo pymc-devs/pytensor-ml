@@ -11,7 +11,7 @@ from pytensor_ml.activations import GELU, LeakyReLU, ReLU, Sigmoid, SoftPlus, Sw
 from pytensor_ml.layers import Linear, Sequential
 from pytensor_ml.loss import CrossEntropy, supervised_loss
 from pytensor_ml.optim import adam, compile_train
-from pytensor_ml.params import collect_trainable_params
+from pytensor_ml.pytensorf import collect_trainable_params
 from pytensor_ml.state import initialize_params
 
 # Fastest compile mode. Test network is tiny so no optimizations needed

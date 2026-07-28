@@ -7,8 +7,7 @@ from pytensor_ml.checkpoint import load_state, save_state
 from pytensor_ml.layers import Linear, Sequential
 from pytensor_ml.loss import SquaredError, supervised_loss
 from pytensor_ml.optim import adam
-from pytensor_ml.params import collect_trainable_params
-from pytensor_ml.pytensorf import compile_predict, function
+from pytensor_ml.pytensorf import collect_trainable_params, compile_predict, function
 from pytensor_ml.state import initialize_params
 
 

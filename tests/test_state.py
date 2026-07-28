@@ -3,7 +3,8 @@ from typing import get_args
 import numpy as np
 import pytest
 
-from pytensor_ml.params import collect_trainable_params, trainable
+from pytensor_ml.params import trainable
+from pytensor_ml.pytensorf import collect_trainable_params
 from pytensor_ml.state import (
     _INITIALIZERS,
     CustomInitializer,

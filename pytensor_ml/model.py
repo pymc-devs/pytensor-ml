@@ -6,8 +6,8 @@ from pytensor.tensor.variable import TensorVariable
 
 from pytensor_ml import optim
 from pytensor_ml.loss import Loss, supervised_loss
-from pytensor_ml.params import TrainableParameter, collect_trainable_params
-from pytensor_ml.pytensorf import compile_predict
+from pytensor_ml.params import TrainableParameter
+from pytensor_ml.pytensorf import collect_trainable_params, compile_predict
 from pytensor_ml.state import InitializationSchemeLike, initialize_params
 
 

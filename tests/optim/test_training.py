@@ -11,7 +11,8 @@ from pytensor_ml.layers import BatchNorm2D, Linear, Sequential
 from pytensor_ml.loss import CrossEntropy, SquaredError, supervised_loss
 from pytensor_ml.optim import adam, compile_train, sgd
 from pytensor_ml.optim.base import state_for
-from pytensor_ml.params import collect_non_trainable_params, collect_trainable_params, trainable
+from pytensor_ml.params import trainable
+from pytensor_ml.pytensorf import collect_non_trainable_params, collect_trainable_params
 from pytensor_ml.state import initialize_params
 from pytensor_ml.util import DataLoader
 

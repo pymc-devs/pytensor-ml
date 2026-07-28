@@ -1,15 +1,16 @@
 from collections.abc import Sequence
 
 from pytensor.compile import Function, SharedVariable
+from pytensor.graph.basic import Variable
 from pytensor.tensor import TensorVariable
 
 from pytensor_ml.optim.base import Parameter, UpdateRule, require_unique_state_names
-from pytensor_ml.params import (
+from pytensor_ml.pytensorf import (
     collect_data_inputs,
     collect_non_trainable_updates,
     collect_trainable_params,
+    function,
 )
-from pytensor_ml.pytensorf import function
 
 
 def compile_train(
@@ -17,7 +18,7 @@ def compile_train(
     rule: UpdateRule,
     *,
     parameters: Sequence[Parameter] | None = None,
-    inputs: Sequence[TensorVariable] | None = None,
+    inputs: Sequence[Variable] | None = None,
     compile_kwargs: dict | None = None,
 ) -> Function:
     """
@@ -36,7 +37,7 @@ def compile_train(
         A configured optimizer ``(loss_or_gradients, parameters) -> Updates``, e.g. ``adam(1e-3)``.
     parameters : sequence of shared tensor variable, optional
         Parameters to optimize. Collected from ``loss`` with :func:`collect_trainable_params` when omitted.
-    inputs : sequence of TensorVariable, optional
+    inputs : sequence of Variable, optional
         Data inputs of the compiled function, in call order. Collected from ``loss`` with
         :func:`collect_data_inputs` when omitted; pass them explicitly when call order matters (e.g. features
         before targets).

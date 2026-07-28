@@ -14,15 +14,13 @@ from pytensor.tensor.random.type import RandomGeneratorType
 
 from pytensor_ml.checkpoint import load_state, save_state
 from pytensor_ml.json_serialize import deserialize_graph, serialize_graph, type_from_json
-from pytensor_ml.params import (
-    NonTrainableParameter,
-    TrainableParameter,
+from pytensor_ml.params import NonTrainableParameter, TrainableParameter, non_trainable, trainable
+from pytensor_ml.pytensorf import (
+    as_output_list,
     collect_data_inputs,
     collect_shared_variables,
-    non_trainable,
-    trainable,
+    find_rng_nodes,
 )
-from pytensor_ml.pytensorf import find_rng_nodes
 
 CONFIG_FILENAME = "config.json"
 WEIGHTS_FILENAME = "model.safetensors"
@@ -57,14 +55,9 @@ def _detect_format(config: dict) -> Format:
     raise ValueError("Unrecognized config: not a pytensor_ml graph or a HuggingFace model.")
 
 
-def _as_output_list(outputs: Variable | Sequence[Variable]) -> list[Variable]:
-    return [outputs] if isinstance(outputs, Variable) else list(outputs)
-
-
 def _weight_variables(outputs: Variable | Sequence[Variable]) -> list[SharedVariable]:
-    # The parameter shared variables that go to safetensors -- everything except random generators, whose
-    # state is JSON, not a tensor, and is carried in the config.
-    output_list = _as_output_list(outputs)
+    # Random generators are excluded: their state rides in the config as JSON, not as a tensor.
+    output_list = as_output_list(outputs)
     random_generators = set(find_rng_nodes(output_list))
     return [
         variable
@@ -88,8 +81,7 @@ def _input_kind(variable: Variable) -> InputKind:
 def _input_meta(variable: Variable) -> dict:
     meta = {"name": variable.name, "kind": _input_kind(variable)}
     if isinstance(variable, SharedVariable) and meta["kind"] == InputKind.RNG:
-        # Capture the generator state so a checkpoint can be reproduced exactly, even though it is not
-        # restored by default.
+        # Captured for exact reproducibility even though load does not restore it by default.
         meta["rng_state"] = variable.get_value(borrow=True).bit_generator.state
     return meta
 
@@ -136,7 +128,7 @@ def save_network(
         The network's data inputs, in call order. Collected from ``outputs`` when omitted; pass explicitly
         when call order matters.
     """
-    output_list = _as_output_list(outputs)
+    output_list = as_output_list(outputs)
     data_inputs = list(inputs) if inputs is not None else collect_data_inputs(output_list)
     leaves = [*data_inputs, *collect_shared_variables(output_list)]
 
@@ -176,6 +168,7 @@ def load_network(
     if config.get("format") != GRAPH_FORMAT:
         hint = " (this looks like a HuggingFace config)" if _looks_like_huggingface(config) else ""
         raise ValueError(f"{path} is not a pytensor_ml network config{hint}.")
+
     leaves = [
         _rebuild_input(type_json, meta, restore_rng)
         for type_json, meta in zip(config["inputs"], config["input_meta"])

@@ -6,8 +6,7 @@ from pytensor import config
 
 from pytensor_ml.activations import ReLU
 from pytensor_ml.layers import Linear, Sequential
-from pytensor_ml.params import collect_trainable_params
-from pytensor_ml.pytensorf import function
+from pytensor_ml.pytensorf import collect_trainable_params, function
 from pytensor_ml.state import initialize_params
 
 

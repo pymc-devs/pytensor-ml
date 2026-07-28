@@ -31,7 +31,7 @@ from pytensor_ml.layers import (
     Squeeze,
 )
 from pytensor_ml.layers.attention import scaled_dot_product_attention
-from pytensor_ml.params import collect_shared_variables, collect_trainable_params
+from pytensor_ml.pytensorf import collect_shared_variables, collect_trainable_params
 from pytensor_ml.serialize.base import _TYPE_FROM_JSON, _TYPE_TO_JSON
 
 floatX = pytensor.config.floatX

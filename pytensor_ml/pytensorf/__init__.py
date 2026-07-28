@@ -1,3 +1,12 @@
+from pytensor_ml.pytensorf.collect import (
+    as_output_list,
+    collect_data_inputs,
+    collect_graph_inputs,
+    collect_non_trainable_params,
+    collect_non_trainable_updates,
+    collect_shared_variables,
+    collect_trainable_params,
+)
 from pytensor_ml.pytensorf.compile import compile_predict, function
 from pytensor_ml.pytensorf.rewrite import rewrite_for_prediction, rewrite_pregrad
 from pytensor_ml.pytensorf.rng import RandomSeed, SeedSequenceSeed, find_rng_nodes
@@ -5,6 +14,13 @@ from pytensor_ml.pytensorf.rng import RandomSeed, SeedSequenceSeed, find_rng_nod
 __all__ = [
     "RandomSeed",
     "SeedSequenceSeed",
+    "as_output_list",
+    "collect_data_inputs",
+    "collect_graph_inputs",
+    "collect_non_trainable_params",
+    "collect_non_trainable_updates",
+    "collect_shared_variables",
+    "collect_trainable_params",
     "compile_predict",
     "find_rng_nodes",
     "function",
