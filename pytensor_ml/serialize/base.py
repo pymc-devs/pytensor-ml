@@ -2,6 +2,7 @@ import importlib
 
 from collections.abc import Callable, Sequence
 from functools import singledispatch
+from typing import Any
 
 import numpy as np
 import pytensor.tensor as pt
@@ -17,29 +18,86 @@ from pytensor.tensor.random.type import RandomGeneratorType
 from pytensor.tensor.type import TensorType
 from pytensor.tensor.type_other import NoneConst, NoneTypeT
 
+# Ordered rather than keyed by class, because a Type is selected with isinstance and so a subclass must be
+# offered its own handler before any supertype's. Newest registration wins (see register_type), which is what
+# lets a caller override a built-in for a Type they subclass.
+#
+# The handler signatures are erased to Any on the varying side because the table is heterogeneous; each
+# entry's own types are still checked at its register_type call, which is generic over the Type.
+_TYPE_TO_JSON: list[tuple[type[Type], Callable[[Any], dict]]] = []
+_TYPE_FROM_JSON: dict[str, Callable[[dict], Any]] = {}
+
+
+def register_type[T: Type](
+    kind: str,
+    graph_type: type[T],
+    to_json: Callable[[T], dict],
+    from_json: Callable[[dict], T],
+) -> None:
+    """
+    Register the handlers that encode and decode one pytensor Type.
+
+    Parameters
+    ----------
+    kind : str
+        Tag written into the JSON, and the key its decoder is found under.
+    graph_type : type of Type
+        Matched with ``isinstance``. Registering last wins, so a subclass of an already-registered Type
+        takes precedence over it -- the built-ins register at import time, so appending instead would make
+        them impossible to override.
+    to_json : callable
+        Maps an instance of ``graph_type`` to a JSON-native dict carrying its ``"kind"``.
+    from_json : callable
+        Rebuilds the Type from that dict.
+    """
+    _TYPE_TO_JSON.insert(0, (graph_type, to_json))
+    _TYPE_FROM_JSON[kind] = from_json
+
 
 def type_to_json(graph_type: Type) -> dict:
-    if isinstance(graph_type, TensorType):
-        return {"kind": "tensor", "dtype": graph_type.dtype, "shape": list(graph_type.shape)}
-    if isinstance(graph_type, ScalarType):
-        return {"kind": "scalar", "dtype": graph_type.dtype}
-    if isinstance(graph_type, RandomGeneratorType):
-        return {"kind": "random_generator"}
-    if isinstance(graph_type, NoneTypeT):
-        return {"kind": "none"}
+    for candidate, to_json in _TYPE_TO_JSON:
+        if isinstance(graph_type, candidate):
+            return to_json(graph_type)
     raise TypeError(f"Unserializable type: {graph_type!r}")
 
 
-def type_from_json(type_dict: dict):
-    if type_dict["kind"] == "tensor":
-        return TensorType(type_dict["dtype"], tuple(type_dict["shape"]))
-    if type_dict["kind"] == "scalar":
-        return ScalarType(type_dict["dtype"])
-    if type_dict["kind"] == "random_generator":
-        return RandomGeneratorType()
-    if type_dict["kind"] == "none":
-        return NoneTypeT()
-    raise ValueError(f"Unknown type kind: {type_dict['kind']!r}")
+def type_from_json(type_dict: dict) -> Any:
+    """Rebuild a pytensor Type from its JSON dict. Returns ``Any`` rather than ``Type`` because the concrete
+    subclass depends on the registered ``kind``, and callers read subclass attributes such as ``dtype``."""
+    kind = type_dict["kind"]
+    if kind not in _TYPE_FROM_JSON:
+        raise ValueError(f"Unknown type kind: {kind!r}")
+    return _TYPE_FROM_JSON[kind](type_dict)
+
+
+register_type(
+    "tensor",
+    TensorType,
+    lambda graph_type: {
+        "kind": "tensor",
+        "dtype": graph_type.dtype,
+        "shape": list(graph_type.shape),
+    },
+    lambda type_dict: TensorType(type_dict["dtype"], tuple(type_dict["shape"])),
+)
+register_type(
+    "scalar",
+    ScalarType,
+    lambda graph_type: {"kind": "scalar", "dtype": graph_type.dtype},
+    lambda type_dict: ScalarType(type_dict["dtype"]),
+)
+register_type(
+    "random_generator",
+    RandomGeneratorType,
+    lambda graph_type: {"kind": "random_generator"},
+    lambda type_dict: RandomGeneratorType(),
+)
+register_type(
+    "none",
+    NoneTypeT,
+    lambda graph_type: {"kind": "none"},
+    lambda type_dict: NoneTypeT(),
+)
 
 
 def prop_to_json(value):
@@ -111,14 +169,14 @@ def op_to_json(op: Op) -> dict:
 
 
 # The reverse of op_to_json: a registry keyed by the "family" tag each forward handler emits.
-_FROM_JSON: dict[str, Callable[[dict], Op]] = {}
+_OP_FROM_JSON: dict[str, Callable[[dict], Op]] = {}
 
 
 def register_from_json(family: str) -> Callable[[Callable[[dict], Op]], Callable[[dict], Op]]:
     """Register the handler that rebuilds an op from a JSON dict tagged with ``family``."""
 
     def register(handler: Callable[[dict], Op]) -> Callable[[dict], Op]:
-        _FROM_JSON[family] = handler
+        _OP_FROM_JSON[family] = handler
         return handler
 
     return register
@@ -126,7 +184,7 @@ def register_from_json(family: str) -> Callable[[Callable[[dict], Op]], Callable
 
 def op_from_json(op_dict: dict) -> Op:
     """Rebuild an op from its JSON dict, dispatching on the ``family`` tag."""
-    return _FROM_JSON[op_dict["family"]](op_dict)
+    return _OP_FROM_JSON[op_dict["family"]](op_dict)
 
 
 @register_from_json("leaf")

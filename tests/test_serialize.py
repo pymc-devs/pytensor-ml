@@ -6,7 +6,9 @@ import pytensor.tensor as pt
 import pytest
 
 from pytensor.graph.traversal import ancestors
+from pytensor.graph.type import Type
 from pytensor.tensor.random.op import RandomVariable
+from pytensor.tensor.type import TensorType
 
 from pytensor_ml.activations import GELU, LeakyReLU, ReLU, Sigmoid, Softmax, SoftPlus, Swish, Tanh
 from pytensor_ml.attention import scaled_dot_product_attention
@@ -14,7 +16,10 @@ from pytensor_ml.json_serialize import (
     deserialize_graph,
     op_from_json,
     prop_to_json,
+    register_type,
     serialize_graph,
+    type_from_json,
+    type_to_json,
 )
 from pytensor_ml.layers import (
     BatchNorm2D,
@@ -27,6 +32,7 @@ from pytensor_ml.layers import (
     Squeeze,
 )
 from pytensor_ml.params import collect_shared_variables, collect_trainable_params
+from pytensor_ml.serialize.base import _TYPE_FROM_JSON, _TYPE_TO_JSON
 
 floatX = pytensor.config.floatX
 
@@ -178,6 +184,45 @@ def test_scan_recurrent_loop_roundtrips():
         step, sequences=sequence, outputs_info=pt.zeros(3), return_updates=False
     )
     assert_outputs_roundtrip([sequence], hidden_seq[-1], [rng.normal(size=(6, 3))])
+
+
+def test_unregistered_type_raises_loudly():
+    class UnregisteredType(Type):
+        def filter(self, data, strict=False, allow_downcast=None):
+            return data
+
+    with pytest.raises(TypeError, match="Unserializable type"):
+        type_to_json(UnregisteredType())
+
+
+@pytest.fixture
+def isolated_type_registry():
+    """Undo any type registration a test performs. The registries are module-level and lookup is
+    isinstance-based, so a leaked entry would shadow a built-in for every test that ran afterwards."""
+    encoders, decoders = list(_TYPE_TO_JSON), dict(_TYPE_FROM_JSON)
+    yield
+    _TYPE_TO_JSON[:] = encoders
+    _TYPE_FROM_JSON.clear()
+    _TYPE_FROM_JSON.update(decoders)
+
+
+def test_register_type_takes_precedence_over_a_registered_supertype(isolated_type_registry):
+    class CountingType(TensorType):
+        pass
+
+    register_type(
+        "counting",
+        CountingType,
+        lambda graph_type: {"kind": "counting", "dtype": graph_type.dtype},
+        lambda type_dict: CountingType(type_dict["dtype"], shape=()),
+    )
+
+    # TensorType is registered at import time and CountingType subclasses it, so this picks the new handler
+    # only because the newest registration wins; appending would fall through to the tensor encoder.
+    encoded = type_to_json(CountingType("float64", shape=()))
+
+    assert encoded == {"kind": "counting", "dtype": "float64"}
+    assert isinstance(type_from_json(encoded), CountingType)
 
 
 def test_unregistered_scalar_op_raises_loudly():
