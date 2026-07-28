@@ -2,8 +2,7 @@ from pytensor.tensor.blockwise import Blockwise
 
 from pytensor_ml.serialize.base import op_from_json, op_to_json, register_from_json
 
-# A Blockwise just vectorizes its core_op over batch dimensions; the signature is derived from core_op and
-# is not serialized.
+# The signature is derived from core_op, so it is not serialized.
 
 
 @op_to_json.register(Blockwise)

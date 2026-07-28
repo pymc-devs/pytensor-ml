@@ -14,7 +14,7 @@ from pytensor_ml.optim import adam, compile_train
 from pytensor_ml.pytensorf import collect_trainable_params
 from pytensor_ml.state import initialize_params
 
-# Fastest compile mode. Test network is tiny so no optimizations needed
+# The test networks are tiny, so skip optimization and pay only for the graph evaluation.
 FAST_MODE = Mode(linker="py", optimizer="fast_compile")
 
 # One-hot XOR: not linearly separable, so a single-hidden-layer network can only fit it if the activation

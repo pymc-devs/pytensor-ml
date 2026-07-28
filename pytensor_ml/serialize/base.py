@@ -190,7 +190,6 @@ def op_to_json(op: Op) -> dict:
     return leaf_to_json(op)
 
 
-# The reverse of op_to_json: a registry keyed by the "family" tag each forward handler emits.
 _OP_FROM_JSON: dict[str, Callable[[dict], Op]] = {}
 
 
@@ -270,9 +269,8 @@ def graph_from_json(
     for node_index, node in enumerate(graph_dict["nodes"]):
         op = op_from_json(node["op"])
         node_inputs = [resolve_ref(reference) for reference in node["inputs"]]
-        # A RandomVariable's __call__ takes distribution params in a different order than its node inputs, so
-        # reconstruction goes through make_node. Other ops use __call__, which (for OpFromGraph/SymbolicOp)
-        # also builds the inner fgraph that make_node would assume already exists.
+        # A RandomVariable's __call__ reorders the distribution params, so rebuild it through make_node.
+        # Everything else needs __call__, which for OpFromGraph also builds the inner fgraph.
         if isinstance(op, RandomVariable):
             node_outputs = op.make_node(*node_inputs).outputs
         else:

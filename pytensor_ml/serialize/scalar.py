@@ -8,10 +8,8 @@ from pytensor_ml.serialize.base import op_to_json, register_from_json
 def _canonical_scalar_instances() -> dict[str, ScalarOp]:
     """Index pytensor's module-level ScalarOp singletons by class name.
 
-    Most scalar ops are singletons identified by class (one Tanh, one Add) and carry an unpicklable
-    ``output_types_preference`` function, so they are rebuilt from these canonical instances rather than by
-    calling the class. Cast is excluded because it is parameterized by its target dtype, with one instance
-    per dtype, and gets its own rule below.
+    They are class-identified and carry an unpicklable ``output_types_preference``, so they are rebuilt from
+    pytensor's own instances rather than by calling the class. Cast is per-dtype, hence its own rule below.
     """
     instances: dict[str, ScalarOp] = {}
     for module_name in ("pytensor.scalar.basic", "pytensor.scalar.math"):

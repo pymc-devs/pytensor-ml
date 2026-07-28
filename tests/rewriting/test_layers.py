@@ -35,7 +35,6 @@ def test_remove_dropout(feature_extractor_and_rng):
     X = pt.tensor("X", shape=(None, 6))
     latent = feature_extractor(X)
 
-    # Include all graph inputs including SharedVariables
     fg = FunctionGraph(inputs=list(graph_inputs([latent])) + rngs, outputs=[latent])
 
     assert len([node.op for node in fg.apply_nodes if isinstance(node.op, DropoutLayer)]) == 2
@@ -57,7 +56,6 @@ def test_rewrite_batch_stats_to_running_average_stats(consumed_downstream):
     X = pt.tensor("X", shape=(None, 6))
     latent = feature_extractor(X)
 
-    # Include all graph inputs including SharedVariables
     fg = FunctionGraph(inputs=list(graph_inputs([latent])), outputs=[latent])
     assert len([node.op for node in fg.apply_nodes if isinstance(node.op, BatchNormLayer)]) == 1
 

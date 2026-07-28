@@ -11,8 +11,7 @@ reduction_dict = {"mean": pt.mean, "sum": pt.sum}
 
 ReductionFunction = Callable[[pt.TensorVariable], pt.TensorVariable]
 
-# Either one of the named built-ins or any callable collapsing the per-element loss. A callable covers the
-# unreduced case (``reduction=lambda x: x``), needed to weight or rank individual losses.
+# A callable covers the unreduced case (``reduction=lambda x: x``), for weighting individual losses.
 ReductionLike = Reductions | ReductionFunction
 
 

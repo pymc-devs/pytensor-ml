@@ -9,8 +9,7 @@ from pytensor_ml.serialize.base import (
     register_from_json,
 )
 
-# Scan is just an inner step graph plus ScanInfo (integer tap bookkeeping) and a few flags. The inner graph
-# reuses the graph codec; ScanInfo is entirely JSON-native.
+# ScanInfo is integer tap bookkeeping, so it is entirely JSON-native and needs no codec of its own.
 _SCAN_INFO_FIELDS = tuple(ScanInfo.__annotations__)
 
 

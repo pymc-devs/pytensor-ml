@@ -46,8 +46,7 @@ class DataLoader:
         n_wraps, stop = divmod(stop, self.n)
 
         batch_slice = slice(start, None if n_wraps else stop)
-        # Copy, don't view: the wrap branch below reshuffles self.indices in place, which would otherwise
-        # rewrite the rows already selected here and silently drop some rows while repeating others.
+        # Copy, not a view: the wrap branch reshuffles self.indices in place and would rewrite these rows.
         batch_indices = self.indices[batch_slice].copy()
 
         if n_wraps:

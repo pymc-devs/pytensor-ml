@@ -10,20 +10,15 @@ from pytensor.tensor.sharedvar import TensorSharedVariable
 
 from pytensor_ml.pytensorf import rewrite_pregrad
 
-# An optimizer parameter is a shared tensor variable: it can index the updates dict (it is a shared variable),
-# take part in tensor arithmetic, and expose its concrete value via ``get_value``. Optimizer state buffers share
-# the same type. Aliased for readable signatures.
 type Parameter = TensorSharedVariable
 
-# A mapping from a shared variable to the symbolic expression for its next value. This is pytensor's native
-# `updates` contract, and it is the single currency every rule and transform in this package speaks: it carries
-# the next parameter values *and* the next optimizer-state values in one identity-keyed dict.
+# Pytensor's native `updates` contract, and the single currency every rule and transform here speaks: it
+# carries the next parameter values *and* the next optimizer-state values in one identity-keyed dict.
 Updates = dict[SharedVariable, TensorVariable]
 
 # A chainable transform reads an updates dict and returns a new one, working in "step space" (updates[p] - p).
 Transform = Callable[[Updates, Sequence[Parameter]], Updates]
 
-# A configured optimizer: give it a loss (or precomputed gradients) and the parameters, get back an updates dict.
 UpdateRule = Callable[[TensorVariable | Sequence[TensorVariable], Sequence[Parameter]], Updates]
 
 

@@ -65,7 +65,6 @@ def test_sequential(rng):
     W2_np = rng.normal(size=(3, 1)).astype(floatX)
     b2_np = rng.normal(size=(1,)).astype(floatX)
 
-    # Set SharedVariable values directly
     linear1.W.set_value(W1_np)
     linear1.b.set_value(b1_np)
     linear2.W.set_value(W2_np)
@@ -273,7 +272,6 @@ def test_batch_norm_2d_learns_population_stats():
     np.testing.assert_allclose(running_mean_val, 3.2, rtol=1e-1, atol=1e-1)
     np.testing.assert_allclose(np.sqrt(running_var_val), 6.2, rtol=1e-1, atol=1e-1)
 
-    # Check that after rewrite, the population statistics are used
     X_normalized_pred = rewrite_for_prediction(X_normalized)
     f_pred = pytensor.function([X], X_normalized_pred)
     data = np.random.normal(loc=3.2, scale=6.2, size=(100, 32)).astype(X.type.dtype)

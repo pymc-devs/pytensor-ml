@@ -39,11 +39,6 @@ def save_state(shared_variables: Sequence[SharedVariable], path: str | Path) -> 
         Variables whose values to save. Every variable must have a unique, non-``None`` name.
     path : str or pathlib.Path
         Destination archive, written verbatim.
-
-    Raises
-    ------
-    ValueError
-        If any variable is unnamed or two variables share a name.
     """
     indexed = _index_by_name(shared_variables)
     tensors = {name: _contiguous(variable.get_value()) for name, variable in indexed.items()}
@@ -52,8 +47,7 @@ def save_state(shared_variables: Sequence[SharedVariable], path: str | Path) -> 
 
 def _contiguous(value: np.ndarray) -> np.ndarray:
     """Return a C-contiguous array safetensors will accept, preserving the array's rank."""
-    # np.ascontiguousarray forces ndim >= 1, which would rewrite a rank-0 array (e.g. the step count) to
-    # shape (1,); this keeps rank-0 arrays rank-0.
+    # Not np.ascontiguousarray: it forces ndim >= 1, reshaping a rank-0 array such as the step count.
     return value if value.flags["C_CONTIGUOUS"] else np.array(value, order="C")
 
 
@@ -80,12 +74,6 @@ def load_state(
         Maps a variable's name to the archive key to read it from, for loading a checkpoint saved under
         different names (such as HuggingFace's). The mapping must be injective. Names absent from the map
         are matched directly.
-
-    Raises
-    ------
-    ValueError
-        If any variable is unnamed, two variables share a name, ``name_map`` is not injective, the archive
-        keys do not match the target names exactly, or a value's shape or dtype differs from its target.
     """
     indexed = _index_by_name(shared_variables)
     name_map = name_map or {}

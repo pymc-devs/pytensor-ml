@@ -3,11 +3,9 @@ import importlib.abc
 import importlib.util
 import sys
 
-# pytensor auto-loads its own backend dispatches because its linker imports them at compile time -- a
-# third-party op can't hook into that, and pytensor exposes no plugin/entry-point system. To get the same
-# "activate when the backend is actually used, never on the main import path" behavior, watch for pytensor
-# loading a backend's dispatch package and register ours right after. Installing the hook imports nothing
-# heavy; jax/mlx are pulled in only when (and if) that backend compiles a graph.
+# Pytensor imports its own backend dispatches from the linker at compile time and offers no plugin hook, so
+# watch for a backend's dispatch package loading and register ours right after. This keeps jax/mlx off the
+# main import path -- they load only when that backend actually compiles a graph.
 _REGISTRATIONS = {
     "pytensor.link.jax.dispatch": "pytensor_ml.dispatch.jax",
     "pytensor.link.mlx.dispatch": "pytensor_ml.dispatch.mlx",
