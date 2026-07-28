@@ -7,10 +7,51 @@ from pytensor_ml.base import Layer, LayerOp, UnaryLayerOp
 from pytensor_ml.params import NonTrainableParameter, TrainableParameter, non_trainable, trainable
 
 
-def _batch_normalize(X, epsilon):
-    mu = X.mean(axis=0)
-    sigma_sq = X.var(axis=0)
+def _standardize(X, epsilon, axis, keepdims=False):
+    """
+    Center and scale ``X`` over ``axis``, returning the statistics used.
+
+    Notes
+    -----
+    The variance is biased (``ddof=0``), matching :class:`torch.nn.BatchNorm1d` and
+    :class:`torch.nn.LayerNorm`; pretrained weights assume it. Do not "correct" it to the unbiased
+    estimator -- that would diverge from every pretrained model.
+
+    Returns
+    -------
+    X_standardized : TensorVariable
+        ``X`` centered and scaled to unit variance.
+    mu : TensorVariable
+        Mean of ``X`` over ``axis``.
+    sigma_sq : TensorVariable
+        Biased variance of ``X`` over ``axis``.
+    """
+    mu = X.mean(axis=axis, keepdims=keepdims)
+    sigma_sq = X.var(axis=axis, keepdims=keepdims)
     return (X - mu) / pt.sqrt(sigma_sq + epsilon), mu, sigma_sq
+
+
+def _resolve_n_in(name: str, n_in: int | None, X: pt.TensorVariable | None) -> int | None:
+    """Resolve the feature-axis size, or ``None`` while the layer is still waiting for an input to
+    infer it from."""
+    if X is None:
+        return n_in
+
+    inferred = X.type.shape[-1]
+    if inferred is None:
+        raise ValueError(
+            f"{name} cannot infer n_in from an input whose last dimension is unknown. Pass n_in "
+            f"explicitly, or give the input a static feature dimension."
+        )
+    return inferred
+
+
+def _affine_parameters(name: str, n_in: int) -> tuple[TrainableParameter, TrainableParameter]:
+    """Build the learned shift and scale. Returns them in the ``(loc, scale)`` order that every norm
+    op unpacks its inputs in, so the two cannot drift apart."""
+    loc = trainable(np.zeros(n_in, dtype=config.floatX), f"{name}_loc")
+    scale = trainable(np.ones(n_in, dtype=config.floatX), f"{name}_scale")
+    return loc, scale
 
 
 class BatchNormLayer(LayerOp):
@@ -26,7 +67,7 @@ class BatchNormLayer(LayerOp):
         else:
             running_mean, running_var = rest
 
-        X_normalized, mu, sigma_sq = _batch_normalize(X, self.epsilon)
+        X_normalized, mu, sigma_sq = _standardize(X, self.epsilon, axis=0)
         X_rescaled = X_normalized * scale + loc if self.affine else X_normalized
 
         new_running_mean = self.momentum * mu + (1 - self.momentum) * running_mean
@@ -41,7 +82,7 @@ class NoRunningStatsBatchNormLayer(LayerOp):
     def build_inner_graph(self, X, *rest):
         # Reports the batch statistics to match BatchNormLayer's arity; declaring no update_map is what
         # keeps them from being written back to anything.
-        X_normalized, mu, sigma_sq = _batch_normalize(X, self.epsilon)
+        X_normalized, mu, sigma_sq = _standardize(X, self.epsilon, axis=0)
         if self.affine:
             loc, scale = rest
             return [X_normalized * scale + loc, mu, sigma_sq]
@@ -129,25 +170,18 @@ class BatchNorm2D(Layer):
         if self.initialized:
             return
 
-        if self.n_in is None and X is None:
+        n_in = _resolve_n_in(self.name, self.n_in, X)
+        if n_in is None:
             return
 
-        if X is not None:
-            n_in = X.type.shape[-1]
-        else:
-            n_in = self.n_in
-
         if self.affine:
-            scale_value = np.ones(n_in, dtype=config.floatX)
-            loc_value = np.zeros(n_in, dtype=config.floatX)
-            self.scale = trainable(scale_value, f"{self.name}_scale")
-            self.loc = trainable(loc_value, f"{self.name}_loc")
+            self.loc, self.scale = _affine_parameters(self.name, n_in)
 
         if self.track_running_stats:
-            running_mean_value = np.zeros(n_in, dtype=config.floatX)
-            running_var_value = np.ones(n_in, dtype=config.floatX)
-            self.running_mean = non_trainable(running_mean_value, f"{self.name}_running_mean")
-            self.running_var = non_trainable(running_var_value, f"{self.name}_running_var")
+            zeros = np.zeros(n_in, dtype=config.floatX)
+            ones = np.ones(n_in, dtype=config.floatX)
+            self.running_mean = non_trainable(zeros, f"{self.name}_running_mean")
+            self.running_var = non_trainable(ones, f"{self.name}_running_var")
 
         self.initialized = True
 
@@ -192,11 +226,7 @@ class LayerNormLayer(UnaryLayerOp):
     __props__ = ("n_in", "epsilon", "affine")
 
     def build_inner_graph(self, X, *rest):
-        mu = X.mean(axis=-1, keepdims=True)
-        # Biased variance (ddof=0), matching torch.nn.LayerNorm; pretrained weights assume it. Do
-        # not "correct" to the unbiased estimator -- it would diverge from every pretrained model.
-        sigma_sq = X.var(axis=-1, keepdims=True)
-        X_normalized = (X - mu) / pt.sqrt(sigma_sq + self.epsilon)
+        X_normalized, _, _ = _standardize(X, self.epsilon, axis=-1, keepdims=True)
 
         if self.affine:
             loc, scale = rest
@@ -253,14 +283,12 @@ class LayerNorm(Layer):
         if self.initialized:
             return
 
-        if self.n_in is None and X is None:
+        n_in = _resolve_n_in(self.name, self.n_in, X)
+        if n_in is None:
             return
 
-        n_in = X.type.shape[-1] if X is not None else self.n_in
-
         if self.affine:
-            self.scale = trainable(np.ones(n_in, dtype=config.floatX), f"{self.name}_scale")
-            self.loc = trainable(np.zeros(n_in, dtype=config.floatX), f"{self.name}_loc")
+            self.loc, self.scale = _affine_parameters(self.name, n_in)
 
         self.initialized = True
 
