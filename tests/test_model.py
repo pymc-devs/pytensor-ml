@@ -28,19 +28,6 @@ class TestModelPredict:
         assert result.dtype == config.floatX
         np.testing.assert_allclose(result, expected, rtol=1e-5)
 
-    def test_with_batchnorm(self):
-        X = pt.tensor("X", shape=(None, 6))
-        network = Sequential(
-            Linear("fc1", n_in=6, n_out=3),
-            BatchNorm2D("bn1", n_in=3),
-            Linear("fc2", n_in=3, n_out=1),
-        )
-        model = Model(X, network(X)).initialize(seed=42)
-
-        X_test = np.random.default_rng(0).normal(size=(10, 6)).astype(config.floatX)
-
-        assert model.predict(X_test).shape == (10, 1)
-
     def test_normalizes_with_running_stats_not_batch_stats(self):
         X = pt.tensor("X", shape=(None, 4))
         fc1 = Linear("fc1", n_in=4, n_out=4)

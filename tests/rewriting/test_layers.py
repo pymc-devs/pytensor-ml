@@ -44,8 +44,16 @@ def test_remove_dropout(feature_extractor_and_rng):
     assert len([node.op for node in fg.apply_nodes if isinstance(node.op, DropoutLayer)]) == 0
 
 
-def test_rewrite_batch_stats_to_running_average_stats():
-    feature_extractor = Sequential(Linear("Layer_1", n_in=6, n_out=3), BatchNorm2D())
+@pytest.mark.parametrize(
+    "consumed_downstream", [False, True], ids=["as_graph_output", "consumed_by_a_layer"]
+)
+def test_rewrite_batch_stats_to_running_average_stats(consumed_downstream):
+    layers = [Linear("Layer_1", n_in=6, n_out=3), BatchNorm2D()]
+    if consumed_downstream:
+        # A downstream SymbolicOp type-checks its inputs more strictly than a graph output does.
+        layers.append(Linear("Layer_2", n_in=3, n_out=1))
+
+    feature_extractor = Sequential(*layers)
     X = pt.tensor("X", shape=(None, 6))
     latent = feature_extractor(X)
 
