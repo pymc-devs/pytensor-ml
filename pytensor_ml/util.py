@@ -4,10 +4,10 @@ from pytensor import config
 
 
 class DataLoader:
-    def __init__(self, X, y, batch_size=64, dtype=None):
+    def __init__(self, X, y, batch_size=64, dtype=None, random_state=None):
         if dtype is None:
             dtype = config.floatX
-        self.rng = np.random.default_rng()
+        self.rng = np.random.default_rng(random_state)
 
         self.X = X.astype(dtype)
         self.y = y.astype(dtype)
