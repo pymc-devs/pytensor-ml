@@ -36,6 +36,10 @@ class DataLoader:
 
         self.batch_size = batch_size
         self.indices = np.arange(self.n, dtype="int32")
+
+        # Declared here so the constructor shows the object's full state; reset() assigns them.
+        self.cursor: int
+        self.epoch: int
         self.reset()
 
     def shuffle(self):

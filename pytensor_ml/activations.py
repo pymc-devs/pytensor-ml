@@ -193,4 +193,14 @@ class Softmax(Activation):
         return out
 
 
-__all__ = ["GELU", "LeakyReLU", "ReLU", "Sigmoid", "SoftPlus", "Softmax", "Swish", "Tanh"]
+__all__ = [
+    "GELU",
+    "Activation",
+    "LeakyReLU",
+    "ReLU",
+    "Sigmoid",
+    "SoftPlus",
+    "Softmax",
+    "Swish",
+    "Tanh",
+]

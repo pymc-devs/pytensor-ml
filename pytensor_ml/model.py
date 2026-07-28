@@ -22,6 +22,12 @@ class Model:
 
     @property
     def weights(self) -> list[TrainableParameter]:
+        """The trainable parameters, in graph-input order rather than construction order.
+
+        ``Sequential(Linear("fc1", ...), ReLU(), Linear("fc2", ...))`` yields
+        ``[fc2_b, fc2_W, fc1_b, fc1_W]``, so ``weights[0]`` is not the first layer's weight matrix. The
+        order is stable, which is all :meth:`initialize` needs to zip values onto the right parameters.
+        """
         return collect_trainable_params(self.y)
 
     def initialize(
