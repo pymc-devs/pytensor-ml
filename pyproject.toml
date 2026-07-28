@@ -111,6 +111,10 @@ ignore = [
 ]
 fixable = ["ALL"]
 
+[tool.ruff.lint.per-file-ignores]
+# An __init__.py re-exports its package's API and imports submodules for their registration side effects.
+"**/__init__.py" = ["F401"]
+
 
 [tool.ruff.lint.isort]
 lines-between-types = 1
