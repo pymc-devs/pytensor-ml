@@ -199,7 +199,7 @@ class LayerNormLayer(UnaryLayerOp):
         X_normalized = (X - mu) / pt.sqrt(sigma_sq + self.epsilon)
 
         if self.affine:
-            scale, loc = rest
+            loc, scale = rest
             return [X_normalized * scale + loc]
         return [X_normalized]
 
@@ -271,7 +271,7 @@ class LayerNorm(Layer):
         inputs = [X]
         if self.affine:
             assert self.scale is not None and self.loc is not None
-            inputs.extend([self.scale, self.loc])
+            inputs.extend([self.loc, self.scale])
 
         X_transformed = LayerNormLayer(
             name=self.name,

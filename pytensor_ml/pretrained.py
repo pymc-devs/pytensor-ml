@@ -28,7 +28,7 @@ WEIGHTS_FILENAME = "model.safetensors"
 # Marks a config as a pytensor_ml graph (vs a HuggingFace config, which shares the config.json filename but
 # is a hyperparameter sheet, not a serialized graph). The version guards future schema changes.
 GRAPH_FORMAT = "pytensor_ml.graph"
-GRAPH_FORMAT_VERSION = 2
+GRAPH_FORMAT_VERSION = 3
 
 Format = Literal["auto", "pytensor", "huggingface"]
 
