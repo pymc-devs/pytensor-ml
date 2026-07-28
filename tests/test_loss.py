@@ -1,10 +1,11 @@
 import numpy as np
+import pytensor.tensor as pt
 import pytest
 
 from scipy.special import softmax
 from sklearn.metrics import log_loss
 
-from pytensor_ml.loss import CrossEntropy, Reductions
+from pytensor_ml.loss import CrossEntropy, Reductions, SquaredError
 
 
 def generate_categorical_data(expect_logits: bool):
@@ -59,3 +60,25 @@ def test_cross_entropy(reduction: Reductions, expect_logits, expect_onehot_label
 
     sklearn_loss = log_loss(y_true, y_pred, normalize=reduction == "mean")
     np.testing.assert_allclose(loss_value, sklearn_loss)
+
+
+@pytest.mark.parametrize(
+    "reduction, expected", [("mean", 4.25 / 3), ("sum", 4.25), (lambda x: x, [0.25, 0.0, 4.0])]
+)
+def test_squared_error(reduction, expected):
+    y_true = pt.as_tensor([1.0, 2.0, 3.0])
+    y_pred = pt.as_tensor([1.5, 2.0, 1.0])
+
+    loss_value = SquaredError(reduction=reduction)(y_true, y_pred).eval()
+
+    np.testing.assert_allclose(loss_value, expected)
+
+
+def test_cross_entropy_accepts_a_callable_reduction():
+    y_true, _, y_pred = generate_categorical_data(expect_logits=True)
+
+    per_sample = CrossEntropy(expect_logits=True, reduction=lambda x: x)(y_true, y_pred).eval()
+    pooled = CrossEntropy(expect_logits=True, reduction="mean")(y_true, y_pred).eval()
+
+    assert per_sample.shape == y_true.shape
+    np.testing.assert_allclose(per_sample.mean(), pooled)

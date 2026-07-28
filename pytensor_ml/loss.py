@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import Literal
 
 import pytensor.tensor as pt
@@ -7,6 +8,16 @@ from pytensor.tensor.basic import as_tensor_variable
 
 Reductions = Literal["mean", "sum"]
 reduction_dict = {"mean": pt.mean, "sum": pt.sum}
+
+ReductionFunction = Callable[[pt.TensorVariable], pt.TensorVariable]
+
+# Either one of the named built-ins or any callable collapsing the per-element loss. A callable covers the
+# unreduced case (``reduction=lambda x: x``), needed to weight or rank individual losses.
+ReductionLike = Reductions | ReductionFunction
+
+
+def _as_reduction(reduction: ReductionLike) -> ReductionFunction:
+    return reduction if callable(reduction) else reduction_dict[reduction]
 
 
 class Loss(ABC):
@@ -18,8 +29,8 @@ class Loss(ABC):
 
 
 class SquaredError(Loss):
-    def __init__(self, reduction: Reductions = "mean"):
-        self.reduction = reduction_dict[reduction]
+    def __init__(self, reduction: ReductionLike = "mean"):
+        self.reduction = _as_reduction(reduction)
 
     def loss(self, y_true, y_pred) -> pt.TensorVariable:
         return self.reduction((y_true - y_pred) ** 2)
@@ -28,28 +39,30 @@ class SquaredError(Loss):
 class CrossEntropy(Loss):
     def __init__(
         self,
-        reduction: Reductions = "mean",
+        reduction: ReductionLike = "mean",
         expect_logits: bool = False,
         expect_onehot_labels: bool = False,
     ):
-        self.reduction = reduction_dict[reduction]
+        self.reduction = _as_reduction(reduction)
         self.expect_logits = expect_logits
         self.expect_onehot_labels = expect_onehot_labels
 
     def loss(self, y_true: pt.TensorVariable, y_pred: pt.TensorVariable) -> pt.TensorVariable:
         """
-
         Parameters
         ----------
-        y_true: Tensor variable
-            Vector of class labels
-        y_pred: Tensor variable
-            Matrix of unnormalized log probabilities of class membership
+        y_true : TensorVariable
+            Ground-truth class membership: a matrix of one-hot rows when ``expect_onehot_labels`` is set,
+            otherwise a vector of integer class labels.
+        y_pred : TensorVariable
+            Predicted class membership, as unnormalized logits when ``expect_logits`` is set, otherwise as
+            probabilities.
 
         Returns
         -------
-        loss: Tensor variable
-            Scalar loss value
+        loss : TensorVariable
+            The reduced loss -- a scalar under the named reductions, or whatever shape a callable
+            ``reduction`` leaves.
         """
         y_true = as_tensor_variable(y_true)
         y_pred = as_tensor_variable(y_pred)
