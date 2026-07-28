@@ -85,8 +85,7 @@ class Model:
                 self.y, inputs=[self.X], compile_kwargs=self._compile_kwargs
             )
 
-        result = self._predict_fn(X_values)
-        return result if isinstance(result, np.ndarray) else np.asarray(result)
+        return np.asarray(self._predict_fn(X_values))
 
     def __str__(self):
         return debugprint(self.y, file="str")
