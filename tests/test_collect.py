@@ -8,99 +8,75 @@ from pytensor_ml.pytensorf import (
     collect_trainable_params,
 )
 
+FC_PARAMS = {"fc1_W", "fc1_b", "fc2_W", "fc2_b"}
+BN_AFFINE = {"bn1_loc", "bn1_scale"}
+BN_RUNNING_STATS = {"bn1_running_mean", "bn1_running_var"}
+
+
+def names(variables):
+    return {variable.name for variable in variables}
+
 
 class TestCollectGraphInputs:
-    def test_simple_network(self, simple_network):
+    def test_returns_only_the_data_input(self, simple_network):
         X, y = simple_network
-        inputs = collect_graph_inputs(y)
-        # Only X (SharedVariables are excluded)
-        assert len(inputs) == 1
-        assert X in inputs
+        assert collect_graph_inputs(y) == [X]
 
-    def test_accepts_single_variable(self, simple_network):
-        X, y = simple_network
-        inputs_single = collect_graph_inputs(y)
-        inputs_list = collect_graph_inputs([y])
-        assert inputs_single == inputs_list
+    def test_accepts_a_single_variable_or_a_list(self, simple_network):
+        _, y = simple_network
+        assert collect_graph_inputs(y) == collect_graph_inputs([y])
 
 
 class TestCollectSharedVariables:
     def test_simple_network(self, simple_network):
-        X, y = simple_network
-        shared_vars = collect_shared_variables(y)
-        # 2 weights + 2 biases = 4 SharedVariables
-        assert len(shared_vars) == 4
-        assert X not in shared_vars
+        _, y = simple_network
+        assert names(collect_shared_variables(y)) == FC_PARAMS
 
-    def test_batchnorm_includes_all_shared(self, network_with_batchnorm):
-        X, y = network_with_batchnorm
-        shared_vars = collect_shared_variables(y)
-        # fc1: W, b; bn1: loc, scale, running_mean, running_var; fc2: W, b = 8
-        assert len(shared_vars) == 8
+    def test_batchnorm_includes_affine_and_running_stats(self, network_with_batchnorm):
+        _, y = network_with_batchnorm
+        assert names(collect_shared_variables(y)) == FC_PARAMS | BN_AFFINE | BN_RUNNING_STATS
 
 
 class TestCollectTrainableParams:
     def test_simple_network(self, simple_network):
-        X, y = simple_network
+        _, y = simple_network
         params = collect_trainable_params(y)
-        # 2 weights + 2 biases = 4 params (all TrainableParameter)
-        assert len(params) == 4
-        assert all(isinstance(p, TrainableParameter) for p in params)
+
+        assert names(params) == FC_PARAMS
+        assert all(isinstance(param, TrainableParameter) for param in params)
 
     def test_batchnorm_excludes_running_stats(self, network_with_batchnorm):
-        X, y = network_with_batchnorm
-        params = collect_trainable_params(y)
-        # fc1: W, b; bn1: loc, scale; fc2: W, b = 6 params
-        # running_mean and running_var are NonTrainableParameter
-        assert len(params) == 6
-        param_names = {p.name for p in params}
-        assert "bn1_running_mean" not in param_names
-        assert "bn1_running_var" not in param_names
+        _, y = network_with_batchnorm
+        assert names(collect_trainable_params(y)) == FC_PARAMS | BN_AFFINE
 
 
 class TestCollectNonTrainableParams:
-    def test_simple_network_no_non_trainable(self, simple_network):
+    def test_simple_network_has_none(self, simple_network):
         _, y = simple_network
-        non_trainable = collect_non_trainable_params(y)
-        assert len(non_trainable) == 0
+        assert collect_non_trainable_params(y) == []
 
-    def test_batchnorm_has_non_trainable(self, network_with_batchnorm):
+    def test_batchnorm_running_stats(self, network_with_batchnorm):
         _, y = network_with_batchnorm
-        non_trainable = collect_non_trainable_params(y)
-        assert len(non_trainable) == 2
-        assert all(isinstance(p, NonTrainableParameter) for p in non_trainable)
-        names = {p.name for p in non_trainable}
-        assert "bn1_running_mean" in names
-        assert "bn1_running_var" in names
+        params = collect_non_trainable_params(y)
+
+        assert names(params) == BN_RUNNING_STATS
+        assert all(isinstance(param, NonTrainableParameter) for param in params)
 
 
 class TestCollectNonTrainableUpdates:
-    def test_simple_network_no_updates(self, simple_network):
+    def test_simple_network_has_none(self, simple_network):
         _, y = simple_network
-        updates = collect_non_trainable_updates(y)
-        assert updates == {}
+        assert collect_non_trainable_updates(y) == {}
 
-    def test_batchnorm_has_running_stat_updates(self, network_with_batchnorm):
+    def test_batchnorm_updates_its_running_stats(self, network_with_batchnorm):
         _, y = network_with_batchnorm
-        updates = collect_non_trainable_updates(y)
-        assert len(updates) == 2
-        old_names = {v.name for v in updates.keys()}
-        assert "bn1_running_mean" in old_names
-        assert "bn1_running_var" in old_names
+        assert names(collect_non_trainable_updates(y)) == BN_RUNNING_STATS
 
-    def test_dropout_no_updates(self, network_with_dropout):
+    def test_dropout_has_none(self, network_with_dropout):
         _, y = network_with_dropout
-        updates = collect_non_trainable_updates(y)
-        assert updates == {}
+        assert collect_non_trainable_updates(y) == {}
 
 
-class TestCollectDataInputs:
-    def test_simple_network(self, simple_network):
-        X, y = simple_network
-        data_inputs = collect_data_inputs(y)
-        assert data_inputs == [X]
-
-    def test_batchnorm_network(self, network_with_batchnorm):
-        X, y = network_with_batchnorm
-        data_inputs = collect_data_inputs(y)
-        assert data_inputs == [X]
+def test_collect_data_inputs_excludes_every_shared_variable(network_with_batchnorm):
+    X, y = network_with_batchnorm
+    assert collect_data_inputs(y) == [X]
