@@ -35,15 +35,17 @@ class BatchNormLayer(LayerOp):
         return [X_rescaled, new_running_mean, new_running_var]
 
 
-class NoRunningStatsBatchNormLayer(UnaryLayerOp):
+class NoRunningStatsBatchNormLayer(LayerOp):
     __props__ = ("n_in", "epsilon", "affine")
 
     def build_inner_graph(self, X, *rest):
-        X_normalized, _, _ = _batch_normalize(X, self.epsilon)
+        # Reports the batch statistics to match BatchNormLayer's arity; declaring no update_map is what
+        # keeps them from being written back to anything.
+        X_normalized, mu, sigma_sq = _batch_normalize(X, self.epsilon)
         if self.affine:
             loc, scale = rest
-            return [X_normalized * scale + loc]
-        return [X_normalized]
+            return [X_normalized * scale + loc, mu, sigma_sq]
+        return [X_normalized, mu, sigma_sq]
 
 
 class PredictionBatchNormLayer(UnaryLayerOp):
@@ -117,6 +119,8 @@ class BatchNorm2D(Layer):
         self.loc: TrainableParameter | None = None
         self.running_mean: NonTrainableParameter | None = None
         self.running_var: NonTrainableParameter | None = None
+        self.new_running_mean: pt.TensorVariable | None = None
+        self.new_running_var: pt.TensorVariable | None = None
 
         self.initialized = False
         self._initialize_params(None)
@@ -159,7 +163,7 @@ class BatchNorm2D(Layer):
 
         if self.track_running_stats:
             assert self.running_mean is not None and self.running_var is not None
-
+            inputs.extend([self.running_mean, self.running_var])
             batch_norm_op: LayerOp = BatchNormLayer(
                 name=self.name,
                 n_in=self.n_in,
@@ -167,11 +171,6 @@ class BatchNorm2D(Layer):
                 momentum=self.momentum,
                 affine=self.affine,
             )
-
-            X_transformed, self.new_running_mean, self.new_running_var = batch_norm_op(
-                *inputs, self.running_mean, self.running_var
-            )
-
         else:
             batch_norm_op = NoRunningStatsBatchNormLayer(
                 name=self.name,
@@ -180,10 +179,10 @@ class BatchNorm2D(Layer):
                 affine=self.affine,
             )
 
-            X_transformed = batch_norm_op(*inputs)
+        X_transformed, batch_mean, batch_var = batch_norm_op(*inputs)
+        if self.track_running_stats:
+            self.new_running_mean, self.new_running_var = batch_mean, batch_var
 
-        # BatchNormLayer is multi-output; narrow the normalized tensor for the single-tensor return.
-        assert isinstance(X_transformed, pt.TensorVariable)
         X_transformed.name = f"{self.name}_output"
 
         return X_transformed

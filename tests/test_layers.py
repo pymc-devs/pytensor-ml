@@ -11,7 +11,11 @@ import pytensor_ml.layers
 
 from pytensor_ml.activations import ReLU
 from pytensor_ml.layers import BatchNorm2D, Dropout, Embedding, Input, LayerNorm, Linear, Sequential
-from pytensor_ml.pytensorf import collect_trainable_params, rewrite_for_prediction
+from pytensor_ml.pytensorf import (
+    collect_non_trainable_updates,
+    collect_trainable_params,
+    rewrite_for_prediction,
+)
 
 floatX = pytensor.config.floatX
 
@@ -227,8 +231,6 @@ def test_batch_norm_2d_learns_population_stats():
     batch_norm = BatchNorm2D(name="BatchNorm_1", n_in=32, momentum=0.05, epsilon=1e-8)
     X_normalized = batch_norm(X)
 
-    _, new_running_mean, new_running_var = X_normalized.owner.outputs
-
     loss = pt.square(X_normalized - X).mean()
     d_loss = pt.grad(loss, [batch_norm.loc, batch_norm.scale])
 
@@ -236,8 +238,8 @@ def test_batch_norm_2d_learns_population_stats():
     updates = {
         batch_norm.loc: batch_norm.loc - learning_rate * d_loss[0],
         batch_norm.scale: batch_norm.scale - learning_rate * d_loss[1],
-        batch_norm.running_mean: new_running_mean,
-        batch_norm.running_var: new_running_var,
+        batch_norm.running_mean: batch_norm.new_running_mean,
+        batch_norm.running_var: batch_norm.new_running_var,
     }
 
     f = pytensor.function([X], [X_normalized, loss], updates=updates)
@@ -303,3 +305,23 @@ def test_marker_ops_stay_reachable_from_the_package(op_name, submodule):
     from_submodule = getattr(importlib.import_module(f"pytensor_ml.layers.{submodule}"), op_name)
 
     assert from_package is from_submodule
+
+
+def test_batch_norm_without_running_stats_normalizes_with_batch_statistics(rng):
+    X = pt.tensor("X", shape=(None, 4))
+    normalize = pytensor.function([X], BatchNorm2D("bn", n_in=4, track_running_stats=False)(X))
+
+    out = normalize(rng.normal(loc=5.0, scale=3.0, size=(256, 4)).astype(floatX))
+
+    np.testing.assert_allclose(out.mean(axis=0), 0.0, atol=1e-5)
+    np.testing.assert_allclose(out.std(axis=0), 1.0, rtol=1e-3)
+
+
+def test_batch_norm_variants_agree_on_output_arity():
+    X = pt.tensor("X", shape=(None, 4))
+    tracked = BatchNorm2D("tracked", n_in=4)(X)
+    untracked = BatchNorm2D("untracked", n_in=4, track_running_stats=False)(X)
+
+    assert len(tracked.owner.outputs) == len(untracked.owner.outputs)
+    assert set(collect_non_trainable_updates(tracked))
+    assert collect_non_trainable_updates(untracked) == {}
