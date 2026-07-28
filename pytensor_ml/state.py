@@ -19,19 +19,10 @@ class Initializer(ABC):
     """
     Base class for parameter initializers.
 
-    Can be used in two ways:
-    - As a class: `XavierNormalInitializer(param, rng)` - directly initializes
-    - As an instance: `init = XavierNormalInitializer(); init(param, rng)`
+    Subclasses implement :meth:`sample`. Calling an instance assigns a freshly sampled value to a
+    parameter in place, while :func:`initialize_params` calls :meth:`sample` directly and leaves the
+    assignment to its caller.
     """
-
-    def __new__(cls, param: SharedVariable | None = None, rng: RandomState | None = None):
-        # If called with a param, act as a function and initialize directly
-        if param is not None:
-            instance = object.__new__(cls)
-            cls.__init__(instance)
-            return instance(param, rng)
-        # Otherwise, return an instance for later use
-        return object.__new__(cls)
 
     def __call__(self, param: SharedVariable, rng: RandomState | None = None) -> SharedVariable:
         param.set_value(self._sample_like(param, rng))
@@ -71,18 +62,14 @@ class XavierNormalInitializer(Initializer):
 
 
 class CustomInitializer(Initializer):
-    def __new__(
-        cls,
-        sample_fn: SamplingFunction | None = None,
-        param: SharedVariable | None = None,
-        rng: RandomState | None = None,
-    ):
-        instance = object.__new__(cls)
-        if sample_fn is not None:
-            instance._sample_fn = sample_fn
-        if param is not None:
-            return instance(param, rng)
-        return instance
+    """
+    Initializer built from a sampling function.
+
+    Parameters
+    ----------
+    sample_fn : callable
+        ``(shape, dtype, rng) -> ndarray``, returning the initial value for one parameter.
+    """
 
     def __init__(self, sample_fn: SamplingFunction):
         self._sample_fn = sample_fn
