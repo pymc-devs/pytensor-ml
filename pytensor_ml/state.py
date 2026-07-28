@@ -85,10 +85,12 @@ _INITIALIZERS: dict[str, type[Initializer]] = {
     "unit_uniform": UnitUniformInitializer,
 }
 
+InitializationSchemeLike = InitializationScheme | Initializer
+
 
 def initialize_params(
     params: Sequence[SharedVariable],
-    scheme: InitializationScheme = "xavier_normal",
+    scheme: InitializationSchemeLike = "xavier_normal",
     rng: RandomState | None = None,
 ) -> list[np.ndarray]:
     """
@@ -99,7 +101,8 @@ def initialize_params(
     params
         SharedVariables to initialize values for.
     scheme
-        Initialization scheme to use.
+        Initialization scheme to use: the name of a built-in scheme, or any :class:`Initializer`
+        instance (including a :class:`CustomInitializer` wrapping your own sampling function).
     rng
         Random number generator. If None, a new one is created.
 
@@ -110,7 +113,7 @@ def initialize_params(
     """
     rng = np.random.default_rng(rng)
 
-    initializer = _INITIALIZERS[scheme]()
+    initializer = scheme if isinstance(scheme, Initializer) else _INITIALIZERS[scheme]()
     results = []
     for var in params:
         value = var.get_value()
