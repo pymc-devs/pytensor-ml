@@ -27,7 +27,9 @@ class DataLoader:
         has_remainder, stop = divmod(stop, self.n)
 
         idx = slice(start, None if has_remainder > 0 else stop)
-        indices = self.indices[idx]
+        # Copy, don't view: the wrap branch below reshuffles self.indices in place, which would otherwise
+        # rewrite the rows already selected here and silently drop some rows while repeating others.
+        indices = self.indices[idx].copy()
 
         if has_remainder > 0:
             excess = self.batch_size - indices.shape[0]
