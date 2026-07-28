@@ -22,7 +22,12 @@ def test_compile_predict_removes_dropout():
 
     predict = compile_predict(prediction, inputs=[X])
     X_values = np.random.default_rng(0).normal(size=(8, 4)).astype(config.floatX)
-    np.testing.assert_allclose(predict(X_values), predict(X_values))
+    first, second = predict(X_values), predict(X_values)
+
+    # Guards the test itself: at the zero initialization the output is identically zero, and so stable
+    # across calls whether or not dropout was removed.
+    assert np.any(first != 0)
+    np.testing.assert_allclose(first, second)
 
 
 def test_rewrite_for_prediction_leaves_the_original_graph_intact():
