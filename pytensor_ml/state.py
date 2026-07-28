@@ -91,7 +91,7 @@ class CustomInitializer(Initializer):
         return self._sample_fn(shape, dtype, rng)
 
 
-_INIT_FUNCTIONS: dict[str, type[Initializer]] = {
+_INITIALIZERS: dict[str, type[Initializer]] = {
     "zeros": ZeroInitializer,
     "xavier_uniform": XavierUniformInitializer,
     "xavier_normal": XavierNormalInitializer,
@@ -123,7 +123,7 @@ def initialize_params(
     """
     rng = np.random.default_rng(rng)
 
-    initializer = _INIT_FUNCTIONS[scheme]()
+    initializer = _INITIALIZERS[scheme]()
     results = []
     for var in params:
         value = var.get_value()
