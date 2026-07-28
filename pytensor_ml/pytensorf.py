@@ -10,13 +10,15 @@ from pytensor import Mode
 from pytensor.compile import Function, SharedVariable, get_mode
 from pytensor.compile.builders import OpFromGraph
 from pytensor.graph import FunctionGraph, RewriteDatabaseQuery, graph_inputs, rewrite_graph
-from pytensor.graph.basic import Apply, Constant, equal_computations
+from pytensor.graph.basic import Apply, equal_computations
 from pytensor.graph.fg import Output
 from pytensor.scan.op import Scan
 from pytensor.tensor.random.op import RandomVariable, RNGConsumerOp
 from pytensor.tensor.random.type import RandomType
 from pytensor.tensor.random.variable import RandomGeneratorSharedVariable
 from pytensor.tensor.variable import Variable
+
+from pytensor_ml.params import collect_graph_inputs
 
 SeedSequenceSeed = None | int | Sequence[int] | np.ndarray | np.random.SeedSequence
 RandomSeed = None | int | Sequence[int] | np.ndarray
@@ -302,14 +304,10 @@ def compile_predict(
     Function
         The compiled prediction function.
     """
-    prediction = rewrite_for_prediction(prediction)
+    specialized = rewrite_for_prediction(prediction)
     if inputs is None:
-        inputs = [
-            variable
-            for variable in graph_inputs([prediction])
-            if not isinstance(variable, Constant | SharedVariable)
-        ]
-    return function(list(inputs), prediction, **(compile_kwargs or {}))
+        inputs = collect_graph_inputs(specialized)
+    return function(list(inputs), specialized, **(compile_kwargs or {}))
 
 
 __all__ = ["compile_predict", "function", "rewrite_for_prediction", "rewrite_pregrad"]
