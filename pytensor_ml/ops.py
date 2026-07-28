@@ -1,3 +1,5 @@
+from typing import Protocol, runtime_checkable
+
 from pytensor.compile.builders import SymbolicOp
 from pytensor.tensor.variable import TensorVariable
 
@@ -15,10 +17,6 @@ class LayerOp(SymbolicOp):
 
     __props__: tuple[str, ...] = ()
 
-    def update_map(self) -> dict[int, int]:
-        """Return a mapping of output indexes to input indexes"""
-        return {}
-
 
 class UnaryLayerOp(LayerOp):
     """A ``LayerOp`` with exactly one output, typed as such.
@@ -34,4 +32,14 @@ class UnaryLayerOp(LayerOp):
         return out
 
 
-__all__ = ["LayerOp", "UnaryLayerOp"]
+@runtime_checkable
+class StatefulOp(Protocol):
+    """An op that writes some of its outputs back to shared variables it takes as inputs, the way batch
+    norm updates its running statistics. Defining :meth:`update_map` is what marks an op stateful -- the
+    check is structural, so there is nothing to register."""
+
+    def update_map(self) -> dict[int, int]:
+        """Map each output index to the index of the input that output updates."""
+
+
+__all__ = ["LayerOp", "StatefulOp", "UnaryLayerOp"]

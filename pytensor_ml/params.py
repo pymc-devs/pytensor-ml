@@ -10,7 +10,7 @@ from pytensor.tensor import TensorVariable
 from pytensor.tensor.sharedvar import TensorSharedVariable
 from pytensor.tensor.type import TensorType
 
-from pytensor_ml.ops import LayerOp
+from pytensor_ml.ops import StatefulOp
 
 
 class TrainableParameter(TensorSharedVariable):
@@ -177,7 +177,7 @@ def collect_non_trainable_updates(
     outputs: TensorVariable | Sequence[TensorVariable],
 ) -> dict[NonTrainableParameter, TensorVariable]:
     """
-    Extract non-trainable update pairs from LayerOps.
+    Extract non-trainable update pairs from stateful ops.
 
     These are state variables that need to be updated during training but are not subject to gradient-based
     optimization (e.g., running mean/variance in batch normalization).
@@ -190,7 +190,8 @@ def collect_non_trainable_updates(
     Returns
     -------
     non_trainable_updates : dict
-        Mapping from NonTrainableParameter to its new value for all updates declared by LayerOp.update_map().
+        Mapping from NonTrainableParameter to its new value, for every update an op declares through
+        :meth:`~pytensor_ml.ops.StatefulOp.update_map`.
     """
     if isinstance(outputs, Variable):
         outputs = [outputs]
@@ -198,7 +199,7 @@ def collect_non_trainable_updates(
     updates: dict[NonTrainableParameter, TensorVariable] = {}
     for ancestor in ancestors(list(outputs)):
         node = ancestor.owner
-        if node is not None and isinstance(node.op, LayerOp):
+        if node is not None and isinstance(node.op, StatefulOp):
             for output_idx, input_idx in node.op.update_map().items():
                 old_value = node.inputs[input_idx]
                 new_value = node.outputs[output_idx]
