@@ -51,13 +51,13 @@ class UnitUniformInitializer(Initializer):
 
 class XavierUniformInitializer(Initializer):
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
-        scale = np.sqrt(6.0 / np.sum([x for x in shape if x is not None]))
+        scale = np.sqrt(6.0 / np.sum(shape))
         return rng.uniform(-scale, scale, size=shape).astype(dtype)
 
 
 class XavierNormalInitializer(Initializer):
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
-        scale = np.sqrt(2.0 / np.sum([x for x in shape if x is not None]))
+        scale = np.sqrt(2.0 / np.sum(shape))
         return rng.normal(0, scale, size=shape).astype(dtype)
 
 
@@ -111,11 +111,8 @@ def initialize_params(
     list of np.ndarray
         Initialized values matching the shapes and dtypes of params.
     """
+    # Resolve once and share: a seed handed to each _sample_like call would repeat draws across parameters.
     rng = np.random.default_rng(rng)
 
     initializer = scheme if isinstance(scheme, Initializer) else _INITIALIZERS[scheme]()
-    results = []
-    for var in params:
-        value = var.get_value()
-        results.append(initializer.sample(value.shape, str(value.dtype), rng))
-    return results
+    return [initializer._sample_like(param, rng) for param in params]
