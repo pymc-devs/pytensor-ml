@@ -61,7 +61,6 @@ def rewrite_batch_stats_to_running_average_stats(
     batch_norm_op = PredictionBatchNormLayer(
         name=f"{node.op.name}",
         n_in=node.op.n_in,
-        momentum=node.op.momentum,
         epsilon=node.op.epsilon,
         affine=node.op.affine,
     )

@@ -179,7 +179,7 @@ class BatchNormLayer(LayerOp):
 
 
 class NoRunningStatsBatchNormLayer(UnaryLayerOp):
-    __props__ = ("n_in", "epsilon", "momentum", "affine")
+    __props__ = ("n_in", "epsilon", "affine")
 
     def build_inner_graph(self, X, *rest):
         X_normalized, _, _ = _batch_normalize(X, self.epsilon)
@@ -190,7 +190,7 @@ class NoRunningStatsBatchNormLayer(UnaryLayerOp):
 
 
 class PredictionBatchNormLayer(UnaryLayerOp):
-    __props__ = ("n_in", "epsilon", "momentum", "affine")
+    __props__ = ("n_in", "epsilon", "affine")
 
     def build_inner_graph(self, X, loc, scale, running_mean, running_var):
         res = (X - running_mean) / pt.sqrt(running_var + self.epsilon)
@@ -320,7 +320,6 @@ class BatchNorm2D(Layer):
                 name=self.name,
                 n_in=self.n_in,
                 epsilon=self.epsilon,
-                momentum=self.momentum,
                 affine=self.affine,
             )
 
