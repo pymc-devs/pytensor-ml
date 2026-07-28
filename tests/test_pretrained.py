@@ -125,3 +125,18 @@ def test_batchnorm_non_trainable_state_survives_roundtrip(tmp_path):
     )
     assert isinstance(restored_mean, NonTrainableParameter)
     np.testing.assert_array_equal(restored_mean.get_value(), running_mean.get_value())
+
+
+def test_load_network_rejects_an_older_format_version(tmp_path):
+    # Op classes are recorded by import path, so a config from another layout must fail here rather than
+    # later inside class resolution.
+    X = pt.tensor("X", shape=(None, 4))
+    path = tmp_path / "config.json"
+    save_network(Linear("fc", 4, 2)(X), path, inputs=[X])
+
+    config = json.loads(path.read_text())
+    config["format_version"] = 1
+    path.write_text(json.dumps(config))
+
+    with pytest.raises(ValueError, match="graph format version 1"):
+        load_network(path)

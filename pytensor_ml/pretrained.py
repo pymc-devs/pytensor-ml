@@ -28,7 +28,7 @@ WEIGHTS_FILENAME = "model.safetensors"
 # Marks a config as a pytensor_ml graph (vs a HuggingFace config, which shares the config.json filename but
 # is a hyperparameter sheet, not a serialized graph). The version guards future schema changes.
 GRAPH_FORMAT = "pytensor_ml.graph"
-GRAPH_FORMAT_VERSION = 1
+GRAPH_FORMAT_VERSION = 2
 
 Format = Literal["auto", "pytensor", "huggingface"]
 
@@ -168,6 +168,15 @@ def load_network(
     if config.get("format") != GRAPH_FORMAT:
         hint = " (this looks like a HuggingFace config)" if _looks_like_huggingface(config) else ""
         raise ValueError(f"{path} is not a pytensor_ml network config{hint}.")
+
+    # Before rebuilding: op classes are recorded by import path, so a stale layout would otherwise fail
+    # deep inside class resolution.
+    written_version = config.get("format_version")
+    if written_version != GRAPH_FORMAT_VERSION:
+        raise ValueError(
+            f"{path} is graph format version {written_version}, but this pytensor_ml reads version "
+            f"{GRAPH_FORMAT_VERSION}. Rebuild the network and call save_network again."
+        )
 
     leaves = [
         _rebuild_input(type_json, meta, restore_rng)
