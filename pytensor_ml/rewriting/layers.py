@@ -4,7 +4,8 @@ from pytensor.graph.rewriting.basic import node_rewriter
 from pytensor.graph.rewriting.db import EquilibriumDB
 from pytensor.tensor.variable import Variable
 
-from pytensor_ml.layers import BatchNormLayer, DropoutLayer, PredictionBatchNormLayer
+from pytensor_ml.layers.dropout import DropoutLayer
+from pytensor_ml.layers.norm import BatchNormLayer, PredictionBatchNormLayer
 
 predict_db = EquilibriumDB()
 

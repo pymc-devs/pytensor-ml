@@ -7,7 +7,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-from pytensor_ml.attention import scaled_dot_product_attention
+from pytensor_ml.layers.attention import scaled_dot_product_attention
 from tests.dispatch.jax.test_basic import compare_jax_and_py
 
 floatX = pytensor.config.floatX
@@ -59,6 +59,6 @@ def test_dispatch_auto_registers():
     """Loading JAX's dispatch must auto-register ours -- no `import pytensor_ml.dispatch.jax` needed."""
     from pytensor.link.jax.dispatch import jax_funcify
 
-    from pytensor_ml.attention import AttentionLayer
+    from pytensor_ml.layers.attention import AttentionLayer
 
     assert AttentionLayer in jax_funcify.registry

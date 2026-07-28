@@ -7,7 +7,7 @@ import pytest
 
 pytest.importorskip("mlx.core")
 
-from pytensor_ml.attention import scaled_dot_product_attention
+from pytensor_ml.layers.attention import scaled_dot_product_attention
 from tests.dispatch.mlx.test_basic import compare_mlx_and_py
 
 floatX = pytensor.config.floatX
@@ -60,6 +60,6 @@ def test_dispatch_auto_registers():
     """Loading MLX's dispatch must auto-register ours -- no `import pytensor_ml.dispatch.mlx` needed."""
     from pytensor.link.mlx.dispatch import mlx_funcify
 
-    from pytensor_ml.attention import AttentionLayer
+    from pytensor_ml.layers.attention import AttentionLayer
 
     assert AttentionLayer in mlx_funcify.registry

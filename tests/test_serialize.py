@@ -11,7 +11,6 @@ from pytensor.tensor.random.op import RandomVariable
 from pytensor.tensor.type import TensorType
 
 from pytensor_ml.activations import GELU, LeakyReLU, ReLU, Sigmoid, Softmax, SoftPlus, Swish, Tanh
-from pytensor_ml.attention import scaled_dot_product_attention
 from pytensor_ml.json_serialize import (
     deserialize_graph,
     op_from_json,
@@ -31,6 +30,7 @@ from pytensor_ml.layers import (
     Sequential,
     Squeeze,
 )
+from pytensor_ml.layers.attention import scaled_dot_product_attention
 from pytensor_ml.params import collect_shared_variables, collect_trainable_params
 from pytensor_ml.serialize.base import _TYPE_FROM_JSON, _TYPE_TO_JSON
 

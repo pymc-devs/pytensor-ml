@@ -8,8 +8,8 @@ from pytensor.graph.traversal import ancestors
 from pytensor.tensor.random.op import RandomVariable
 
 from pytensor_ml.activations import ReLU
+from pytensor_ml.layers.transformer import FeedForward, TransformerBlock
 from pytensor_ml.params import collect_trainable_params
-from pytensor_ml.transformer import FeedForward, TransformerBlock
 
 floatX = pytensor.config.floatX
 # The python linker evaluates the same graph without a slow numba compile of these block-sized graphs.

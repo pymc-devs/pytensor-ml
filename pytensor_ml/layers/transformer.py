@@ -1,8 +1,11 @@
 import pytensor.tensor as pt
 
 from pytensor_ml.activations import GELU, Activation
-from pytensor_ml.attention import MultiheadAttention
-from pytensor_ml.layers import Dropout, Layer, LayerNorm, Linear
+from pytensor_ml.base import Layer
+from pytensor_ml.layers.attention import MultiheadAttention
+from pytensor_ml.layers.dropout import Dropout
+from pytensor_ml.layers.linear import Linear
+from pytensor_ml.layers.norm import LayerNorm
 
 
 def _identity(x: pt.TensorVariable) -> pt.TensorVariable:

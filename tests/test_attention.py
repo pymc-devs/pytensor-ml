@@ -7,7 +7,7 @@ from pytensor.graph.replace import vectorize_graph
 from pytensor.graph.traversal import ancestors
 from pytensor.tensor.extra_ops import Repeat
 
-from pytensor_ml.attention import (
+from pytensor_ml.layers.attention import (
     AttentionLayer,
     CausalSelfAttention,
     MultiheadAttention,

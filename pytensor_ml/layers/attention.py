@@ -4,8 +4,8 @@ import pytensor.tensor as pt
 from pytensor import config
 from pytensor.tensor.variable import TensorVariable
 
-from pytensor_ml.base import UnaryLayerOp
-from pytensor_ml.layers import Layer, Linear
+from pytensor_ml.base import Layer, UnaryLayerOp
+from pytensor_ml.layers.linear import Linear
 
 
 class AttentionLayer(UnaryLayerOp):
@@ -49,9 +49,8 @@ def _sdpa_graph(
 
     if is_causal:
         sq, sk = q.shape[-2], k.shape[-2]
-        # Position i may attend to j <= i, aligned to the bottom-right when sq != sk so a partial query
-        # block (the typical decoding case) sees the whole prefix. Reduces to a plain lower triangle when
-        # sq == sk
+        # Position i may attend to j <= i, aligned bottom-right so a partial query block (the decoding
+        # case) sees the whole prefix. Reduces to a plain lower triangle when sq == sk.
         q_idx = pt.arange(sq)[:, None]
         k_idx = pt.arange(sk)[None, :]
         causal = pt.where(k_idx <= q_idx + (sk - sq), 0.0, -np.inf).astype(config.floatX)

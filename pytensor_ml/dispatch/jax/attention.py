@@ -3,7 +3,7 @@ import jax.numpy as jnp
 
 from pytensor.link.jax.dispatch import jax_funcify
 
-from pytensor_ml.attention import AttentionLayer
+from pytensor_ml.layers.attention import AttentionLayer
 
 
 @jax_funcify.register(AttentionLayer)

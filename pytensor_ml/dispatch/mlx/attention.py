@@ -4,7 +4,7 @@ import mlx.core as mx
 
 from pytensor.link.mlx.dispatch import mlx_funcify
 
-from pytensor_ml.attention import AttentionLayer
+from pytensor_ml.layers.attention import AttentionLayer
 
 
 @mlx_funcify.register(AttentionLayer)

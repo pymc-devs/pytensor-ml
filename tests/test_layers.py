@@ -1,9 +1,13 @@
+import importlib
+
 import numpy as np
 import pytensor
 import pytensor.tensor as pt
 import pytest
 
 from pytensor.graph.replace import vectorize_graph
+
+import pytensor_ml.layers
 
 from pytensor_ml.activations import ReLU
 from pytensor_ml.layers import BatchNorm2D, Dropout, Embedding, Input, LayerNorm, Linear, Sequential
@@ -281,3 +285,24 @@ def test_batch_norm_2d_learns_population_stats():
         rtol=1e-6,
         atol=1e-6,
     )
+
+
+@pytest.mark.parametrize(
+    "op_name, submodule",
+    [
+        ("LinearLayer", "linear"),
+        ("EmbeddingLayer", "embedding"),
+        ("DropoutLayer", "dropout"),
+        ("BatchNormLayer", "norm"),
+        ("NoRunningStatsBatchNormLayer", "norm"),
+        ("PredictionBatchNormLayer", "norm"),
+        ("LayerNormLayer", "norm"),
+    ],
+)
+def test_marker_ops_stay_reachable_from_the_package(op_name, submodule):
+    # deserialize_graph resolves an op's recorded import path with getattr on this package, so these
+    # bindings are load-bearing rather than convenience re-exports.
+    from_package = getattr(pytensor_ml.layers, op_name)
+    from_submodule = getattr(importlib.import_module(f"pytensor_ml.layers.{submodule}"), op_name)
+
+    assert from_package is from_submodule
