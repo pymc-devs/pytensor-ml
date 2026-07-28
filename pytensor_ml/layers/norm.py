@@ -58,8 +58,10 @@ class BatchNormLayer(LayerOp):
     __props__ = ("n_in", "epsilon", "momentum", "affine")
 
     def update_map(self):
-        # Outputs 1 and 2 (the new running mean and variance) update inputs 3 and 4 (the old ones).
-        return {1: 3, 2: 4}
+        # Outputs 1 and 2 are the new running mean and variance; they write back to the running
+        # statistics they were computed from, which follow X and the affine pair.
+        running_mean_index = 1 + (2 if self.affine else 0)
+        return {1: running_mean_index, 2: running_mean_index + 1}
 
     def build_inner_graph(self, X, *rest):
         if self.affine:
@@ -92,9 +94,14 @@ class NoRunningStatsBatchNormLayer(LayerOp):
 class PredictionBatchNormLayer(UnaryLayerOp):
     __props__ = ("n_in", "epsilon", "affine")
 
-    def build_inner_graph(self, X, loc, scale, running_mean, running_var):
-        res = (X - running_mean) / pt.sqrt(running_var + self.epsilon)
-        return [loc + res * scale]
+    def build_inner_graph(self, X, *rest):
+        if self.affine:
+            loc, scale, running_mean, running_var = rest
+        else:
+            running_mean, running_var = rest
+
+        X_normalized = (X - running_mean) / pt.sqrt(running_var + self.epsilon)
+        return [X_normalized * scale + loc] if self.affine else [X_normalized]
 
 
 class BatchNorm2D(Layer):

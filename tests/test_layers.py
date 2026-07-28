@@ -306,11 +306,27 @@ def test_batch_norm_without_running_stats_normalizes_with_batch_statistics(rng):
     np.testing.assert_allclose(out.std(axis=0), 1.0, rtol=1e-3)
 
 
+@pytest.mark.parametrize("affine", [True, False], ids=["affine", "no_affine"])
+def test_batch_norm_running_stats_write_back_to_the_right_inputs(affine):
+    # The update map indexes inputs positionally, and the affine parameters shift the running
+    # statistics along by two when present.
+    X = pt.tensor("X", shape=(None, 4))
+    batch_norm = BatchNorm2D("bn", n_in=4, affine=affine)
+
+    updates = collect_non_trainable_updates(batch_norm(X))
+
+    assert updates == {
+        batch_norm.running_mean: batch_norm.new_running_mean,
+        batch_norm.running_var: batch_norm.new_running_var,
+    }
+
+
 def test_batch_norm_variants_agree_on_output_arity():
     X = pt.tensor("X", shape=(None, 4))
     tracked = BatchNorm2D("tracked", n_in=4)(X)
     untracked = BatchNorm2D("untracked", n_in=4, track_running_stats=False)(X)
 
+    # Matching arity is what lets BatchNorm2D use one code path; the untracked variant reports the
+    # batch statistics but must not write them anywhere.
     assert len(tracked.owner.outputs) == len(untracked.owner.outputs)
-    assert set(collect_non_trainable_updates(tracked))
     assert collect_non_trainable_updates(untracked) == {}

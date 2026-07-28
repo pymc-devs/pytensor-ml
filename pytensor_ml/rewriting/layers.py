@@ -62,7 +62,9 @@ def rewrite_batch_stats_to_running_average_stats(
     running_variance : None
         Declares the running-variance output unused, on the same terms.
     """
-    X, loc, scale, running_mean, running_var = node.inputs
+    # The affine parameters are absent when the layer was built with affine=False, so bind them as a
+    # variable-length group rather than positionally.
+    X, *affine_params, running_mean, running_var = node.inputs
 
     batch_norm_op = PredictionBatchNormLayer(
         name=f"{node.op.name}",
@@ -71,7 +73,7 @@ def rewrite_batch_stats_to_running_average_stats(
         affine=node.op.affine,
     )
 
-    X_normalized = batch_norm_op(X, loc, scale, running_mean, running_var)
+    X_normalized = batch_norm_op(X, *affine_params, running_mean, running_var)
 
     return [X_normalized, None, None]  # type: ignore[list-item]
 
