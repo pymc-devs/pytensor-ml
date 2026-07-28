@@ -46,7 +46,7 @@ class LeakyReLU(Activation):
 
     def __call__(self, x: pt.TensorLike) -> pt.TensorVariable:
         x = pt.as_tensor(x)
-        out = pt.switch(x > 0, x, -self.negative_slope * x)
+        out = pt.switch(x > 0, x, self.negative_slope * x)
         out.name = "LeakyReLU"
         return out
 

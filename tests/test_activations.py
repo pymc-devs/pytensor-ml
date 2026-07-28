@@ -45,6 +45,19 @@ def _activation_id(activation):
     return type(activation).__name__
 
 
+@pytest.mark.parametrize("negative_slope", [0.01, 0.1])
+def test_leaky_relu_matches_reference(negative_slope):
+    # The XOR test only checks that an activation supplies a working nonlinearity, which a sign-flipped
+    # negative branch still does. Pin the actual values.
+    x = pt.vector("x")
+    values = np.linspace(-6, 6, 101).astype(config.floatX)
+
+    f = pytensor.function([x], LeakyReLU(negative_slope=negative_slope)(x), mode=FAST_MODE)
+
+    expected = np.where(values > 0, values, negative_slope * values)
+    np.testing.assert_allclose(f(values), expected, rtol=1e-6)
+
+
 def test_gelu_and_approx_match_erf_reference():
     x = pt.vector("x")
     values = np.linspace(-6, 6, 101)
