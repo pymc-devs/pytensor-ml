@@ -1,7 +1,7 @@
 import numpy as np
 import pytensor.tensor as pt
 
-from pytensor_ml.layers import Layer
+from pytensor_ml.base import Layer
 
 
 class Activation(Layer): ...

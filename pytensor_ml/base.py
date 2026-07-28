@@ -1,7 +1,18 @@
+from abc import ABC, abstractmethod
 from typing import Protocol, runtime_checkable
+
+import pytensor.tensor as pt
 
 from pytensor.compile.builders import SymbolicOp
 from pytensor.tensor.variable import TensorVariable
+
+
+class Layer(ABC):
+    """Base class for the objects that build layer graphs. Defined here, not in ``pytensor_ml.layers``, so
+    that ``pytensor_ml.activations`` can subclass it without a circular import."""
+
+    @abstractmethod
+    def __call__(self, x: pt.TensorLike) -> pt.TensorVariable: ...
 
 
 class LayerOp(SymbolicOp):
@@ -42,4 +53,4 @@ class StatefulOp(Protocol):
         """Map each output index to the index of the input that output updates."""
 
 
-__all__ = ["LayerOp", "StatefulOp", "UnaryLayerOp"]
+__all__ = ["Layer", "LayerOp", "StatefulOp", "UnaryLayerOp"]

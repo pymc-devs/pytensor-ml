@@ -1,4 +1,3 @@
-from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
@@ -9,7 +8,7 @@ import pytensor.tensor.random as ptr
 from pytensor import config
 from pytensor.compile.sharedvalue import shared
 
-from pytensor_ml.base import LayerOp, UnaryLayerOp
+from pytensor_ml.base import Layer, LayerOp, UnaryLayerOp
 from pytensor_ml.params import (
     NonTrainableParameter,
     TrainableParameter,
@@ -21,11 +20,6 @@ from pytensor_ml.params import (
 def shape_to_str(shape):
     inner = ",".join([str(st_dim) if st_dim is not None else "?" for st_dim in shape])
     return f"({inner})"
-
-
-class Layer(ABC):
-    @abstractmethod
-    def __call__(self, x: pt.TensorLike) -> pt.TensorVariable: ...
 
 
 class LinearLayer(UnaryLayerOp):
