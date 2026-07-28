@@ -157,15 +157,37 @@ def const_from_json(const_dict: dict):
     return pt.constant(value, dtype=graph_type.dtype)
 
 
+def qualname(op: Op) -> str:
+    """Return the import path of an op's class. Note this makes a class's module part of the on-disk
+    format: moving an op to another module changes what :func:`resolve_class` must find."""
+    return f"{type(op).__module__}.{type(op).__name__}"
+
+
+def resolve_class(path: str):
+    module, name = path.rsplit(".", 1)
+    return getattr(importlib.import_module(module), name)
+
+
+def props_to_json(op: Op) -> dict:
+    """Encode an op's ``__props__`` values, or an empty dict for an op that declares none."""
+    return {name: prop_to_json(getattr(op, name)) for name in getattr(op, "__props__", ())}
+
+
+def props_from_json(props_dict: dict) -> dict:
+    """Decode a props dict into keyword arguments for the op's constructor."""
+    return {name: prop_from_json(value) for name, value in props_dict.items()}
+
+
+def leaf_to_json(op: Op) -> dict:
+    """Encode an op fully described by its class and ``__props__``, needing no inner graph."""
+    return {"family": "leaf", "type": qualname(op), "props": props_to_json(op)}
+
+
 @singledispatch
 def op_to_json(op: Op) -> dict:
-    """Serialize an op to a JSON dict, dispatching on op type. The default handles a leaf op from its
-    JSON-native ``__props__``; structural ops register their own rules in ``pytensor_ml.serialize``."""
-    return {
-        "family": "leaf",
-        "type": qualname(op),
-        "props": {name: prop_to_json(getattr(op, name)) for name in getattr(op, "__props__", ())},
-    }
+    """Serialize an op to a JSON dict, dispatching on op type. The default treats the op as a leaf;
+    structural ops register their own rules in ``pytensor_ml.serialize``."""
+    return leaf_to_json(op)
 
 
 # The reverse of op_to_json: a registry keyed by the "family" tag each forward handler emits.
@@ -189,17 +211,7 @@ def op_from_json(op_dict: dict) -> Op:
 
 @register_from_json("leaf")
 def _leaf_from_json(op_dict: dict):
-    cls = resolve_class(op_dict["type"])
-    return cls(**{name: prop_from_json(value) for name, value in op_dict["props"].items()})
-
-
-def qualname(op: Op) -> str:
-    return f"{type(op).__module__}.{type(op).__name__}"
-
-
-def resolve_class(path: str):
-    module, name = path.rsplit(".", 1)
-    return getattr(importlib.import_module(module), name)
+    return resolve_class(op_dict["type"])(**props_from_json(op_dict["props"]))
 
 
 def graph_to_json(inputs: Sequence[Variable], outputs: Sequence[Variable]) -> dict:

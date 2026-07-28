@@ -3,9 +3,10 @@ from pytensor.compile.builders import OpFromGraph, SymbolicOp
 from pytensor_ml.serialize.base import (
     graph_from_json,
     graph_to_json,
+    leaf_to_json,
     op_to_json,
-    prop_from_json,
-    prop_to_json,
+    props_from_json,
+    props_to_json,
     qualname,
     register_from_json,
     resolve_class,
@@ -18,11 +19,8 @@ from pytensor_ml.serialize.base import (
 
 @op_to_json.register(SymbolicOp)
 def _symbolic_op_to_json(op: SymbolicOp) -> dict:
-    return {
-        "family": "leaf",
-        "type": qualname(op),
-        "props": {name: prop_to_json(getattr(op, name)) for name in getattr(op, "__props__", ())},
-    }
+    # Registered so the more general OpFromGraph rule below does not claim SymbolicOp, which subclasses it.
+    return leaf_to_json(op)
 
 
 @op_to_json.register(OpFromGraph)
@@ -32,7 +30,7 @@ def _ofg_to_json(op: OpFromGraph) -> dict:
         "type": qualname(op),
         "inline": bool(op.is_inline),
         "name": op.name,
-        "props": {name: prop_to_json(getattr(op, name)) for name in getattr(op, "__props__", ())},
+        "props": props_to_json(op),
         "inner": graph_to_json(op.inner_inputs, op.inner_outputs),
     }
 
@@ -41,5 +39,10 @@ def _ofg_to_json(op: OpFromGraph) -> dict:
 def _ofg_from_json(op_dict: dict):
     cls = resolve_class(op_dict["type"])
     inputs, outputs = graph_from_json(op_dict["inner"])
-    props = {name: prop_from_json(value) for name, value in op_dict["props"].items()}
-    return cls(inputs, outputs, inline=op_dict["inline"], name=op_dict["name"], **props)
+    return cls(
+        inputs,
+        outputs,
+        inline=op_dict["inline"],
+        name=op_dict["name"],
+        **props_from_json(op_dict["props"]),
+    )
