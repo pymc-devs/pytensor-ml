@@ -1,7 +1,23 @@
 import numpy as np
 import pytensor.tensor as pt
 
+from pytensor import config
+
 from pytensor_ml.base import Layer
+
+
+def _constant_like(value: float, x: pt.TensorVariable) -> pt.TensorVariable:
+    """
+    Wrap a scalar so that combining it with ``x`` cannot widen ``x``'s dtype.
+
+    PyTensor's autocaster types a bare Python float by value, so whether a literal widens its operand
+    depends on that value: against a float32 input ``0.5 * x`` stays float32, while ``0.01 * x``
+    promotes to float64. Pinning the constant to ``x``'s dtype removes the dependence.
+    """
+    dtype = np.dtype(x.dtype)
+    # np.finfo maps complex64 -> float32, keeping complex inputs at their own precision.
+    dtype = np.finfo(dtype).dtype if np.issubdtype(dtype, np.inexact) else np.dtype(config.floatX)
+    return pt.constant(np.asarray(value, dtype=dtype))
 
 
 class Activation(Layer): ...
@@ -46,7 +62,7 @@ class LeakyReLU(Activation):
 
     def __call__(self, x: pt.TensorLike) -> pt.TensorVariable:
         x = pt.as_tensor(x)
-        out = pt.switch(x > 0, x, self.negative_slope * x)
+        out = pt.switch(x > 0, x, _constant_like(self.negative_slope, x) * x)
         out.name = "LeakyReLU"
         return out
 
@@ -133,12 +149,15 @@ class GELU(Activation):
 
     def __call__(self, x: pt.TensorLike) -> pt.TensorVariable:
         x = pt.as_tensor(x)
-        # float(...) keeps these Python floats: numpy's float64 scalars would upcast a float32 input to
-        # float64, but a Python float casts by value and preserves the input dtype.
+        half = _constant_like(0.5, x)
+        one = _constant_like(1.0, x)
         if self.approximate:
-            out = 0.5 * x * (1 + pt.tanh(float(np.sqrt(2.0 / np.pi)) * (x + 0.044715 * x**3)))
+            sqrt_2_over_pi = _constant_like(np.sqrt(2.0 / np.pi), x)
+            cubic_coef = _constant_like(0.044715, x)
+            out = half * x * (one + pt.tanh(sqrt_2_over_pi * (x + cubic_coef * x**3)))
         else:
-            out = 0.5 * x * (1 + pt.erf(x / float(np.sqrt(2.0))))
+            sqrt2 = _constant_like(np.sqrt(2.0), x)
+            out = half * x * (one + pt.erf(x / sqrt2))
         out.name = "GELU"
         return out
 
@@ -163,7 +182,7 @@ class Swish(Activation):
 
     def __call__(self, x: pt.TensorLike) -> pt.TensorVariable:
         x = pt.as_tensor(x)
-        out = x * pt.sigmoid(self.beta * x)
+        out = x * pt.sigmoid(_constant_like(self.beta, x) * x)
         out.name = "Swish"
         return out
 

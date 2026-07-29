@@ -58,16 +58,27 @@ def test_leaky_relu_matches_reference(negative_slope):
     np.testing.assert_allclose(f(values), expected, rtol=1e-6)
 
 
-def test_gelu_and_approx_match_erf_reference():
-    x = pt.vector("x")
-    values = np.linspace(-6, 6, 101)
+@pytest.mark.parametrize("dtype, rtol, atol", [("float64", 1e-6, 1e-8), ("float32", 1e-5, 1e-6)])
+def test_gelu_and_approx_match_erf_reference(dtype, rtol, atol):
+    x = pt.vector("x", dtype=dtype)
+    values = np.linspace(-6, 6, 101).astype(dtype)
     reference = 0.5 * values * (1 + erf(values / np.sqrt(2)))
 
     exact = pytensor.function([x], GELU(approximate=False)(x), mode=FAST_MODE)
     approx = pytensor.function([x], GELU(approximate=True)(x), mode=FAST_MODE)
 
-    np.testing.assert_allclose(exact(values), reference, rtol=1e-6, atol=1e-8)
+    np.testing.assert_allclose(exact(values), reference, rtol=rtol, atol=atol)
     np.testing.assert_allclose(approx(values), reference, atol=1e-3)
+
+
+@pytest.mark.parametrize("beta", [0.1, 1.0, 1.5])
+def test_swish_matches_reference(beta):
+    x = pt.vector("x")
+    values = np.linspace(-6, 6, 101).astype(config.floatX)
+
+    f = pytensor.function([x], Swish(beta=beta)(x), mode=FAST_MODE)
+
+    np.testing.assert_allclose(f(values), values / (1 + np.exp(-beta * values)), rtol=1e-6)
 
 
 @pytest.mark.parametrize("activation", HIDDEN_ACTIVATIONS, ids=_activation_id)
@@ -96,3 +107,37 @@ def test_activation_lets_a_network_learn_xor(activation):
         if float(step(XOR_X, XOR_Y)) < XOR_LOSS_THRESHOLD:
             return
     pytest.fail("network never confidently learned XOR (loss stayed >= threshold)")
+
+
+def _parametrized_activation_id(activation):
+    # Several instances share a class here, so fold the parameter into the id.
+    base = _activation_id(activation)
+    if isinstance(activation, LeakyReLU):
+        return f"{base}_{activation.negative_slope}"
+    if isinstance(activation, Swish):
+        return f"{base}_{activation.beta}"
+    return base
+
+
+# 0.1 is not exactly representable in float32 and widens the graph; 0.5 and 1.5 are exact.
+DTYPE_ACTIVATIONS = [
+    *HIDDEN_ACTIVATIONS,
+    *[LeakyReLU(slope) for slope in (0.1, 0.5)],
+    *[Swish(beta) for beta in (0.1, 1.5)],
+]
+
+# floatX is the autocaster's fallback, so pairing a narrow input with a wider floatX is what exposes a
+# constant that isn't pinned to the input. complex64 additionally catches a real constant widening it.
+DTYPE_CASES = [
+    ("float32", "float64"),
+    ("float64", "float64"),
+    ("float16", "float32"),
+    ("complex64", "float64"),
+]
+
+
+@pytest.mark.parametrize("dtype, floatX", DTYPE_CASES)
+@pytest.mark.parametrize("activation", DTYPE_ACTIVATIONS, ids=_parametrized_activation_id)
+def test_activation_preserves_input_dtype(activation, dtype, floatX):
+    with config.change_flags(floatX=floatX):
+        assert activation(pt.vector("x", dtype=dtype)).dtype == dtype
