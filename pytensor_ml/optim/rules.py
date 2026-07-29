@@ -5,11 +5,18 @@ import pytensor.tensor as pt
 from pytensor import config
 from pytensor.tensor import TensorVariable
 
-from pytensor_ml.optim.base import Parameter, Updates, counter, get_gradients, state_for
+from pytensor_ml.optim.base import (
+    LossOrGradients,
+    Parameter,
+    Updates,
+    counter,
+    get_gradients,
+    state_for,
+)
 
 
 def sgd_updates(
-    loss_or_gradients: TensorVariable | Sequence[TensorVariable],
+    loss_or_gradients: LossOrGradients,
     parameters: Sequence[Parameter],
     learning_rate: float = 1.0,
 ) -> Updates:
@@ -41,7 +48,7 @@ def sgd_updates(
 
 
 def adam_updates(
-    loss_or_gradients: TensorVariable | Sequence[TensorVariable],
+    loss_or_gradients: LossOrGradients,
     parameters: Sequence[Parameter],
     learning_rate: float = 1e-3,
     beta1: float = 0.9,
@@ -132,7 +139,7 @@ def amsgrad_second_moment(
 
 
 def adamw_updates(
-    loss_or_gradients: TensorVariable | Sequence[TensorVariable],
+    loss_or_gradients: LossOrGradients,
     parameters: Sequence[Parameter],
     learning_rate: float = 1e-3,
     weight_decay: float = 0.01,
@@ -211,7 +218,7 @@ def adamw_updates(
 
 
 def nadam_updates(
-    loss_or_gradients: TensorVariable | Sequence[TensorVariable],
+    loss_or_gradients: LossOrGradients,
     parameters: Sequence[Parameter],
     learning_rate: float = 2e-3,
     beta1: float = 0.9,
@@ -280,7 +287,7 @@ def nadam_updates(
 
 
 def adamax_updates(
-    loss_or_gradients: TensorVariable | Sequence[TensorVariable],
+    loss_or_gradients: LossOrGradients,
     parameters: Sequence[Parameter],
     learning_rate: float = 2e-3,
     beta1: float = 0.9,
@@ -342,7 +349,7 @@ def adamax_updates(
 
 
 def adagrad_updates(
-    loss_or_gradients: TensorVariable | Sequence[TensorVariable],
+    loss_or_gradients: LossOrGradients,
     parameters: Sequence[Parameter],
     learning_rate: float = 0.01,
     epsilon: float = 1e-8,
@@ -386,7 +393,7 @@ def adagrad_updates(
 
 
 def rmsprop_updates(
-    loss_or_gradients: TensorVariable | Sequence[TensorVariable],
+    loss_or_gradients: LossOrGradients,
     parameters: Sequence[Parameter],
     learning_rate: float = 1e-2,
     rho: float = 0.9,
@@ -457,7 +464,7 @@ def rmsprop_updates(
 
 
 def adadelta_updates(
-    loss_or_gradients: TensorVariable | Sequence[TensorVariable],
+    loss_or_gradients: LossOrGradients,
     parameters: Sequence[Parameter],
     learning_rate: float = 1.0,
     rho: float = 0.9,
@@ -516,7 +523,7 @@ def adadelta_updates(
 
 
 def rprop_updates(
-    loss_or_gradients: TensorVariable | Sequence[TensorVariable],
+    loss_or_gradients: LossOrGradients,
     parameters: Sequence[Parameter],
     learning_rate: float = 1e-2,
     eta_minus: float = 0.5,

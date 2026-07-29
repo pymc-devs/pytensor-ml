@@ -12,6 +12,9 @@ from pytensor_ml.pytensorf import rewrite_pregrad
 
 type Parameter = TensorSharedVariable
 
+# What every rule accepts first: either a scalar loss to differentiate, or gradients already computed.
+type LossOrGradients = TensorVariable | Sequence[TensorVariable]
+
 # Pytensor's native `updates` contract, and the single currency every rule and transform here speaks: it
 # carries the next parameter values *and* the next optimizer-state values in one identity-keyed dict.
 Updates = dict[SharedVariable, TensorVariable]
@@ -19,11 +22,11 @@ Updates = dict[SharedVariable, TensorVariable]
 # A chainable transform reads an updates dict and returns a new one, working in "step space" (updates[p] - p).
 Transform = Callable[[Updates, Sequence[Parameter]], Updates]
 
-UpdateRule = Callable[[TensorVariable | Sequence[TensorVariable], Sequence[Parameter]], Updates]
+UpdateRule = Callable[[LossOrGradients, Sequence[Parameter]], Updates]
 
 
 def get_gradients(
-    loss_or_gradients: TensorVariable | Sequence[TensorVariable],
+    loss_or_gradients: LossOrGradients,
     parameters: Sequence[Parameter],
 ) -> list[TensorVariable]:
     """
