@@ -36,7 +36,7 @@ def sgd(learning_rate: float = 0.01, momentum: float = 0.0, nesterov: bool = Fal
 
     def rule(loss_or_gradients, parameters):
         if not momentum:
-            return sgd_updates(loss_or_gradients, parameters, learning_rate)
+            return sgd_updates(loss_or_gradients, parameters, learning_rate=learning_rate)
         updates = sgd_updates(loss_or_gradients, parameters, learning_rate=1.0)
         updates = trace(momentum, nesterov)(updates, parameters)
         return scale(learning_rate)(updates, parameters)
@@ -62,7 +62,13 @@ def adam(
 
     def rule(loss_or_gradients, parameters):
         return adam_updates(
-            loss_or_gradients, parameters, learning_rate, beta1, beta2, epsilon, amsgrad
+            loss_or_gradients,
+            parameters,
+            learning_rate=learning_rate,
+            beta1=beta1,
+            beta2=beta2,
+            epsilon=epsilon,
+            amsgrad=amsgrad,
         )
 
     return rule
@@ -91,13 +97,13 @@ def adamw(
         return adamw_updates(
             loss_or_gradients,
             parameters,
-            learning_rate,
-            weight_decay,
-            beta1,
-            beta2,
-            epsilon,
-            amsgrad,
-            mask,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+            beta1=beta1,
+            beta2=beta2,
+            epsilon=epsilon,
+            amsgrad=amsgrad,
+            mask=mask,
         )
 
     return rule
@@ -120,7 +126,14 @@ def nadam(
     """
 
     def rule(loss_or_gradients, parameters):
-        return nadam_updates(loss_or_gradients, parameters, learning_rate, beta1, beta2, epsilon)
+        return nadam_updates(
+            loss_or_gradients,
+            parameters,
+            learning_rate=learning_rate,
+            beta1=beta1,
+            beta2=beta2,
+            epsilon=epsilon,
+        )
 
     return rule
 
@@ -142,7 +155,14 @@ def adamax(
     """
 
     def rule(loss_or_gradients, parameters):
-        return adamax_updates(loss_or_gradients, parameters, learning_rate, beta1, beta2, epsilon)
+        return adamax_updates(
+            loss_or_gradients,
+            parameters,
+            learning_rate=learning_rate,
+            beta1=beta1,
+            beta2=beta2,
+            epsilon=epsilon,
+        )
 
     return rule
 
@@ -165,7 +185,13 @@ def rprop(
 
     def rule(loss_or_gradients, parameters):
         return rprop_updates(
-            loss_or_gradients, parameters, learning_rate, eta_minus, eta_plus, step_min, step_max
+            loss_or_gradients,
+            parameters,
+            learning_rate=learning_rate,
+            eta_minus=eta_minus,
+            eta_plus=eta_plus,
+            step_min=step_min,
+            step_max=step_max,
         )
 
     return rule
@@ -189,7 +215,13 @@ def rmsprop(
 
     def rule(loss_or_gradients, parameters):
         return rmsprop_updates(
-            loss_or_gradients, parameters, learning_rate, rho, momentum, epsilon, centered
+            loss_or_gradients,
+            parameters,
+            learning_rate=learning_rate,
+            rho=rho,
+            momentum=momentum,
+            epsilon=epsilon,
+            centered=centered,
         )
 
     return rule
@@ -206,7 +238,9 @@ def adagrad(learning_rate: float = 0.01, epsilon: float = 1e-8) -> UpdateRule:
     """
 
     def rule(loss_or_gradients, parameters):
-        return adagrad_updates(loss_or_gradients, parameters, learning_rate, epsilon)
+        return adagrad_updates(
+            loss_or_gradients, parameters, learning_rate=learning_rate, epsilon=epsilon
+        )
 
     return rule
 
@@ -222,6 +256,8 @@ def adadelta(learning_rate: float = 1.0, rho: float = 0.9, epsilon: float = 1e-8
     """
 
     def rule(loss_or_gradients, parameters):
-        return adadelta_updates(loss_or_gradients, parameters, learning_rate, rho, epsilon)
+        return adadelta_updates(
+            loss_or_gradients, parameters, learning_rate=learning_rate, rho=rho, epsilon=epsilon
+        )
 
     return rule

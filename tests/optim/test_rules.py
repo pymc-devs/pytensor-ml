@@ -1,3 +1,5 @@
+import inspect
+
 import numpy as np
 import pytensor.tensor as pt
 import pytest
@@ -22,6 +24,7 @@ from pytensor_ml.optim import (
     sgd,
     sgd_updates,
 )
+from pytensor_ml.optim import alias as alias_module
 from pytensor_ml.params import trainable
 from pytensor_ml.pytensorf import function
 
@@ -66,6 +69,39 @@ from pytensor_ml.pytensorf import function
 def test_rule_reduces_loss(run_training, rule):
     history = run_training(rule, n_steps=100)
     assert history[-1] < history[0]
+
+
+@pytest.mark.parametrize(
+    "alias, updates_name",
+    [
+        (adam, "adam_updates"),
+        (adamw, "adamw_updates"),
+        (nadam, "nadam_updates"),
+        (adamax, "adamax_updates"),
+        (rprop, "rprop_updates"),
+        (rmsprop, "rmsprop_updates"),
+        (adagrad, "adagrad_updates"),
+        (adadelta, "adadelta_updates"),
+    ],
+    ids=["adam", "adamw", "nadam", "adamax", "rprop", "rmsprop", "adagrad", "adadelta"],
+)
+def test_alias_forwards_every_argument_to_the_matching_parameter(alias, updates_name, monkeypatch):
+    # test_rule_reduces_loss cannot see a mis-forward: the loss still falls if beta1 and beta2 are
+    # swapped. Distinct values per argument make a swap visible, and reading the argument names off the
+    # signature means a newly added hyperparameter fails here until it is forwarded too. sgd is excluded
+    # because it composes transforms rather than forwarding.
+    forwarded = {}
+
+    def spy(loss_or_gradients, parameters, **kwargs):
+        forwarded.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(alias_module, updates_name, spy)
+    sent = {name: 1.0 + i for i, name in enumerate(inspect.signature(alias).parameters)}
+
+    alias(**sent)("loss", "parameters")
+
+    assert forwarded == sent
 
 
 @pytest.mark.parametrize("nesterov", [False, True], ids=["classical", "nesterov"])
