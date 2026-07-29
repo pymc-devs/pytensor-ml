@@ -1,6 +1,9 @@
+from collections.abc import Sequence
+
 import numpy as np
 
 from pytensor.compile import Function
+from pytensor.graph.basic import Variable
 from pytensor.printing import debugprint
 from pytensor.tensor.variable import TensorVariable
 
@@ -54,34 +57,52 @@ class Model:
     def compile_train(
         self,
         rule: optim.UpdateRule,
-        loss_fn: Loss,
+        loss_fn: Loss | None = None,
         ndim_out: int = 1,
         compile_kwargs: dict | None = None,
+        *,
+        loss: TensorVariable | None = None,
+        inputs: Sequence[Variable] | None = None,
     ) -> Function:
         """
-        Compile a one-step training function against a supervised target.
+        Compile a one-step training function, either against a supervised target or a prebuilt loss.
 
-        Builds a target placeholder and loss from the model output with :func:`supervised_loss`, then compiles
-        a step over the model's weights. The returned function is called as ``step(X_batch, target_batch)`` and
-        returns the loss, applying every update in place.
+        Given ``loss_fn``, builds a target placeholder from the model output with :func:`supervised_loss` and
+        the step is called as ``step(X_batch, target_batch)``. Given ``loss`` instead, trains that graph
+        directly, which is what an autoencoder or a language-model objective needs -- neither has a target
+        separate from its input. Either way the step returns the loss and applies every update in place.
 
         Parameters
         ----------
         rule : UpdateRule
             A configured optimizer, e.g. ``adam(1e-3)``.
-        loss_fn : Loss
-            Callable ``(target, prediction) -> scalar loss``.
+        loss_fn : Loss, optional
+            Callable ``(target, prediction) -> scalar loss``. Mutually exclusive with ``loss``.
         ndim_out : int
-            Number of leading output dimensions the target shares. Default 1.
+            Number of leading output dimensions the target shares. Supervised path only. Default 1.
         compile_kwargs : dict, optional
             Keyword arguments forwarded to the function compiler. Defaults to the model's own compile kwargs.
+        loss : TensorVariable, optional
+            A scalar loss graph built over this model's output. Mutually exclusive with ``loss_fn``.
+        inputs : sequence of Variable, optional
+            Data inputs of the step, in call order. Collected from ``loss`` when omitted. Belongs to the
+            prebuilt path; the supervised path derives its own.
         """
-        loss, target = supervised_loss(self.y, loss_fn, ndim_out)
+        if loss_fn is not None:
+            if loss is not None or inputs is not None:
+                raise ValueError(
+                    "loss and inputs belong to the prebuilt path; omit them with loss_fn."
+                )
+            loss, target = supervised_loss(self.y, loss_fn, ndim_out)
+            inputs = [self.X, target]
+        elif loss is None:
+            raise ValueError("Pass either loss_fn for a supervised target, or a prebuilt loss.")
+
         return optim.compile_train(
             loss,
             rule,
             parameters=self.weights,
-            inputs=[self.X, target],
+            inputs=inputs,
             compile_kwargs=compile_kwargs or self._compile_kwargs,
         )
 

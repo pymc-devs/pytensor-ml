@@ -71,6 +71,21 @@ class TestModelPredict:
         np.testing.assert_array_equal(first, second)
 
 
+def test_compile_train_accepts_a_prebuilt_loss():
+    # An autoencoder reconstructs its own input, so there is no target separate from X and the supervised
+    # path cannot express it. The step takes one argument, not two.
+    X = pt.tensor("X", shape=(None, 4))
+    reconstruction = Sequential(Linear("enc", n_in=4, n_out=2), Linear("dec", n_in=2, n_out=4))(X)
+    model = Model(X, reconstruction).initialize(seed=0)
+
+    step = model.compile_train(sgd(learning_rate=1e-2), loss=SquaredError()(X, reconstruction))
+
+    X_batch = np.random.default_rng(0).normal(size=(64, 4)).astype(config.floatX)
+    history = [float(step(X_batch)) for _ in range(50)]
+
+    assert history[-1] < history[0]
+
+
 def test_compile_train_reduces_loss():
     X = pt.tensor("X", shape=(None, 4))
     y = Sequential(Linear("fc1", n_in=4, n_out=8), Linear("fc2", n_in=8, n_out=1))(X)
