@@ -152,6 +152,59 @@ def test_adam_updates_keyed_by_object_with_named_state():
     assert state_names == {"adam/step_count", "w/adam/first_moment", "w/adam/second_moment"}
 
 
+@pytest.mark.parametrize(
+    "make_rule",
+    [lambda: adam(learning_rate=1e-2), lambda: sgd(learning_rate=1e-2, momentum=0.9)],
+    ids=["state_from_a_rule", "state_from_a_transform"],
+)
+def test_reused_rule_shares_its_optimizer_state(make_rule):
+    """A configured rule reads as a value, so compiling two training functions from one is natural. Both
+    must drive the same buffers: separate ones under the same derived name are silently wrong at runtime,
+    and collide only later when both are checkpointed together. Momentum SGD is included because its
+    velocity comes from a transform rather than the rule, which is a separate allocation path."""
+    p = trainable(np.zeros(3), name="w")
+    loss = (p**2).sum()
+    rule = make_rule()
+
+    first = {key for key in rule(loss, [p]) if key is not p}
+    second = {key for key in rule(loss, [p]) if key is not p}
+
+    assert first and first == second
+
+
+def test_two_functions_from_one_rule_continue_the_same_momentum():
+    """What the shared buffers buy: the second function continues the first's trajectory instead of
+    restarting it. Under a constant gradient, momentum SGD's step at iteration ``t`` is
+    ``lr * g * (1 - m**t) / (1 - m)``, so a continued second step is 1.9x a restarted one at ``m = 0.9``."""
+    p = trainable(np.zeros(2), name="w")
+    gradient = np.array([2.0, -0.5])
+    loss = (pt.constant(gradient) * p).sum()  # constant gradient, independent of p
+    learning_rate, momentum = 0.1, 0.9
+    rule = sgd(learning_rate=learning_rate, momentum=momentum)
+
+    step_once = function([], loss, updates=rule(loss, [p]))
+    step_again = function([], loss, updates=rule(loss, [p]))
+
+    step_once()
+    before = p.get_value().copy()
+    step_again()
+
+    continued = -learning_rate * gradient * (1 - momentum**2) / (1 - momentum)
+    np.testing.assert_allclose(p.get_value() - before, continued, rtol=1e-6)
+
+
+def test_separately_configured_rules_keep_independent_state():
+    """Buffers are memoized per rule, not globally, so two optimizers over the same parameter do not
+    quietly train through each other's momentum."""
+    p = trainable(np.zeros(3), name="w")
+    loss = (p**2).sum()
+
+    first = {key for key in adam(learning_rate=1e-2)(loss, [p]) if key is not p}
+    second = {key for key in adam(learning_rate=1e-2)(loss, [p]) if key is not p}
+
+    assert not first & second
+
+
 def test_adamw_first_step_applies_decoupled_decay():
     """AdamW adds a decoupled decay term to Adam's sign-descent step: the first-step displacement is
     ``-lr * (sign(g) + weight_decay * p)``. At t = 1 bias correction makes the Adam part ``sign(g)`` (the
