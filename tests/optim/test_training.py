@@ -120,6 +120,87 @@ def test_compile_train_infers_parameters_and_inputs():
     assert callable(step)
 
 
+def test_compile_train_returns_extra_outputs_in_order():
+    X = pt.tensor("X", shape=(None, 4))
+    prediction = Linear("output", n_in=4, n_out=2)(X)
+    parameters = collect_trainable_params(prediction)
+    initialize(parameters)
+    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    weight_norm = pt.sqrt(sum((parameter**2).sum() for parameter in parameters))
+
+    step = compile_train(
+        loss,
+        sgd(1e-2),
+        parameters=parameters,
+        inputs=[X, target],
+        extra_outputs=[weight_norm, prediction],
+    )
+
+    norm_before_step = np.sqrt(sum((parameter.get_value() ** 2).sum() for parameter in parameters))
+
+    rng = np.random.default_rng(0)
+    step_loss, step_norm, step_prediction = step(
+        rng.normal(size=(8, 4)).astype(config.floatX), np.zeros((8, 2), dtype=config.floatX)
+    )
+
+    assert step_loss.ndim == 0
+    assert step_prediction.shape == (8, 2)
+
+    # Extras are evaluated in the gradient pass, so they see the weights the step started from, not the
+    # updated ones.
+    np.testing.assert_allclose(step_norm, norm_before_step, rtol=1e-5)
+
+
+def test_compile_train_collects_inputs_of_extra_outputs():
+    # An extra output may read data the loss never touches; unless those inputs are collected too,
+    # compilation raises MissingInputError. Called by name so the test says nothing about collection order.
+    X = pt.tensor("X", shape=(None, 4))
+    example_weights = pt.tensor("example_weights", shape=(None,))
+    prediction = Linear("output", n_in=4, n_out=2)(X)
+    initialize(collect_trainable_params(prediction))
+    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+
+    step = compile_train(loss, sgd(1e-2), extra_outputs=[(example_weights * loss).sum()])
+
+    rng = np.random.default_rng(0)
+    step_loss, weighted_loss = step(
+        X=rng.normal(size=(8, 4)).astype(config.floatX),
+        target=np.zeros((8, 2), dtype=config.floatX),
+        example_weights=np.full(8, 2.0, dtype=config.floatX),
+    )
+
+    np.testing.assert_allclose(weighted_loss, step_loss * 16.0, rtol=1e-5)
+
+
+def test_compile_train_ignores_updates_of_extra_outputs():
+    # Extras are read-only observers: a stateful op reached only through an extra output must not have its
+    # write-back folded into the step, or monitoring would silently mutate training state.
+    X = pt.tensor("X", shape=(None, 4))
+    prediction = Linear("fc", n_in=4, n_out=4)(X)
+    monitor = BatchNorm2D("bn", n_in=4)(prediction)
+    parameters = collect_trainable_params(prediction)
+    initialize(parameters)
+    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+
+    step = compile_train(
+        loss,
+        sgd(1e-2),
+        parameters=parameters,
+        inputs=[X, target],
+        extra_outputs=[monitor.mean()],
+    )
+
+    running_mean = next(
+        p for p in collect_non_trainable_params(monitor) if "running_mean" in p.name
+    )
+    before = running_mean.get_value().copy()
+
+    rng = np.random.default_rng(0)
+    step(rng.normal(size=(16, 4)).astype(config.floatX), np.zeros((16, 4), dtype=config.floatX))
+
+    np.testing.assert_allclose(running_mean.get_value(), before)
+
+
 def test_state_for_requires_named_parameter():
     # An unnamed parameter would leave every state buffer named by its bare slot, so distinct parameters
     # would silently share state at serialization boundaries.

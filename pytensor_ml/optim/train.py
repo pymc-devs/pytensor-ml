@@ -19,6 +19,7 @@ def compile_train(
     *,
     parameters: Sequence[Parameter] | None = None,
     inputs: Sequence[Variable] | None = None,
+    extra_outputs: Sequence[Variable] | None = None,
     compile_kwargs: dict | None = None,
 ) -> Function:
     """
@@ -26,8 +27,7 @@ def compile_train(
 
     Differentiates the loss via ``rule``, applies the resulting updates, folds in any non-trainable state
     updates (such as batch-norm running statistics), and compiles. The parameters and data inputs are
-    collected from ``loss`` unless given explicitly. Returns a plain compiled function that maps a batch of
-    inputs to the loss, applying every update in place.
+    collected from ``loss`` unless given explicitly.
 
     Parameters
     ----------
@@ -38,21 +38,30 @@ def compile_train(
     parameters : sequence of shared tensor variable, optional
         Parameters to optimize. Collected from ``loss`` with :func:`collect_trainable_params` when omitted.
     inputs : sequence of Variable, optional
-        Data inputs of the compiled function, in call order. Collected from ``loss`` with
-        :func:`collect_data_inputs` when omitted; pass them explicitly when call order matters (e.g. features
-        before targets).
+        Data inputs of the compiled function, in call order. Collected from ``loss`` and ``extra_outputs``
+        with :func:`collect_data_inputs` when omitted; pass them explicitly when call order matters (e.g.
+        features before targets).
+    extra_outputs : sequence of Variable, optional
+        Diagnostics to return alongside the loss, such as gradient norms or a batch accuracy. Evaluated in
+        the same pass as the gradients, so they see the pre-update parameter values, and they add no
+        non-trainable state updates of their own. A random node reached only through an extra output does
+        still advance its generator, since :func:`~pytensor_ml.pytensorf.function` threads the next-RNG
+        update for every generator the outputs draw from.
     compile_kwargs : dict, optional
         Extra keyword arguments forwarded to the function compiler.
 
     Returns
     -------
-    Function
-        The compiled one-step training function.
+    step : Function
+        The compiled one-step training function, applying every update in place. Returns the loss alone, or
+        ``(loss, *extra_outputs)`` when diagnostics were requested.
     """
+    extra_outputs = list(extra_outputs or [])
+
     if parameters is None:
         parameters = collect_trainable_params(loss)
     if inputs is None:
-        inputs = collect_data_inputs(loss)
+        inputs = collect_data_inputs([loss, *extra_outputs])
 
     updates: dict[SharedVariable, TensorVariable] = dict(rule(loss, parameters))
 
@@ -63,4 +72,6 @@ def compile_train(
 
     require_unique_state_names(updates)
 
-    return function(list(inputs), loss, updates=updates, **(compile_kwargs or {}))
+    outputs = [loss, *extra_outputs] if extra_outputs else loss
+
+    return function(list(inputs), outputs, updates=updates, **(compile_kwargs or {}))

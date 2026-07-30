@@ -63,6 +63,7 @@ class Model:
         *,
         loss: TensorVariable | None = None,
         inputs: Sequence[Variable] | None = None,
+        extra_outputs: Sequence[Variable] | None = None,
     ) -> Function:
         """
         Compile a one-step training function, either against a supervised target or a prebuilt loss.
@@ -70,7 +71,7 @@ class Model:
         Given ``loss_fn``, builds a target placeholder from the model output with :func:`supervised_loss` and
         the step is called as ``step(X_batch, target_batch)``. Given ``loss`` instead, trains that graph
         directly, which is what an autoencoder or a language-model objective needs -- neither has a target
-        separate from its input. Either way the step returns the loss and applies every update in place.
+        separate from its input. Either way the step applies every update in place.
 
         Parameters
         ----------
@@ -87,6 +88,14 @@ class Model:
         inputs : sequence of Variable, optional
             Data inputs of the step, in call order. Collected from ``loss`` when omitted. Belongs to the
             prebuilt path; the supervised path derives its own.
+        extra_outputs : sequence of Variable, optional
+            Diagnostics to return alongside the loss, as in :func:`~pytensor_ml.optim.compile_train`.
+
+        Returns
+        -------
+        step : Function
+            The compiled one-step training function. Returns the loss alone, or ``(loss, *extra_outputs)``
+            when diagnostics were requested.
         """
         if loss_fn is not None:
             if loss is not None or inputs is not None:
@@ -103,6 +112,7 @@ class Model:
             rule,
             parameters=self.weights,
             inputs=inputs,
+            extra_outputs=extra_outputs,
             compile_kwargs=compile_kwargs or self._compile_kwargs,
         )
 
