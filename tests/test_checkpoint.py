@@ -45,7 +45,9 @@ def test_round_trip_restores_parameters_and_optimizer_state(tmp_path):
 
     for _ in range(5):  # drive params and optimizer state away from the snapshot
         step(*batch)
-    assert any(not np.allclose(v.get_value(), snapshot[v.name]) for v in checkpointed)
+    assert any(
+        not np.allclose(variable.get_value(), snapshot[variable.name]) for variable in checkpointed
+    )
 
     load_state(checkpointed, path)
     for variable in checkpointed:
@@ -69,6 +71,20 @@ def test_step_counter_round_trips_exactly(tmp_path):
     assert restored.shape == ()
     assert restored.dtype == np.int64
     np.testing.assert_array_equal(restored, saved)
+
+
+def test_non_contiguous_value_round_trips_without_reordering(tmp_path):
+    # safetensors serializes an array's raw buffer: handed an F-ordered value it silently writes the
+    # elements in the wrong order rather than raising, so the save must copy to C order first.
+    variable = shared(np.arange(6, dtype="float64").reshape(2, 3).T, "w")
+    assert not variable.get_value(borrow=True).flags["C_CONTIGUOUS"]
+
+    path = tmp_path / "checkpoint.safetensors"
+    save_state([variable], path)
+    variable.set_value(np.zeros((3, 2)))
+    load_state([variable], path)
+
+    np.testing.assert_array_equal(variable.get_value(), np.arange(6).reshape(2, 3).T)
 
 
 @pytest.mark.parametrize(
@@ -124,7 +140,7 @@ def test_load_rejects_dtype_mismatch(tmp_path):
     # Same shape, different dtype: a real footgun when loading a lower-precision checkpoint into fp64 params.
     save_state([shared([1, 2, 3], "w", dtype="int64")], tmp_path / "c.safetensors")
     target = shared([0.0, 0.0, 0.0], "w")
-    with pytest.raises(ValueError, match="do not match their targets"):
+    with pytest.raises(ValueError, match="archive has int64"):
         load_state([target], tmp_path / "c.safetensors")
     np.testing.assert_array_equal(target.get_value(), [0.0, 0.0, 0.0])
 
@@ -170,4 +186,4 @@ def test_parameters_keep_identity_across_compilation():
     function([X, target], loss, updates=adam(1e-2)(loss, before))
 
     after = collect_trainable_params(prediction)
-    assert all(b is a for b, a in zip(before, after))
+    assert all(b is a for b, a in zip(before, after, strict=True))
