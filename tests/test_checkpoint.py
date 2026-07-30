@@ -54,7 +54,7 @@ def test_round_trip_restores_parameters_and_optimizer_state(tmp_path):
 
 def test_step_counter_round_trips_exactly(tmp_path):
     # The step counter is a rank-0 int64 array; the round-trip must preserve its rank, dtype, and value
-    # (np.ascontiguousarray would silently promote it to shape (1,) on save -- see checkpoint._contiguous).
+    # (np.ascontiguousarray would silently promote it to shape (1,) on save -- see _as_saveable_array).
     _, state, _, _ = build_trained_step()
     counter = next(variable for variable in state if variable.name == "adam/step_count")
     saved = counter.get_value()
@@ -69,6 +69,28 @@ def test_step_counter_round_trips_exactly(tmp_path):
     assert restored.shape == ()
     assert restored.dtype == np.int64
     np.testing.assert_array_equal(restored, saved)
+
+
+@pytest.mark.parametrize(
+    "mode, backend_module", [("JAX", "jax"), ("MLX", "mlx.core")], ids=["jax", "mlx"]
+)
+def test_round_trip_after_compiled_backend_update(mode, backend_module, tmp_path):
+    # A function compiled for a JIT backend stores that backend's array type in the shared variables it
+    # updates, so both sides of a checkpoint taken after training see no numpy at all.
+    pytest.importorskip(backend_module)
+    weight = shared([1.0, 2.0], "w", dtype="float32")
+    counter = shared(0, "step", dtype="int32")
+    pytensor.function([], [], updates={weight: weight * 2, counter: counter + 1}, mode=mode)()
+    assert not isinstance(weight.get_value(), np.ndarray)  # the premise: no longer a numpy value
+
+    path = tmp_path / "checkpoint.safetensors"
+    save_state([weight, counter], path)
+    weight.set_value(np.zeros(2, dtype="float32"))
+    counter.set_value(np.asarray(0, dtype="int32"))
+    load_state([weight, counter], path)
+
+    np.testing.assert_array_equal(weight.get_value(), [2.0, 4.0])
+    np.testing.assert_array_equal(counter.get_value(), 1)
 
 
 def test_name_map_loads_under_renamed_keys(tmp_path):

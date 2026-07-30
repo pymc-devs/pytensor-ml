@@ -1,6 +1,7 @@
 from collections.abc import Mapping, Sequence
 from os import fspath
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -41,14 +42,21 @@ def save_state(shared_variables: Sequence[SharedVariable], path: str | Path) -> 
         Destination archive, written verbatim.
     """
     indexed = _index_by_name(shared_variables)
-    tensors = {name: _contiguous(variable.get_value()) for name, variable in indexed.items()}
+    tensors = {name: _as_saveable_array(variable.get_value()) for name, variable in indexed.items()}
     save_file(tensors, fspath(path))
 
 
-def _contiguous(value: np.ndarray) -> np.ndarray:
-    """Return a C-contiguous array safetensors will accept, preserving the array's rank."""
+def _as_saveable_array(value: Any) -> np.ndarray:
+    """
+    Return a value as a C-contiguous numpy array safetensors will accept, preserving its rank.
+
+    A JIT backend stores its own array type in the shared variables a compiled function updates, so a
+    trained model's values are ``jax.Array`` or ``mlx.core.array``; both convert through the array
+    protocol.
+    """
+    array = np.asarray(value)
     # Not np.ascontiguousarray: it forces ndim >= 1, reshaping a rank-0 array such as the step count.
-    return value if value.flags["C_CONTIGUOUS"] else np.array(value, order="C")
+    return array if array.flags["C_CONTIGUOUS"] else np.array(array, order="C")
 
 
 def load_state(
@@ -102,7 +110,8 @@ def load_state(
     mismatches = []
     for key, variable in target_by_key.items():
         value = values[key]
-        current = variable.get_value(borrow=True)
+        # Through numpy: a backend array's own dtype object never compares equal to a numpy dtype.
+        current = np.asarray(variable.get_value(borrow=True))
         if value.shape != current.shape or value.dtype != current.dtype:
             mismatches.append(
                 f"  {variable.name!r}: target is {current.dtype} of shape {current.shape}, "
