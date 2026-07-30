@@ -55,6 +55,9 @@ def compile_train(
         inputs = collect_data_inputs(loss)
 
     updates: dict[SharedVariable, TensorVariable] = dict(rule(loss, parameters))
+
+    # Assigned per key rather than merged: SupportsKeysAndGetItem is invariant in its key type, so
+    # dict.update rejects the narrower NonTrainableParameter keys.
     for parameter, new_value in collect_non_trainable_updates(loss).items():
         updates[parameter] = new_value
 
