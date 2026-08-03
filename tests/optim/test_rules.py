@@ -31,6 +31,9 @@ from pytensor_ml.pytensorf import function
 
 floatX = pytensor.config.floatX
 
+# The closed-form step identities below are exact in real arithmetic, so the gap is pure rounding.
+RTOL = 1e-6 if floatX == "float64" else 1e-4
+
 
 def trainable(value, name=None, **kwargs):
     """Create a parameter at floatX; a float64 literal would not match the gradients it is updated with."""
@@ -131,7 +134,7 @@ def test_sgd_momentum_follows_closed_form_trajectory(nesterov):
         current = p.get_value()
         exponent = t + 1 if nesterov else t
         expected_step = -lr * g0 * (1 - momentum**exponent) / (1 - momentum)
-        np.testing.assert_allclose(current - previous, expected_step, rtol=1e-6)
+        np.testing.assert_allclose(current - previous, expected_step, rtol=RTOL)
         previous = current
 
 
@@ -146,7 +149,7 @@ def test_adam_first_step_is_sign_descent():
     function([], loss, updates=adam_updates(loss, [p], learning_rate=lr))()
 
     step = start - p.get_value()
-    np.testing.assert_allclose(step, lr * np.sign(start), rtol=1e-6)
+    np.testing.assert_allclose(step, lr * np.sign(start), rtol=RTOL)
 
 
 def test_adam_updates_keyed_by_object_with_named_state():
@@ -198,7 +201,7 @@ def test_two_functions_from_one_rule_continue_the_same_momentum():
     step_again()
 
     continued = -learning_rate * gradient * (1 - momentum**2) / (1 - momentum)
-    np.testing.assert_allclose(p.get_value() - before, continued, rtol=1e-6)
+    np.testing.assert_allclose(p.get_value() - before, continued, rtol=RTOL)
 
 
 def test_separately_configured_rules_keep_independent_state():
@@ -227,7 +230,7 @@ def test_adamw_first_step_applies_decoupled_decay():
     )()
 
     step = p.get_value() - start
-    np.testing.assert_allclose(step, -lr * (np.sign(start) + weight_decay * start), rtol=1e-6)
+    np.testing.assert_allclose(step, -lr * (np.sign(start) + weight_decay * start), rtol=RTOL)
 
 
 def test_adamw_mask_excludes_parameters_from_decay():
@@ -247,8 +250,8 @@ def test_adamw_mask_excludes_parameters_from_decay():
     )
     function([], loss, updates=updates)()
 
-    np.testing.assert_allclose(w.get_value() - 2.0, -lr * (1.0 + weight_decay * 2.0), rtol=1e-6)
-    np.testing.assert_allclose(b.get_value() - 2.0, -lr * 1.0, rtol=1e-6)
+    np.testing.assert_allclose(w.get_value() - 2.0, -lr * (1.0 + weight_decay * 2.0), rtol=RTOL)
+    np.testing.assert_allclose(b.get_value() - 2.0, -lr * 1.0, rtol=RTOL)
 
 
 def test_adagrad_step_decays_as_inverse_sqrt_t():
@@ -354,7 +357,7 @@ def test_nadam_first_step_scales_by_one_plus_beta1():
     function([], loss, updates=nadam_updates(loss, [p], learning_rate=lr, beta1=beta1))()
 
     step = start - p.get_value()
-    np.testing.assert_allclose(step, lr * (1 + beta1) * np.sign(start), rtol=1e-6)
+    np.testing.assert_allclose(step, lr * (1 + beta1) * np.sign(start), rtol=RTOL)
 
 
 def test_adamax_takes_constant_step_under_constant_gradient():
@@ -391,7 +394,7 @@ def test_rprop_step_grows_geometrically_under_constant_sign():
     for t in range(1, n_steps + 1):
         fn()
         current = p.get_value()
-        np.testing.assert_allclose(np.abs(current - previous), lr * eta_plus ** (t - 1), rtol=1e-6)
+        np.testing.assert_allclose(np.abs(current - previous), lr * eta_plus ** (t - 1), rtol=RTOL)
         previous = current
 
 

@@ -19,6 +19,9 @@ from pytensor_ml.pytensorf import (
 
 floatX = pytensor.config.floatX
 
+# The numpy references below sum in a different order than the graph, so the gap tracks the precision.
+ATOL = 1e-6 if floatX == "float64" else 1e-5
+
 
 @pytest.fixture
 def rng():
@@ -252,7 +255,7 @@ def test_batch_norm_2d_learns_population_stats(rng):
             (data - data.mean(axis=0)) / np.sqrt(data.var(axis=0) + batch_norm.epsilon) * scale
             + loc,
             rtol=1e-4,
-            atol=1e-6,
+            atol=ATOL,
         )
 
     scale, loc = batch_norm.scale.get_value(), batch_norm.loc.get_value()
