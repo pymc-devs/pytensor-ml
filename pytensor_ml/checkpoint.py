@@ -42,19 +42,24 @@ def save_state(shared_variables: Sequence[SharedVariable], path: str | Path) -> 
         Destination archive, written verbatim.
     """
     indexed = _index_by_name(shared_variables)
-    tensors = {name: _as_saveable_array(variable.get_value()) for name, variable in indexed.items()}
+    tensors = {
+        name: _as_saveable_array(variable.get_value(), variable.type.dtype)
+        for name, variable in indexed.items()
+    }
     save_file(tensors, fspath(path))
 
 
-def _as_saveable_array(value: Any) -> np.ndarray:
+def _as_saveable_array(value: Any, dtype: str) -> np.ndarray:
     """
-    Return a value as a C-contiguous numpy array safetensors will accept, preserving its rank.
+    Return a value as a C-contiguous numpy array of ``dtype`` that safetensors will accept, preserving its
+    rank.
 
     A JIT backend stores its own array type in the shared variables a compiled function updates, so a
     trained model's values are ``jax.Array`` or ``mlx.core.array``; both convert through the array
-    protocol.
+    protocol. It may also narrow them -- JAX computes in 32-bit unless ``floatX`` is ``float64`` -- so the
+    archive records the declared dtype to stay portable across precisions.
     """
-    array = np.asarray(value)
+    array = np.asarray(value, dtype=dtype)
     # Not np.ascontiguousarray: it forces ndim >= 1, reshaping a rank-0 array such as the step count.
     return array if array.flags["C_CONTIGUOUS"] else np.array(array, order="C")
 
@@ -110,11 +115,14 @@ def load_state(
     mismatches = []
     for key, variable in target_by_key.items():
         value = values[key]
-        # Through numpy: a backend array's own dtype object never compares equal to a numpy dtype.
+        # The declared dtype, not the stored value's, which a backend may have narrowed (see
+        # _as_saveable_array); set_value filters to the declaration anyway. Shape has to come from the
+        # value, whose runtime dimensions the declared type may leave unknown.
         current = np.asarray(variable.get_value(borrow=True))
-        if value.shape != current.shape or value.dtype != current.dtype:
+        declared_dtype = np.dtype(variable.type.dtype)
+        if value.shape != current.shape or value.dtype != declared_dtype:
             mismatches.append(
-                f"  {variable.name!r}: target is {current.dtype} of shape {current.shape}, "
+                f"  {variable.name!r}: target is {declared_dtype} of shape {current.shape}, "
                 f"archive has {value.dtype} of shape {value.shape}"
             )
     if mismatches:

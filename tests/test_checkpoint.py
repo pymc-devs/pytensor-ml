@@ -3,6 +3,8 @@ import pytensor
 import pytensor.tensor as pt
 import pytest
 
+from safetensors.numpy import load_file
+
 from pytensor_ml.checkpoint import load_state, save_state
 from pytensor_ml.layers import Linear, Sequential
 from pytensor_ml.loss import SquaredError, supervised_loss
@@ -10,9 +12,13 @@ from pytensor_ml.optim import adam
 from pytensor_ml.pytensorf import collect_trainable_params, compile_predict, function
 from pytensor_ml.state import initialize_params
 
-
 def shared(value, name, dtype="float64"):
     return pytensor.shared(np.asarray(value, dtype=dtype), name=name)
+
+
+def downcast_in_place(variable, dtype):
+    """Narrow a variable's stored value past the container's filtering, as a 32-bit backend's update does."""
+    variable.container.storage[0] = np.asarray(variable.get_value(), dtype=dtype)
 
 
 def build_trained_step(seed: int = 0):
@@ -95,14 +101,14 @@ def test_round_trip_after_compiled_backend_update(mode, backend_module, tmp_path
     # updates, so both sides of a checkpoint taken after training see no numpy at all.
     pytest.importorskip(backend_module)
     weight = shared([1.0, 2.0], "w", dtype="float32")
-    counter = shared(0, "step", dtype="int32")
+    counter = shared(0, "step", dtype="int64")  # int64 as the optimizer rules declare it
     pytensor.function([], [], updates={weight: weight * 2, counter: counter + 1}, mode=mode)()
     assert not isinstance(weight.get_value(), np.ndarray)  # the premise: no longer a numpy value
 
     path = tmp_path / "checkpoint.safetensors"
     save_state([weight, counter], path)
     weight.set_value(np.zeros(2, dtype="float32"))
-    counter.set_value(np.asarray(0, dtype="int32"))
+    counter.set_value(np.asarray(0, dtype="int64"))
     load_state([weight, counter], path)
 
     np.testing.assert_array_equal(weight.get_value(), [2.0, 4.0])
@@ -143,6 +149,31 @@ def test_load_rejects_dtype_mismatch(tmp_path):
     with pytest.raises(ValueError, match="archive has int64"):
         load_state([target], tmp_path / "c.safetensors")
     np.testing.assert_array_equal(target.get_value(), [0.0, 0.0, 0.0])
+
+
+def test_round_trip_survives_backend_narrowing_the_stored_dtype(tmp_path):
+    counter = shared(2, "adam/step_count", dtype="int64")
+    downcast_in_place(counter, "int32")
+    path = tmp_path / "c.safetensors"
+    save_state([counter], path)
+
+    # Declared dtype, so the archive ports to a run at the other precision.
+    assert load_file(path)["adam/step_count"].dtype == np.dtype("int64")
+
+    fresh = shared(0, "adam/step_count", dtype="int64")
+    load_state([fresh], path)
+    np.testing.assert_array_equal(fresh.get_value(), 2)
+
+
+def test_load_accepts_target_whose_stored_dtype_was_narrowed(tmp_path):
+    # Mirror case: a clean archive into a live counter the backend already narrowed.
+    save_state([shared(7, "adam/step_count", dtype="int64")], tmp_path / "c.safetensors")
+    target = shared(0, "adam/step_count", dtype="int64")
+    downcast_in_place(target, "int32")
+
+    load_state([target], tmp_path / "c.safetensors")
+    np.testing.assert_array_equal(target.get_value(), 7)
+    assert np.asarray(target.get_value()).dtype == np.dtype("int64")
 
 
 def test_load_leaves_all_targets_untouched_when_one_fails(tmp_path):
