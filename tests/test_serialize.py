@@ -54,6 +54,12 @@ def assert_outputs_roundtrip(data_inputs, outputs, data_values):
     """Serialize the graph of ``outputs`` to JSON and back, and check the rebuilt graph computes the same."""
     output_list = outputs if isinstance(outputs, list) else [outputs]
     shared = collect_shared_variables(output_list)
+    # Plain literals default to float64, which does not fit a float32 graph.
+    data_values = [
+        np.asarray(value, dtype=data_input.type.dtype)
+        for data_input, value in zip(data_inputs, data_values)
+    ]
+
     # allow_nan=False enforces strict, portable JSON: inf/nan must go through sentinels, not the
     # non-standard Infinity/NaN tokens a lenient parser would emit.
     blob = json.dumps(serialize_graph([*data_inputs, *shared], output_list), allow_nan=False)
@@ -71,7 +77,8 @@ def initialized_network(*layers, seed=0):
     X = pt.matrix("X")
     output = Sequential(*layers)(X)
     for parameter in collect_trainable_params(output):
-        parameter.set_value(rng.normal(size=parameter.get_value().shape))
+        value = rng.normal(size=parameter.get_value().shape)
+        parameter.set_value(value.astype(parameter.type.dtype))
     return X, output
 
 
@@ -136,7 +143,7 @@ def test_specify_shape_with_unknown_dim_roundtrips():
 def test_embedding_roundtrips():
     ids = pt.lmatrix("ids")
     embedding = Embedding("emb", n_embeddings=8, n_features=5)
-    embedding.W.set_value(np.random.default_rng(0).normal(size=(8, 5)))
+    embedding.W.set_value(np.random.default_rng(0).normal(size=(8, 5)).astype(floatX))
     assert_outputs_roundtrip([ids], embedding(ids), [np.array([[1, 2, 3], [4, 0, 7]])])
 
 
@@ -155,7 +162,8 @@ def test_multi_output_network_roundtrips():
     X = pt.matrix("X")
     output = [Linear("head_a", 4, 2)(X), Linear("head_b", 4, 3)(X)]
     for parameter in collect_trainable_params(output):
-        parameter.set_value(np.random.default_rng(0).normal(size=parameter.get_value().shape))
+        value = np.random.default_rng(0).normal(size=parameter.get_value().shape)
+        parameter.set_value(value.astype(parameter.type.dtype))
     assert_outputs_roundtrip([X], output, [np.random.default_rng(1).normal(size=(5, 4))])
 
 
@@ -175,7 +183,8 @@ def test_dropout_graph_with_rng_roundtrips():
 def test_scan_recurrent_loop_roundtrips():
     rng = np.random.default_rng(0)
     sequence = pt.matrix("sequence")
-    W_rec = pytensor.shared(rng.normal(size=(3, 3)), name="W_rec")
+    # floatX: the recurrence must not upcast against the float32 initial state.
+    W_rec = pytensor.shared(rng.normal(size=(3, 3)).astype(floatX), name="W_rec")
 
     def step(x_t, hidden):
         return pt.tanh(x_t + hidden @ W_rec)

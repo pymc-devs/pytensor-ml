@@ -11,18 +11,22 @@ from pytensor_ml.params import NonTrainableParameter, TrainableParameter
 from pytensor_ml.pretrained import from_pretrained, load_network, save_network, save_pretrained
 from pytensor_ml.pytensorf import collect_shared_variables, collect_trainable_params
 
+floatX = pytensor.config.floatX
+
 
 def build_initialized_network(seed=0):
     rng = np.random.default_rng(seed)
     X = pt.matrix("X")
     output = Sequential(Linear("fc1", 4, 8), ReLU(), Linear("fc2", 8, 2))(X)
     for parameter in collect_trainable_params(output):
-        parameter.set_value(rng.normal(size=parameter.get_value().shape))
+        value = rng.normal(size=parameter.get_value().shape)
+        parameter.set_value(value.astype(parameter.type.dtype))
     return X, output
 
 
 def predict(inputs, output, x_value):
-    return pytensor.function(inputs, output)(x_value)
+    # Plain literals default to float64, which does not fit a float32 graph.
+    return pytensor.function(inputs, output)(np.asarray(x_value, dtype=floatX))
 
 
 def test_from_pretrained_restores_architecture_and_weights(tmp_path):
@@ -80,7 +84,8 @@ def test_dropout_network_roundtrips_with_fresh_rng(tmp_path):
     X = pt.matrix("X")
     output = Sequential(Linear("fc", 4, 4), Dropout(p=0.5, random_state=0))(X)
     for parameter in collect_trainable_params(output):
-        parameter.set_value(np.random.default_rng(0).normal(size=parameter.get_value().shape))
+        value = np.random.default_rng(0).normal(size=parameter.get_value().shape)
+        parameter.set_value(value.astype(parameter.type.dtype))
     fc_weight = (
         next(v for v in collect_shared_variables(output) if v.name == "fc_W").get_value().copy()
     )
@@ -91,7 +96,7 @@ def test_dropout_network_roundtrips_with_fresh_rng(tmp_path):
     # The weights round-trip through safetensors even with an RNG in the graph; the RNG itself is fresh.
     restored_weight = next(v for v in collect_shared_variables(restored_output) if v.name == "fc_W")
     np.testing.assert_array_equal(restored_weight.get_value(), fc_weight)
-    pytensor.function(restored_inputs, restored_output)(np.zeros((3, 4)))  # the rebuilt graph runs
+    predict(restored_inputs, restored_output, np.zeros((3, 4)))  # the rebuilt graph runs
 
 
 def test_restore_rng_reproduces_dropout_draws(tmp_path):
@@ -100,14 +105,12 @@ def test_restore_rng_reproduces_dropout_draws(tmp_path):
     save_pretrained(output, tmp_path)
     x_value = np.random.default_rng(1).normal(size=(6, 4))
 
-    original = pytensor.function([X], output)(x_value)
+    original = predict([X], output, x_value)
     fresh_inputs, fresh_output = from_pretrained(tmp_path)  # default: fresh RNG
     restored_inputs, restored_output = from_pretrained(tmp_path, restore_rng=True)
 
-    np.testing.assert_array_equal(
-        pytensor.function(restored_inputs, restored_output)(x_value), original
-    )
-    assert not np.array_equal(pytensor.function(fresh_inputs, fresh_output)(x_value), original)
+    np.testing.assert_array_equal(predict(restored_inputs, restored_output, x_value), original)
+    assert not np.array_equal(predict(fresh_inputs, fresh_output, x_value), original)
 
 
 def test_batchnorm_non_trainable_state_survives_roundtrip(tmp_path):
@@ -115,7 +118,7 @@ def test_batchnorm_non_trainable_state_survives_roundtrip(tmp_path):
     X = pt.matrix("X")
     output = Sequential(Linear("fc", 4, 4), BatchNorm2D("bn", n_in=4))(X)
     running_mean = next(v for v in collect_shared_variables(output) if v.name == "bn_running_mean")
-    running_mean.set_value(rng.normal(size=4))
+    running_mean.set_value(rng.normal(size=4).astype(running_mean.type.dtype))
 
     save_pretrained(output, tmp_path)
     _, restored_output = from_pretrained(tmp_path)

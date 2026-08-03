@@ -12,6 +12,9 @@ from pytensor_ml.optim import adam
 from pytensor_ml.pytensorf import collect_trainable_params, compile_predict, function
 from pytensor_ml.state import initialize_params
 
+floatX = pytensor.config.floatX
+
+
 def shared(value, name, dtype="float64"):
     return pytensor.shared(np.asarray(value, dtype=dtype), name=name)
 
@@ -35,8 +38,8 @@ def build_trained_step(seed: int = 0):
     state = [variable for variable in updates if variable not in set(parameters)]
     step = function([X, target], loss, updates=updates)
 
-    X_value = rng.normal(size=(16, 4))
-    target_value = rng.normal(size=(16, 2))
+    X_value = rng.normal(size=(16, 4)).astype(floatX)
+    target_value = rng.normal(size=(16, 2)).astype(floatX)
     for _ in range(3):
         step(X_value, target_value)
     return parameters, state, step, (X_value, target_value)

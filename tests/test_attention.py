@@ -34,8 +34,9 @@ def sdpa_np(q, k, v, *, is_causal=False, mask=None, scale=None):
     if n_rep > 1:
         k = np.repeat(k, n_rep, axis=1)
         v = np.repeat(v, n_rep, axis=1)
+    # np.sqrt(int) is a float64 zero-dim array, not a weak scalar, and would upcast the scores.
     scale = 1.0 / np.sqrt(q.shape[-1]) if scale is None else scale
-    scores = (q @ k.swapaxes(-1, -2)) * scale
+    scores = (q @ k.swapaxes(-1, -2)) * np.asarray(scale, dtype=q.dtype)
     if is_causal:
         sq, sk = q.shape[-2], k.shape[-2]
         causal = np.arange(sk)[None, :] <= np.arange(sq)[:, None] + (sk - sq)
