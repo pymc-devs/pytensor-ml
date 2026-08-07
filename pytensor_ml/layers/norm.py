@@ -3,7 +3,7 @@ import pytensor.tensor as pt
 
 from pytensor import config
 
-from pytensor_ml.base import Layer, LayerOp, UnaryLayerOp
+from pytensor_ml.base import Layer, LayerOp, UnaryLayerOp, constant_like
 from pytensor_ml.params import NonTrainableParameter, TrainableParameter, non_trainable, trainable
 
 
@@ -29,6 +29,21 @@ def _standardize(X, epsilon, axis, keepdims=False):
     mu = X.mean(axis=axis, keepdims=keepdims)
     sigma_sq = X.var(axis=axis, keepdims=keepdims)
     return (X - mu) / pt.sqrt(sigma_sq + epsilon), mu, sigma_sq
+
+
+def _rms_normalize(X, epsilon):
+    """
+    Scale ``X`` to unit root mean square over its last axis, without centering it.
+
+    Notes
+    -----
+    RMSNorm divides by the root mean square rather than the standard deviation, so unlike
+    :func:`_standardize` it leaves the mean of ``X`` intact. That omission is the entire difference
+    between the two, and pretrained weights depend on it -- do not "simplify" this into a
+    :func:`_standardize` call.
+    """
+    mean_square = pt.mean(pt.square(X), axis=-1, keepdims=True)
+    return X / pt.sqrt(mean_square + constant_like(epsilon, X))
 
 
 def _affine_input_count(affine: bool) -> int:
@@ -75,12 +90,17 @@ def _resolve_n_in(name: str, n_in: int | None, X: pt.TensorVariable | None) -> i
     return inferred
 
 
+def _scale_parameter(name: str, n_in: int) -> TrainableParameter:
+    """Build the learned scale. RMSNorm has only this one; the shift-and-scale norms pair it with a
+    ``loc``, so the ``_scale`` suffix is fixed here and nowhere else."""
+    return trainable(np.ones(n_in, dtype=config.floatX), f"{name}_scale")
+
+
 def _affine_parameters(name: str, n_in: int) -> tuple[TrainableParameter, TrainableParameter]:
     """Build the learned shift and scale. Returns them in the ``(loc, scale)`` order that every norm
     op unpacks its inputs in, so the two cannot drift apart."""
     loc = trainable(np.zeros(n_in, dtype=config.floatX), f"{name}_loc")
-    scale = trainable(np.ones(n_in, dtype=config.floatX), f"{name}_scale")
-    return loc, scale
+    return loc, _scale_parameter(name, n_in)
 
 
 class BatchNormLayer(LayerOp):
@@ -327,6 +347,102 @@ class LayerNorm(Layer):
             inputs.extend([self.loc, self.scale])
 
         X_transformed = LayerNormLayer(
+            name=self.name,
+            n_in=self.n_in,
+            epsilon=self.epsilon,
+            affine=self.affine,
+        )(*inputs)
+        X_transformed.name = f"{self.name}_output"
+
+        return X_transformed
+
+
+class RMSNormLayer(UnaryLayerOp):
+    __props__ = ("n_in", "epsilon", "affine")
+
+    def build_inner_graph(self, X, *rest):
+        X_normalized = _rms_normalize(X, self.epsilon)
+        if not self.affine:
+            return [X_normalized]
+
+        # Scale-only, so the affine transform contributes one input rather than the ``(loc, scale)``
+        # pair the other norm ops unpack; the single-element unpack asserts that arity.
+        (scale,) = rest
+        return [X_normalized * scale]
+
+
+class RMSNorm(Layer):
+    r"""
+    Root-mean-square layer normalization over the last (feature) axis.
+
+    Divide each sample by the root mean square of its own features, then optionally apply a learned
+    scale:
+
+    .. math::
+
+        y = \frac{x}{\sqrt{\frac{1}{n} \sum_i x_i^2 + \epsilon}} \cdot \gamma.
+
+    Unlike :class:`LayerNorm` there is no mean subtraction and no learned shift. That is not a
+    simplification of this implementation but the definition: :class:`torch.nn.RMSNorm`,
+    ``flax.linen.RMSNorm``/``flax.nnx.RMSNorm`` and ``tinygrad.nn.RMSNorm`` all expose a weight and
+    no bias. It is the normalization used by the Llama, Gemma and Qwen decoder families.
+
+    Parameters
+    ----------
+    name : str, optional
+        Name used as a prefix for the layer's parameters. Default is "RMSNorm".
+    n_in : int, optional
+        Size of the normalized feature axis. Inferred from the input's last dimension on the first
+        call when omitted.
+    epsilon : float, optional
+        Constant :math:`\epsilon` added to the mean square for numerical stability. Default is 1e-6,
+        matching ``flax``'s and ``tinygrad``'s RMSNorm. This deliberately differs from
+        :class:`LayerNorm`'s 1e-5, which follows :class:`torch.nn.LayerNorm`; pretrained weights are
+        published against their own framework's value.
+    affine : bool, optional
+        Apply the learned scale :math:`\gamma`. There is no shift to disable. Default is True.
+    """
+
+    def __init__(
+        self,
+        name: str | None = None,
+        n_in: int | None = None,
+        epsilon: float = 1e-6,
+        affine: bool = True,
+    ):
+        self.name = name if name else "RMSNorm"
+        self.n_in = n_in
+        self.epsilon = epsilon
+        self.affine = affine
+
+        self.scale: TrainableParameter | None = None
+
+        self.initialized = False
+        self._initialize_params(None)
+
+    def _initialize_params(self, X: pt.TensorVariable | None):
+        if self.initialized:
+            return
+
+        n_in = _resolve_n_in(self.name, self.n_in, X)
+        if n_in is None:
+            return
+
+        if self.affine:
+            self.scale = _scale_parameter(self.name, n_in)
+
+        self.initialized = True
+
+    def __call__(self, X: pt.TensorLike) -> pt.TensorVariable:
+        X = pt.as_tensor(X)
+        self._initialize_params(X)
+
+        inputs = [X]
+        if self.affine:
+            assert self.scale is not None
+            inputs.append(self.scale)
+
+        X_transformed = RMSNormLayer(
             name=self.name,
             n_in=self.n_in,
             epsilon=self.epsilon,
