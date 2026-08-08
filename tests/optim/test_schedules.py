@@ -57,6 +57,21 @@ def test_schedule_reads_floatX_at_graph_build_time(schedule_factory):
 
 
 @over_schedules
+def test_schedule_rejects_a_floor_above_the_initial_rate(schedule_factory):
+    """The rates are adjacent positional arguments, so swapping them is easy and would otherwise produce a
+    schedule that climbs while the docstring calls it a floor."""
+    with pytest.raises(ValueError, match="min_learning_rate must not exceed learning_rate"):
+        schedule_factory(0.001, 4, 0.1)
+
+
+@over_schedules
+def test_schedule_accepts_an_equal_floor_as_a_constant_rate(schedule_factory):
+    # The floor check is `>`, not `>=`, so a floor equal to the initial rate is a constant schedule.
+    rates = evaluate_schedule(schedule_factory(0.1, 4, min_learning_rate=0.1), range(6))
+    np.testing.assert_allclose(rates, 0.1, rtol=1e-6)
+
+
+@over_schedules
 @pytest.mark.parametrize("total_steps", [0, -1])
 def test_schedule_rejects_empty_horizon(schedule_factory, total_steps):
     with pytest.raises(ValueError, match="total_steps must be at least 1"):

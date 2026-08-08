@@ -52,6 +52,11 @@ def cosine_annealing(
     """
     if total_steps < 1:
         raise ValueError(f"total_steps must be at least 1, got {total_steps}.")
+    if min_learning_rate > learning_rate:
+        raise ValueError(
+            f"min_learning_rate must not exceed learning_rate, got {min_learning_rate} > "
+            f"{learning_rate}. Schedules in this module decay, so the floor is the smaller of the two."
+        )
 
     def schedule(step_count: TensorVariable) -> TensorVariable:
         floatX = config.floatX
@@ -107,6 +112,11 @@ def linear_decay(
         raise ValueError(f"total_steps must be at least 1, got {total_steps}.")
     if transition_begin < 0:
         raise ValueError(f"transition_begin must not be negative, got {transition_begin}.")
+    if min_learning_rate > learning_rate:
+        raise ValueError(
+            f"min_learning_rate must not exceed learning_rate, got {min_learning_rate} > "
+            f"{learning_rate}. Schedules in this module decay, so the floor is the smaller of the two."
+        )
 
     def schedule(step_count: TensorVariable) -> TensorVariable:
         floatX = config.floatX
