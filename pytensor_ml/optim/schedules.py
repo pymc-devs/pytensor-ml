@@ -7,6 +7,35 @@ from pytensor.tensor import TensorVariable
 from pytensor_ml.optim.base import Schedule
 
 
+def _validate_horizon(
+    learning_rate: float,
+    total_steps: int,
+    min_learning_rate: float,
+    transition_begin: int = 0,
+) -> None:
+    """Raise ``ValueError`` unless the rates and the horizon describe a decay."""
+    if total_steps < 1:
+        raise ValueError(f"total_steps must be at least 1, got {total_steps}.")
+    if transition_begin < 0:
+        raise ValueError(f"transition_begin must not be negative, got {transition_begin}.")
+    if min_learning_rate > learning_rate:
+        raise ValueError(
+            f"min_learning_rate must not exceed learning_rate, got {min_learning_rate} > "
+            f"{learning_rate}. Schedules in this module decay, so the floor is the smaller of the two."
+        )
+
+
+def _clamped_progress(
+    step_count: TensorVariable, total_steps: int, transition_begin: int = 0
+) -> TensorVariable:
+    """Return the fraction of the decay completed at ``step_count``, held at 0 before it starts and 1
+    after it ends, so every schedule flattens outside its horizon rather than running past it."""
+    floatX = config.floatX
+    step_limit = np.asarray(total_steps, dtype=floatX)
+    begin = np.asarray(transition_begin, dtype=floatX)
+    return pt.clip(step_count.astype(floatX) - begin, 0.0, step_limit) / step_limit
+
+
 def cosine_annealing(
     learning_rate: float,
     total_steps: int,
@@ -50,21 +79,14 @@ def cosine_annealing(
 
         rule = adam(learning_rate=cosine_annealing(3e-4, 10_000))
     """
-    if total_steps < 1:
-        raise ValueError(f"total_steps must be at least 1, got {total_steps}.")
-    if min_learning_rate > learning_rate:
-        raise ValueError(
-            f"min_learning_rate must not exceed learning_rate, got {min_learning_rate} > "
-            f"{learning_rate}. Schedules in this module decay, so the floor is the smaller of the two."
-        )
+    _validate_horizon(learning_rate, total_steps, min_learning_rate)
 
     def schedule(step_count: TensorVariable) -> TensorVariable:
         floatX = config.floatX
         initial_rate = np.asarray(learning_rate, dtype=floatX)
         final_rate = np.asarray(min_learning_rate, dtype=floatX)
-        step_limit = np.asarray(total_steps, dtype=floatX)
 
-        progress = pt.minimum(step_count.astype(floatX), step_limit) / step_limit
+        progress = _clamped_progress(step_count, total_steps)
         cosine_factor = 0.5 * (1.0 + pt.cos(np.pi * progress))
         return final_rate + (initial_rate - final_rate) * cosine_factor
 
@@ -108,24 +130,14 @@ def linear_decay(
         A callable mapping the symbolic step count to a scalar learning rate, for
         :func:`~pytensor_ml.optim.transform.scale_by_schedule`.
     """
-    if total_steps < 1:
-        raise ValueError(f"total_steps must be at least 1, got {total_steps}.")
-    if transition_begin < 0:
-        raise ValueError(f"transition_begin must not be negative, got {transition_begin}.")
-    if min_learning_rate > learning_rate:
-        raise ValueError(
-            f"min_learning_rate must not exceed learning_rate, got {min_learning_rate} > "
-            f"{learning_rate}. Schedules in this module decay, so the floor is the smaller of the two."
-        )
+    _validate_horizon(learning_rate, total_steps, min_learning_rate, transition_begin)
 
     def schedule(step_count: TensorVariable) -> TensorVariable:
         floatX = config.floatX
         initial_rate = np.asarray(learning_rate, dtype=floatX)
         final_rate = np.asarray(min_learning_rate, dtype=floatX)
-        step_limit = np.asarray(total_steps, dtype=floatX)
-        begin = np.asarray(transition_begin, dtype=floatX)
 
-        progress = pt.clip(step_count.astype(floatX) - begin, 0.0, step_limit) / step_limit
+        progress = _clamped_progress(step_count, total_steps, transition_begin)
         return initial_rate + (final_rate - initial_rate) * progress
 
     return schedule
