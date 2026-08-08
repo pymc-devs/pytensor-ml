@@ -29,6 +29,7 @@ from pytensor_ml.optim.rules import (
     rprop_updates,
     sgd_updates,
 )
+from pytensor_ml.optim.schedules import cosine_annealing
 from pytensor_ml.optim.train import compile_train
 from pytensor_ml.optim.transform import add_weight_decay, scale, scale_by_schedule, trace
 
@@ -52,6 +53,7 @@ __all__ = [
     "clip_by_global_norm",
     "clip_by_value",
     "compile_train",
+    "cosine_annealing",
     "get_gradients",
     "nadam",
     "nadam_updates",
