@@ -3,9 +3,11 @@ from collections.abc import Callable, Sequence
 import pytensor.tensor as pt
 
 from pytensor import config
+from pytensor.graph.basic import Variable
 from pytensor.tensor import TensorVariable
 
 from pytensor_ml.optim.base import (
+    LearningRate,
     LossOrGradients,
     Parameter,
     Rate,
@@ -523,6 +525,27 @@ def adadelta_updates(
     return updates
 
 
+def _require_numeric_learning_rate(learning_rate: LearningRate) -> None:
+    """
+    Raise ``TypeError`` unless ``learning_rate`` is a plain number.
+
+    Rprop's rate initializes the per-parameter step sizes it then adapts, so it is consumed at allocation
+    time and never reaches the graph. A schedule or shared variable would fail deep inside numpy instead.
+
+    Parameters
+    ----------
+    learning_rate : float, shared tensor variable, or Schedule
+        The rate to check.
+    """
+    if callable(learning_rate) or isinstance(learning_rate, Variable):
+        raise TypeError(
+            "rprop's learning rate initializes its per-parameter step sizes rather than scaling the step, "
+            "so it must be a plain number and cannot be scheduled or steered. Schedule a rule whose rate "
+            "multiplies the step, or scale rprop's finished step with "
+            "`chain(rprop(...), scale_by_schedule(...))`, which is a different algorithm."
+        )
+
+
 def rprop_updates(
     loss_or_gradients: LossOrGradients,
     parameters: Sequence[Parameter],
@@ -564,6 +587,8 @@ def rprop_updates(
     Updates
         Mapping from each parameter and its state buffers to their next values.
     """
+    _require_numeric_learning_rate(learning_rate)
+
     gradients = get_gradients(loss_or_gradients, parameters)
 
     updates: Updates = {}

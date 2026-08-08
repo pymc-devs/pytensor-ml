@@ -9,6 +9,8 @@ from pytensor_ml.optim import (
     chain,
     compile_train,
     cosine_annealing,
+    rprop,
+    rprop_updates,
     scalar_state,
     scale_by_schedule,
     sgd,
@@ -91,6 +93,21 @@ def test_scheduled_rule_publishes_the_applied_rate():
 
     compile_train(loss, rule)()
     np.testing.assert_allclose(published_rate.get_value(), 0.1, rtol=RTOL)
+
+
+@pytest.mark.parametrize(
+    "learning_rate",
+    [cosine_annealing(0.1, 10), scalar_state("rprop/rejected_rate", 0.1)],
+    ids=["schedule", "shared_variable"],
+)
+def test_rprop_rejects_a_symbolic_rate(learning_rate):
+    """Rprop's rate seeds per-parameter state at allocation time, so neither symbolic form can reach it."""
+    with pytest.raises(TypeError, match="initializes its per-parameter step sizes"):
+        rprop(learning_rate=learning_rate)
+
+    p, loss = quadratic_problem()
+    with pytest.raises(TypeError, match="initializes its per-parameter step sizes"):
+        rprop_updates(loss, [p], learning_rate=learning_rate)
 
 
 def test_substitute_schedule_raises_when_the_rate_is_absent():

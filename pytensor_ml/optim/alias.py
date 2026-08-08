@@ -11,6 +11,7 @@ from pytensor_ml.optim.base import (
     scalar_state,
 )
 from pytensor_ml.optim.rules import (
+    _require_numeric_learning_rate,
     adadelta_updates,
     adagrad_updates,
     adam_updates,
@@ -214,6 +215,7 @@ def rprop(
     Unlike the other rules, ``learning_rate`` must be a plain number: it initializes the per-parameter
     step sizes Rprop then adapts, so it never enters the graph and cannot be scheduled or steered.
     """
+    _require_numeric_learning_rate(learning_rate)
 
     @reuses_state
     def rule(loss_or_gradients: LossOrGradients, parameters: Sequence[Parameter]) -> Updates:
