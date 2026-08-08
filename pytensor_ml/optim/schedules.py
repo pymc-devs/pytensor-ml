@@ -141,3 +141,63 @@ def linear_decay(
         return initial_rate + (final_rate - initial_rate) * progress
 
     return schedule
+
+
+def exponential_decay(
+    learning_rate: float,
+    total_steps: int,
+    min_learning_rate: float,
+    transition_begin: int = 0,
+) -> Schedule:
+    r"""
+    Decay the learning rate from ``learning_rate`` to ``min_learning_rate`` by a constant factor per step.
+
+    At step :math:`t`, decaying over :math:`T` steps starting from step :math:`B`, and writing
+    :math:`p = \min(\max(t - B, 0),\; T) / T`,
+
+    .. math::
+
+        \eta_t = \eta_0 \left(\frac{\eta_{\min}}{\eta_0}\right)^{p}
+
+    so the rate is multiplied by the same factor every step — falling fastest in absolute terms early on —
+    and holds at :math:`\eta_{\min}` from step :math:`B + T` on.
+
+    ``min_learning_rate`` is required and must be positive: geometric decay approaches zero without
+    ever reaching it, so there is no floor of zero to decay to.
+
+    Parameters
+    ----------
+    learning_rate : float
+        Initial rate :math:`\eta_0`, returned at every step up to ``transition_begin``. Must be positive.
+    total_steps : int
+        Number of steps :math:`T` the decay itself spans. Must be at least one.
+    min_learning_rate : float
+        Floor :math:`\eta_{\min}` reached at step ``transition_begin + total_steps``. Must be positive.
+    transition_begin : int, optional
+        Number of steps :math:`B` to hold the initial rate before decaying. Must not be negative.
+        Default 0.
+
+    Returns
+    -------
+    Schedule
+        A callable mapping the symbolic step count to a scalar learning rate, for
+        :func:`~pytensor_ml.optim.transform.scale_by_schedule`.
+    """
+    _validate_horizon(learning_rate, total_steps, min_learning_rate, transition_begin)
+    if min_learning_rate <= 0.0 or learning_rate <= 0.0:
+        raise ValueError(
+            f"exponential_decay needs positive rates, got learning_rate={learning_rate} and "
+            f"min_learning_rate={min_learning_rate}. Geometric decay never reaches zero, so pick a "
+            f"floor you are willing to train at."
+        )
+
+    def schedule(step_count: TensorVariable) -> TensorVariable:
+        floatX = config.floatX
+        initial_rate = np.asarray(learning_rate, dtype=floatX)
+        # Taken in float64 on the host, so a small ratio keeps its precision under floatX=float32.
+        log_decay = np.asarray(np.log(min_learning_rate / learning_rate), dtype=floatX)
+
+        progress = _clamped_progress(step_count, total_steps, transition_begin)
+        return initial_rate * pt.exp(log_decay * progress)
+
+    return schedule

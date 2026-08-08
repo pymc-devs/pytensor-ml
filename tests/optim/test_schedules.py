@@ -8,6 +8,7 @@ from pytensor_ml.optim import (
     chain,
     compile_train,
     cosine_annealing,
+    exponential_decay,
     linear_decay,
     scale_by_schedule,
     sgd,
@@ -17,7 +18,7 @@ from pytensor_ml.pytensorf import function
 
 # Every schedule takes (learning_rate, total_steps, min_learning_rate) and owes the same contract at the
 # horizon, so those properties are asserted once for all of them.
-SCHEDULES = [cosine_annealing, linear_decay]
+SCHEDULES = [cosine_annealing, linear_decay, exponential_decay]
 
 
 def evaluate_schedule(schedule, steps):
@@ -96,9 +97,40 @@ def test_linear_decay_holds_the_initial_rate_until_transition_begin():
     np.testing.assert_allclose(rates, [1.0, 1.0, 0.8125, 0.625, 0.25, 0.25], rtol=1e-6)
 
 
-def test_linear_decay_rejects_negative_transition_begin():
+@pytest.mark.parametrize("schedule_factory", [linear_decay, exponential_decay])
+def test_schedule_holds_the_initial_rate_until_transition_begin(schedule_factory):
+    """Each schedule has to pass its own `transition_begin` through, so the shared clamp being right is not
+    enough — asserted as a property because the curve between B and B + T differs per schedule."""
+    rates = evaluate_schedule(
+        schedule_factory(1.0, 4, 0.25, transition_begin=3), [0, 1, 3, 4, 7, 100]
+    )
+
+    np.testing.assert_allclose(rates[:3], 1.0, rtol=1e-6)  # held through step B
+    assert rates[3] < 1.0  # decaying afterwards
+    np.testing.assert_allclose(rates[4:], 0.25, rtol=1e-6)  # floor from step B + T
+
+
+def test_exponential_decay_falls_by_a_constant_factor():
+    # The constant ratio is what separates geometric decay from linear: 1.0 -> 0.0625 over 4 steps halves.
+    rates = evaluate_schedule(exponential_decay(1.0, 4, 0.0625), range(5))
+    np.testing.assert_allclose(rates[1:] / rates[:-1], 0.5, rtol=1e-6)
+    np.testing.assert_allclose(rates[[0, -1]], [1.0, 0.0625], rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("learning_rate", "min_learning_rate"),
+    [(0.1, 0.0), (0.0, 0.0)],
+    ids=["zero_floor", "zero_initial"],
+)
+def test_exponential_decay_rejects_a_non_positive_rate(learning_rate, min_learning_rate):
+    with pytest.raises(ValueError, match="needs positive rates"):
+        exponential_decay(learning_rate, 4, min_learning_rate)
+
+
+@pytest.mark.parametrize("schedule_factory", [linear_decay, exponential_decay])
+def test_schedule_rejects_negative_transition_begin(schedule_factory):
     with pytest.raises(ValueError, match="transition_begin must not be negative"):
-        linear_decay(1e-3, 10, transition_begin=-1)
+        schedule_factory(1e-3, 10, 1e-5, transition_begin=-1)
 
 
 @pytest.mark.parametrize("schedule_factory", SCHEDULES)
@@ -107,7 +139,7 @@ def test_schedule_drives_training_through_the_learning_rate_union(schedule_facto
     path from `scale_by_schedule` and the one a new schedule is most likely to miss."""
     p = trainable(np.array([2.0]), name="w")
     loss = 0.5 * (p**2).sum()  # grad = p, so the unit-rate base step is -p
-    rule = sgd(learning_rate=schedule_factory(0.1, 2))
+    rule = sgd(learning_rate=schedule_factory(0.1, 2, 0.01))
     published_rate = next(key for key in rule(loss, [p]) if key.name == "sgd/learning_rate")
 
     compile_train(loss, rule)()  # every schedule starts at its initial rate, so p = 2 - 0.1 * 2
