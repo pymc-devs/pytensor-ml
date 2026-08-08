@@ -52,6 +52,7 @@ dev = [
     "scikit-learn",
     "mypy",
     "jax",
+    "pyyaml",
 ]
 
 [tool.hatch.version]

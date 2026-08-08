@@ -18,6 +18,7 @@ dependencies:
   - pytest-xdist
   - pytest-benchmark
   - pytest-mock
+  - pyyaml  # tests/test_workflow_groups.py reads the CI matrix
 
   # For building docs
   - sphinx
