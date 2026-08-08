@@ -29,6 +29,13 @@ UpdateRule = Callable[[LossOrGradients, Sequence[Parameter]], Updates]
 # A learning-rate schedule: symbolic step count in, scalar learning rate out.
 type Schedule = Callable[[TensorVariable], TensorVariable]
 
+# A rate a rule multiplies into its step: a baked-in constant, or a shared variable to steer from Python
+# with `set_value` or to substitute a schedule into.
+type Rate = float | Parameter
+
+# What an optimizer alias accepts as its rate, adding a schedule that drives it on-graph.
+type LearningRate = Rate | Schedule
+
 
 def get_gradients(
     loss_or_gradients: LossOrGradients,

@@ -4,6 +4,7 @@ import pytensor.tensor as pt
 
 from pytensor_ml.optim.base import (
     Parameter,
+    Rate,
     Schedule,
     Transform,
     Updates,
@@ -49,7 +50,7 @@ def trace(decay: float = 0.9, nesterov: bool = False) -> Transform:
     return transform
 
 
-def scale(factor: float) -> Transform:
+def scale(factor: Rate) -> Transform:
     """
     Scale each step by a constant factor.
 
@@ -57,7 +58,7 @@ def scale(factor: float) -> Transform:
 
     Parameters
     ----------
-    factor : float
+    factor : float or shared tensor variable
         Multiplier applied to every step.
 
     Returns

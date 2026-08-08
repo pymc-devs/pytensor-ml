@@ -10,6 +10,8 @@ from pytensor_ml.optim.alias import (
     sgd,
 )
 from pytensor_ml.optim.base import (
+    LearningRate,
+    Rate,
     Schedule,
     Transform,
     UpdateRule,
@@ -32,9 +34,16 @@ from pytensor_ml.optim.rules import (
 )
 from pytensor_ml.optim.schedules import cosine_annealing
 from pytensor_ml.optim.train import compile_train
-from pytensor_ml.optim.transform import add_weight_decay, scale, scale_by_schedule, trace
+from pytensor_ml.optim.transform import (
+    add_weight_decay,
+    scale,
+    scale_by_schedule,
+    trace,
+)
 
 __all__ = [
+    "LearningRate",
+    "Rate",
     "Schedule",
     "Transform",
     "UpdateRule",
