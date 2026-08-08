@@ -32,7 +32,7 @@ from pytensor_ml.optim.rules import (
     rprop_updates,
     sgd_updates,
 )
-from pytensor_ml.optim.schedules import cosine_annealing
+from pytensor_ml.optim.schedules import cosine_annealing, linear_decay
 from pytensor_ml.optim.train import compile_train
 from pytensor_ml.optim.transform import (
     add_weight_decay,
@@ -66,6 +66,7 @@ __all__ = [
     "compile_train",
     "cosine_annealing",
     "get_gradients",
+    "linear_decay",
     "nadam",
     "nadam_updates",
     "rmsprop",
