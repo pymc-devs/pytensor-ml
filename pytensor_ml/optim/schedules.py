@@ -42,13 +42,13 @@ def cosine_annealing(
 
     Examples
     --------
-    Chain the schedule onto a unit-rate base rule, so the schedule alone sets the step size:
+    Hand the schedule to an optimizer in place of a rate:
 
     .. code-block:: python
 
-        from pytensor_ml.optim import adam, chain, cosine_annealing, scale_by_schedule
+        from pytensor_ml.optim import adam, cosine_annealing
 
-        rule = chain(adam(learning_rate=1.0), scale_by_schedule(cosine_annealing(3e-4, 10_000)))
+        rule = adam(learning_rate=cosine_annealing(3e-4, 10_000))
     """
     if total_steps < 1:
         raise ValueError(f"total_steps must be at least 1, got {total_steps}.")
