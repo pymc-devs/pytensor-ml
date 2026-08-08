@@ -14,19 +14,57 @@ concurrency:
 
 jobs:
   unittest:
+    name: unittest (${{ matrix.os }}, ${{ matrix.python-version }}, ${{ matrix.test-subset.name }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest]
         python-version: ["3.12"]
+        # Groups are balanced on measured cold-compile-cache time, which is what a fresh runner pays.
+        # tests/test_workflow_groups.py fails if a test file is missing from every group or listed twice.
         test-subset:
-          - |
-            tests/
+          - name: attention
+            paths: |
+              tests/test_attention.py
+              tests/dispatch/
+          - name: layers
+            paths: |
+              tests/test_transformer.py
+              tests/test_layers.py
+              tests/rewriting/
+          - name: optim
+            paths: |
+              tests/optim/
+          - name: rest
+            paths: |
+              tests/test_serialize.py
+              tests/test_activations.py
+              tests/test_loss.py
+              tests/test_checkpoint.py
+              tests/test_model.py
+              tests/test_pretrained.py
+              tests/test_pytensorf.py
+              tests/test_state.py
+              tests/test_base.py
+              tests/test_collect.py
+              tests/test_util.py
+              tests/test_workflow_groups.py
+        # Windows runners are roughly twice as slow, and almost everything here is platform independent.
+        # It runs one job over the parts that are not: file IO, paths, and compiling a graph to train.
+        include:
+          - os: windows-latest
+            python-version: "3.12"
+            test-subset:
+              name: smoke
+              paths: |
+                tests/test_checkpoint.py
+                tests/test_serialize.py
+                tests/optim/test_training.py
 
     runs-on: ${{ matrix.os }}
 
     env:
-      TEST_SUBSET: ${{ matrix.test-subset }}
+      TEST_SUBSET: ${{ matrix.test-subset.paths }}
 
     defaults:
       run:
@@ -75,7 +113,7 @@ jobs:
 
     - name: Run tests
       run: |
-        python -m pytest -vv --cov=pytensor_ml --cov-report=xml --no-cov-on-fail --cov-report term $TEST_SUBSET
+        python -m pytest -vv --durations=25 --cov=pytensor_ml --cov-report=xml --no-cov-on-fail --cov-report term $TEST_SUBSET
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
       with:
