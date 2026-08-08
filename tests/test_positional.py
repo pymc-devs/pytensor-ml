@@ -286,18 +286,32 @@ def test_rope_passes_gradients_to_its_input(pairing, rng):
     assert not np.any(np.all(np.isclose(grad, 0.0), axis=0))
 
 
-def test_unknown_head_dimension_raises():
-    with pytest.raises(ValueError, match="statically known last dimension"):
-        rotary_embedding(pt.matrix("x"), pt.lvector("positions"))
+@pytest.mark.parametrize("pairing", ["half", "adjacent"])
+def test_unknown_head_dimension_is_supported(pairing, rng):
+    # The frequency ladder is built symbolically, so a feature axis that is only known at runtime
+    # works; it just cannot carry a static output shape or fold to a constant.
+    x_np = rng.normal(size=(3, 8)).astype(floatX)
+    positions_np = np.arange(3)
+
+    x = pt.tensor("x", shape=(3, None))
+    positions = pt.lvector("positions")
+    out = rotary_embedding(x, positions, pairing=pairing)
+
+    assert out.type.shape == (3, None)
+    np.testing.assert_allclose(
+        out.eval({x: x_np, positions: positions_np}),
+        rope_np(x_np, positions_np, pairing=pairing),
+        atol=1e-6,
+    )
 
 
 def test_odd_head_dimension_raises():
-    with pytest.raises(ValueError, match="even head dimension"):
+    with pytest.raises(ValueError, match="head_dim must be even"):
         rotary_embedding(pt.tensor("x", shape=(4, 7)), pt.lvector("positions"))
 
 
 def test_integer_input_raises():
-    with pytest.raises(ValueError, match="floating-point tensor"):
+    with pytest.raises(ValueError, match="floating-point input"):
         rotary_embedding(pt.tensor("x", shape=(4, 8), dtype="int64"), pt.lvector("positions"))
 
 

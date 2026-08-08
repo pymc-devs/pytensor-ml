@@ -1,29 +1,10 @@
 from abc import ABC, abstractmethod
 from typing import Protocol, runtime_checkable
 
-import numpy as np
 import pytensor.tensor as pt
 
-from pytensor import config
 from pytensor.compile.builders import SymbolicOp
 from pytensor.tensor.variable import TensorVariable
-
-
-def constant_like(value: float, x: pt.TensorVariable) -> pt.TensorVariable:
-    """
-    Wrap a scalar so that combining it with ``x`` cannot widen ``x``'s dtype.
-
-    PyTensor's autocaster types a bare Python float by value, so whether a literal widens its operand
-    depends on that value: against a float32 input ``0.5 * x`` stays float32, while ``0.01 * x``
-    promotes to float64. Pinning the constant to ``x``'s dtype removes the dependence.
-
-    Lives here, beside the layer base classes, because both ``pytensor_ml.activations`` and the layer
-    modules need it and this module is already the shared root that neither can cycle through.
-    """
-    dtype = np.dtype(x.dtype)
-    # np.finfo maps complex64 -> float32, keeping complex inputs at their own precision.
-    dtype = np.finfo(dtype).dtype if np.issubdtype(dtype, np.inexact) else np.dtype(config.floatX)
-    return pt.constant(np.asarray(value, dtype=dtype))
 
 
 class Layer(ABC):
@@ -32,6 +13,17 @@ class Layer(ABC):
 
     @abstractmethod
     def __call__(self, x: pt.TensorLike) -> pt.TensorVariable: ...
+
+
+class PositionalLayer(ABC):
+    """Base class for layers that consume token positions alongside their input.
+
+    A sibling of :class:`Layer` rather than a subclass: narrowing ``Layer.__call__`` from one tensor to
+    two is not a valid override, so a subclass would need a type-checker escape at every level.
+    """
+
+    @abstractmethod
+    def __call__(self, x: pt.TensorLike, position_ids: pt.TensorLike) -> pt.TensorVariable: ...
 
 
 class LayerOp(SymbolicOp):
@@ -72,4 +64,4 @@ class StatefulOp(Protocol):
         """Map each output index to the index of the input that output updates."""
 
 
-__all__ = ["Layer", "LayerOp", "StatefulOp", "UnaryLayerOp", "constant_like"]
+__all__ = ["Layer", "LayerOp", "PositionalLayer", "StatefulOp", "UnaryLayerOp"]

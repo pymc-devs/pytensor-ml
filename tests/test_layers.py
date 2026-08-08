@@ -265,7 +265,7 @@ def test_rms_norm_no_affine_gives_unit_root_mean_square(rng):
     np.testing.assert_allclose(np.sqrt(np.square(res).mean(axis=-1)), 1.0, rtol=1e-3)
 
 
-def test_rms_norm_does_not_centre_its_input(rng):
+def test_rms_norm_does_not_center_its_input(rng):
     # The one thing that separates RMSNorm from LayerNorm: the mean survives. On input with a large
     # offset, LayerNorm removes it and RMSNorm does not, so the two must disagree.
     X = pt.tensor("X", shape=(None, 8))
