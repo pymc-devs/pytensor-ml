@@ -91,6 +91,16 @@ jobs:
           ~\AppData\Local\pip\Cache
         key: ${{ runner.os }}-build-${{ matrix.python-version }}-${{ env.CACHE_NUMBER }}-${{
           hashFiles('pyproject.toml') }}
+    - name: Cache the pytensor compile directory
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      env:
+        CACHE_NUMBER: 0
+      with:
+        path: ~/.pytensor
+        key: ${{ runner.os }}-py${{ matrix.python-version }}-pytensor-${{ env.CACHE_NUMBER }}-${{
+          matrix.test-subset.name }}-${{ hashFiles('conda_envs/pytensor_ml.yml') }}
+        restore-keys: |
+          ${{ runner.os }}-py${{ matrix.python-version }}-pytensor-${{ env.CACHE_NUMBER }}-${{ matrix.test-subset.name }}-
     - uses: conda-incubator/setup-miniconda@8ee1f361103df19b6f8c8655fd3967a8ecb162d5 # v4.0.1
       with:
         miniforge-variant: Miniforge3
