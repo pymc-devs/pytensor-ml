@@ -2,6 +2,9 @@ from collections.abc import Callable, Sequence
 
 import pytensor.tensor as pt
 
+from pytensor.graph.basic import Variable
+from pytensor.graph.replace import graph_replace
+
 from pytensor_ml.optim.base import (
     Parameter,
     Rate,
@@ -128,6 +131,58 @@ def scale_by_schedule(schedule_fn: Schedule, learning_rate: Parameter | None = N
         return next_updates
 
     return transform
+
+
+def substitute_schedule(
+    updates: Updates, learning_rate: Parameter, schedule_fn: Schedule
+) -> Updates:
+    """
+    Replace ``learning_rate`` with a scheduled rate everywhere it appears in ``updates``.
+
+    Where :func:`scale_by_schedule` multiplies the finished step, this substitutes the rate into the graph
+    at the point the rule uses it. The two agree whenever the rate is a plain multiplier on the step, and
+    only substitution is correct when it is not — a rule whose accumulators consume the rate, or a decay
+    term deliberately left unscaled.
+
+    The scheduled rate is also written back to ``learning_rate``, so the variable holds the rate that was
+    applied and can be read from Python or checkpointed. Raise if ``learning_rate`` never appears in
+    ``updates``, which means the rule does not take its rate from the graph and cannot be scheduled this
+    way.
+
+    Parameters
+    ----------
+    updates : Updates
+        Updates built against ``learning_rate`` as a symbolic rate.
+    learning_rate : shared tensor variable
+        Scalar variable the rule read its rate from.
+    schedule_fn : callable
+        Maps the symbolic step counter to a scalar learning rate.
+
+    Returns
+    -------
+    Updates
+        The updates with the scheduled rate substituted in, the rate published, and the counter advanced.
+    """
+    step_count = counter("schedule/step_count")
+    rate = pt.cast(schedule_fn(step_count), learning_rate.type.dtype)
+
+    # graph_replace rejects a replacement it cannot use, and the counter update contains no rate, so the
+    # whole output list goes in one call rather than one output at a time.
+    replacements: dict[Variable, Variable] = {learning_rate: rate}
+    update_keys = list(updates)
+    try:
+        replaced = graph_replace([updates[key] for key in update_keys], replacements)
+    except ValueError as error:
+        raise ValueError(
+            f"The learning rate {learning_rate.name!r} does not appear in the updates it was built with, "
+            "so a schedule cannot be substituted into them. This happens when a rule uses its rate for "
+            "something other than the graph, such as initializing per-parameter state."
+        ) from error
+
+    next_updates: Updates = dict(zip(update_keys, replaced))  # type: ignore[arg-type]
+    next_updates[learning_rate] = rate
+    next_updates[step_count] = step_count + 1
+    return next_updates
 
 
 def add_weight_decay(

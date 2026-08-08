@@ -38,6 +38,7 @@ from pytensor_ml.optim.transform import (
     add_weight_decay,
     scale,
     scale_by_schedule,
+    substitute_schedule,
     trace,
 )
 
@@ -76,5 +77,6 @@ __all__ = [
     "scale_by_schedule",
     "sgd",
     "sgd_updates",
+    "substitute_schedule",
     "trace",
 ]
