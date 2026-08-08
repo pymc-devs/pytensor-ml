@@ -73,6 +73,30 @@ def test_scale_by_schedule_applies_decaying_rate():
     np.testing.assert_allclose(p.get_value(), [1.71], rtol=1e-6)
 
 
+def test_chain_reuses_transform_state_across_invocations():
+    """A chain's transforms allocate state too, so two functions compiled from one chain must share it.
+    Without reuse the second function silently restarts the schedule with its own step counter."""
+    p = trainable(np.array([2.0]), name="w")
+    loss = 0.5 * (p**2).sum()
+    rule = chain(trace(0.9), scale_by_schedule(lambda step_count: pt.constant(0.1)))
+
+    first = {key for key in rule(sgd_updates(loss, [p], learning_rate=1.0), [p]) if key is not p}
+    second = {key for key in rule(sgd_updates(loss, [p], learning_rate=1.0), [p]) if key is not p}
+
+    assert first and first == second
+
+
+def test_separately_configured_chains_keep_independent_state():
+    p = trainable(np.array([2.0]), name="w")
+    loss = 0.5 * (p**2).sum()
+
+    def build_updates():
+        rule = chain(trace(0.9), scale_by_schedule(lambda step_count: pt.constant(0.1)))
+        return {key for key in rule(sgd_updates(loss, [p], learning_rate=1.0), [p]) if key is not p}
+
+    assert not build_updates() & build_updates()
+
+
 def test_add_weight_decay_subtracts_decay_term():
     p = trainable(np.array([4.0]), name="w")
     # An empty base step (updates[p] == p) isolates the decay term: new step = -0.1 * 4.
