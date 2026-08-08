@@ -16,6 +16,7 @@ from pytensor_ml.optim.base import (
     Updates,
     chain,
     get_gradients,
+    scalar_state,
 )
 from pytensor_ml.optim.clipping import clip_by_global_norm, clip_by_value
 from pytensor_ml.optim.rules import (
@@ -61,6 +62,7 @@ __all__ = [
     "rmsprop_updates",
     "rprop",
     "rprop_updates",
+    "scalar_state",
     "scale",
     "scale_by_schedule",
     "sgd",

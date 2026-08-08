@@ -1,6 +1,16 @@
 from collections.abc import Callable, Sequence
 
-from pytensor_ml.optim.base import Parameter, Schedule, Transform, Updates, counter, state_for
+import pytensor.tensor as pt
+
+from pytensor_ml.optim.base import (
+    Parameter,
+    Schedule,
+    Transform,
+    Updates,
+    counter,
+    scalar_state,
+    state_for,
+)
 
 
 def trace(decay: float = 0.9, nesterov: bool = False) -> Transform:
@@ -65,7 +75,7 @@ def scale(factor: float) -> Transform:
     return transform
 
 
-def scale_by_schedule(schedule_fn: Schedule) -> Transform:
+def scale_by_schedule(schedule_fn: Schedule, learning_rate: Parameter | None = None) -> Transform:
     """
     Scale each step by a learning rate produced from an owned step counter.
 
@@ -73,23 +83,46 @@ def scale_by_schedule(schedule_fn: Schedule) -> Transform:
     must return a scalar learning rate, so the schedule lives on the graph and stays synchronized with the
     optimizer's own time step.
 
+    The rate *this transform* applies is also written to a scalar shared variable, so it can be checkpointed
+    alongside the counter and read from Python after a step. Pass ``learning_rate`` to supply that variable
+    and hold a reference to it; otherwise one is allocated as ``"schedule/learning_rate"``. Two scheduled
+    scalings in one chain each publish their own factor and share one step counter, so the rate reaching the
+    parameters is their product. The graph writes the variable on every step and never reads it, so
+    ``set_value`` on it does not steer a schedule that is a function of the step count.
+
     Parameters
     ----------
     schedule_fn : callable
         Maps the symbolic step counter (a TensorVariable) to a scalar learning rate.
+    learning_rate : shared tensor variable, optional
+        Scalar variable to publish the applied rate to, cast to its dtype. Allocated internally when
+        omitted.
 
     Returns
     -------
     Transform
-        A transform that rescales the updates dict by the scheduled rate and advances the counter.
+        A transform that rescales the updates dict by the scheduled rate, publishes it, and advances the
+        counter.
     """
 
     def transform(updates: Updates, parameters: Sequence[Parameter]) -> Updates:
         step_count = counter("schedule/step_count")
-        learning_rate = schedule_fn(step_count)
+        published_rate = (
+            scalar_state("schedule/learning_rate") if learning_rate is None else learning_rate
+        )
+        if published_rate in updates:
+            raise ValueError(
+                f"Two scheduled scalings in one chain would share the state {published_rate.name!r}, "
+                "leaving it holding only the second rate while both are applied. Multiply the schedules "
+                "into a single schedule function, or pass distinct `learning_rate` variables."
+            )
+
+        rate = pt.cast(schedule_fn(step_count), published_rate.type.dtype)
+
         next_updates = dict(updates)
         for parameter in parameters:
-            next_updates[parameter] = parameter + learning_rate * (updates[parameter] - parameter)
+            next_updates[parameter] = parameter + rate * (updates[parameter] - parameter)
+        next_updates[published_rate] = rate
         next_updates[step_count] = step_count + 1
         return next_updates
 

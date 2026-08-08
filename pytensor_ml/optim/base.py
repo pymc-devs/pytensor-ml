@@ -149,6 +149,24 @@ def counter(name: str) -> Parameter:
     )
 
 
+def scalar_state(name: str, fill_value: float = 0.0) -> Parameter:
+    """
+    Return a floatX scalar shared variable, reused across invocations of a rule wrapped in
+    :func:`reuses_state`.
+
+    Parameters
+    ----------
+    name : str
+        Name of the variable, used to match it at serialization boundaries.
+    fill_value : float
+        Value to initialize it with. Default 0.0.
+    """
+    return _reuse_or_allocate(
+        name,
+        lambda: pytensor.shared(np.asarray(fill_value, dtype=pytensor.config.floatX), name=name),
+    )
+
+
 def require_unique_state_names(updates: Updates) -> None:
     """
     Raise if two distinct shared variables in ``updates`` share a name.
