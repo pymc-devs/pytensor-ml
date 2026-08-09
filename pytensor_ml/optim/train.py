@@ -8,8 +8,8 @@ from pytensor_ml.optim.base import Parameter, UpdateRule, require_unique_state_n
 from pytensor_ml.pytensorf import (
     collect_clock_updates,
     collect_data_inputs,
+    collect_differentiable_params,
     collect_non_trainable_updates,
-    collect_trainable_params,
     function,
 )
 
@@ -37,7 +37,8 @@ def compile_train(
     rule : UpdateRule
         A configured optimizer ``(loss_or_gradients, parameters) -> Updates``, e.g. ``adam(1e-3)``.
     parameters : sequence of shared tensor variable, optional
-        Parameters to optimize. Collected from ``loss`` with :func:`collect_trainable_params` when omitted.
+        Parameters to optimize. Collected from ``loss`` with :func:`collect_differentiable_params` when
+        omitted, so parameters the loss detaches with a stop-gradient are left alone.
     inputs : sequence of Variable, optional
         Data inputs of the compiled function, in call order. Collected from ``loss`` and ``extra_outputs``
         with :func:`collect_data_inputs` when omitted; pass them explicitly when call order matters (e.g.
@@ -60,7 +61,7 @@ def compile_train(
     extra_outputs = list(extra_outputs or [])
 
     if parameters is None:
-        parameters = collect_trainable_params(loss)
+        parameters = collect_differentiable_params(loss)
     if inputs is None:
         inputs = collect_data_inputs([loss, *extra_outputs])
 

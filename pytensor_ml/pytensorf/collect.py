@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 
 from pytensor.compile.sharedvalue import SharedVariable
+from pytensor.gradient import DisconnectedGrad, ZeroGrad
 from pytensor.graph import graph_inputs
 from pytensor.graph.basic import Constant, Variable
 from pytensor.graph.traversal import ancestors
@@ -16,11 +17,13 @@ def as_output_list(outputs: Variable | Sequence[Variable]) -> list[Variable]:
 
 
 def _collect_inputs_of_type[T: Variable](
-    outputs: Variable | Sequence[Variable], variable_type: type[T]
+    outputs: Variable | Sequence[Variable],
+    variable_type: type[T],
+    blockers: Sequence[Variable] | None = None,
 ) -> list[T]:
     return [
         variable
-        for variable in graph_inputs(as_output_list(outputs))
+        for variable in graph_inputs(as_output_list(outputs), blockers=blockers)
         if isinstance(variable, variable_type)
     ]
 
@@ -46,6 +49,35 @@ def collect_shared_variables(outputs: Variable | Sequence[Variable]) -> list[Sha
 def collect_trainable_params(outputs: Variable | Sequence[Variable]) -> list[TrainableParameter]:
     """Collect the parameters an optimizer should update."""
     return _collect_inputs_of_type(outputs, TrainableParameter)
+
+
+def collect_differentiable_params(
+    outputs: Variable | Sequence[Variable],
+) -> list[TrainableParameter]:
+    """
+    Collect the trainable parameters an optimizer can take gradients of ``outputs`` with respect to.
+
+    These are the parameters :func:`collect_trainable_params` finds, minus any reachable only through a
+    stop-gradient marker -- :func:`pytensor.gradient.disconnected_grad` or
+    :func:`pytensor.gradient.zero_grad` -- which carry no gradient signal by construction. A parameter
+    reached on both a detached and a live path stays in the set, since the live path still carries gradient.
+
+    Parameters
+    ----------
+    outputs : Variable or sequence of Variable
+        One or more graph outputs to trace back from, typically a scalar loss.
+
+    Returns
+    -------
+    list of TrainableParameter
+        The differentiable parameters, in graph-input order.
+    """
+    stop_gradients = [
+        variable
+        for variable in ancestors(as_output_list(outputs))
+        if variable.owner is not None and isinstance(variable.owner.op, DisconnectedGrad | ZeroGrad)
+    ]
+    return _collect_inputs_of_type(outputs, TrainableParameter, blockers=stop_gradients)
 
 
 def collect_non_trainable_params(
@@ -129,6 +161,7 @@ __all__ = [
     "as_output_list",
     "collect_clock_updates",
     "collect_data_inputs",
+    "collect_differentiable_params",
     "collect_graph_inputs",
     "collect_non_trainable_params",
     "collect_non_trainable_updates",

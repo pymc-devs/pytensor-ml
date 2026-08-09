@@ -2,10 +2,14 @@ import numpy as np
 import pytensor.tensor as pt
 import pytest
 
+from pytensor.gradient import disconnected_grad, zero_grad
+
+from pytensor_ml.layers import Linear
 from pytensor_ml.params import NonTrainableParameter, TrainableParameter, step_counter
 from pytensor_ml.pytensorf import (
     collect_clock_updates,
     collect_data_inputs,
+    collect_differentiable_params,
     collect_graph_inputs,
     collect_non_trainable_params,
     collect_non_trainable_updates,
@@ -54,6 +58,35 @@ class TestCollectTrainableParams:
     def test_batchnorm_excludes_running_stats(self, network_with_batchnorm):
         _, y = network_with_batchnorm
         assert names(collect_trainable_params(y)) == FC_PARAMS | BN_AFFINE
+
+
+class TestCollectDifferentiableParams:
+    def test_matches_trainable_params_without_stop_gradients(self, simple_network):
+        _, y = simple_network
+        assert collect_differentiable_params(y) == collect_trainable_params(y)
+
+    @pytest.mark.parametrize(
+        "stop_gradient", [disconnected_grad, zero_grad], ids=["disconnected", "zero"]
+    )
+    def test_excludes_a_detached_network(self, stop_gradient):
+        X = pt.tensor("X", shape=(None, 4))
+        online, target = Linear("online", 4, 2)(X), Linear("target", 4, 2)(X)
+        loss = ((online - stop_gradient(target)) ** 2).sum()
+
+        assert names(collect_trainable_params(loss)) == {
+            "online_W",
+            "online_b",
+            "target_W",
+            "target_b",
+        }
+        assert names(collect_differentiable_params(loss)) == {"online_W", "online_b"}
+
+    def test_keeps_a_parameter_that_is_also_reached_on_a_live_path(self):
+        X = pt.tensor("X", shape=(None, 4))
+        prediction = Linear("fc", 4, 2)(X)
+        loss = ((prediction - disconnected_grad(prediction)) ** 2).sum() + prediction.sum()
+
+        assert names(collect_differentiable_params(loss)) == {"fc_W", "fc_b"}
 
 
 class TestCollectNonTrainableParams:

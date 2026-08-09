@@ -3,6 +3,7 @@ import pytensor.tensor as pt
 import pytest
 
 from pytensor import config
+from pytensor.gradient import disconnected_grad
 from sklearn.datasets import load_digits, make_regression
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder, StandardScaler
 
@@ -237,3 +238,26 @@ def test_compile_train_includes_non_trainable_updates():
     step(rng.normal(size=(16, 4)).astype(config.floatX), np.zeros((16, 4), dtype=config.floatX))
 
     assert not np.allclose(running_mean.get_value(), before)
+
+
+def test_compile_train_leaves_a_stop_gradient_target_network_untouched():
+    # The DQN shape: a bootstrap target detached from the graph. Its weights must not move, and the online
+    # weights must.
+    X = pt.tensor("X", shape=(None, 4))
+    online = Linear("online", n_in=4, n_out=2)(X)
+    target = Linear("target", n_in=4, n_out=2)(X)
+    parameters = collect_trainable_params([online, target])
+    initialize(parameters)
+    loss = ((online - disconnected_grad(target)) ** 2).mean()
+
+    before = {parameter: parameter.get_value().copy() for parameter in parameters}
+    step = compile_train(loss, adam(learning_rate=1e-2), inputs=[X])
+    batch = np.random.default_rng(0).normal(size=(32, 4)).astype(config.floatX)
+    for _ in range(20):
+        step(batch)
+
+    moved = {
+        parameter.name: not np.allclose(parameter.get_value(), value)
+        for parameter, value in before.items()
+    }
+    assert moved == {"online_W": True, "online_b": True, "target_W": False, "target_b": False}
