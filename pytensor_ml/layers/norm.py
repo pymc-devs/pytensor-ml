@@ -5,6 +5,7 @@ from pytensor import config
 
 from pytensor_ml.base import Layer, LayerOp, UnaryLayerOp
 from pytensor_ml.params import NonTrainableParameter, TrainableParameter, non_trainable, trainable
+from pytensor_ml.state import OneInitializer, ZeroInitializer
 
 
 def _standardize(X, epsilon, axis, keepdims=False):
@@ -77,9 +78,17 @@ def _resolve_n_in(name: str, n_in: int | None, X: pt.TensorVariable | None) -> i
 
 def _affine_parameters(name: str, n_in: int) -> tuple[TrainableParameter, TrainableParameter]:
     """Build the learned shift and scale. Returns them in the ``(loc, scale)`` order that every norm
-    op unpacks its inputs in, so the two cannot drift apart."""
-    loc = trainable(np.zeros(n_in, dtype=config.floatX), f"{name}_loc")
-    scale = trainable(np.ones(n_in, dtype=config.floatX), f"{name}_scale")
+    op unpacks its inputs in, so the two cannot drift apart.
+
+    Both declare their initializer, so a network-wide scheme leaves the identity transform in place --
+    normalizing and then rescaling by a random factor defeats the point of the layer.
+    """
+    loc = trainable(
+        np.zeros(n_in, dtype=config.floatX), f"{name}_loc", initializer=ZeroInitializer()
+    )
+    scale = trainable(
+        np.ones(n_in, dtype=config.floatX), f"{name}_scale", initializer=OneInitializer()
+    )
     return loc, scale
 
 
@@ -151,7 +160,9 @@ class BatchNorm2D(Layer):
         Weight :math:`m` of the current batch statistic in the running-average update. Default is
         0.1.
     affine : bool, optional
-        Apply the learned scale :math:`\gamma` and shift :math:`\beta`. Default is True.
+        Apply the learned scale :math:`\gamma` and shift :math:`\beta`, starting from the identity
+        transform :math:`\gamma = 1`, :math:`\beta = 0`, which a network-wide initialization scheme
+        leaves in place. Default is True.
     track_running_stats : bool, optional
         Maintain running mean and variance for use at prediction time. Default is True.
 
@@ -283,7 +294,9 @@ class LayerNorm(Layer):
     epsilon : float, optional
         Constant :math:`\epsilon` added to the variance for numerical stability. Default is 1e-5.
     affine : bool, optional
-        Apply the learned scale :math:`\gamma` and shift :math:`\beta`. Default is True.
+        Apply the learned scale :math:`\gamma` and shift :math:`\beta`, starting from the identity
+        transform :math:`\gamma = 1`, :math:`\beta = 0`, which a network-wide initialization scheme
+        leaves in place. Default is True.
     """
 
     def __init__(

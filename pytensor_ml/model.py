@@ -41,11 +41,15 @@ class Model:
         """
         Initialize the trainable weights in place and return self.
 
+        A parameter that declares its own initializer keeps it, so ``scheme`` reaches the weights whose
+        starting value is a free choice and leaves the rest alone: a batch norm layer stays at its
+        identity transform, and biases stay at zero.
+
         Parameters
         ----------
         scheme : str or Initializer
-            Initialization scheme for the weights: the name of a built-in scheme, or an
-            :class:`~pytensor_ml.state.Initializer` instance. Default 'xavier_normal'.
+            Initialization scheme for the weights that do not declare one: the name of a built-in
+            scheme, or an :class:`~pytensor_ml.state.Initializer` instance. Default 'xavier_normal'.
         seed : int or numpy Generator, optional
             Seed for reproducible initialization.
         """

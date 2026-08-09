@@ -1,11 +1,13 @@
 import numpy as np
 import pytensor.tensor as pt
+import pytest
 
 from pytensor import config
 
 import pytensor_ml.model
 
-from pytensor_ml.layers import BatchNorm2D, Linear, Sequential
+from pytensor_ml.activations import ReLU
+from pytensor_ml.layers import BatchNorm2D, LayerNorm, Linear, Sequential
 from pytensor_ml.loss import SquaredError
 from pytensor_ml.model import Model
 from pytensor_ml.optim import sgd
@@ -69,6 +71,31 @@ class TestModelPredict:
 
         assert compile_count == 1
         np.testing.assert_array_equal(first, second)
+
+
+class TestModelInitialize:
+    @pytest.mark.parametrize(
+        "norm_layer", [BatchNorm2D, LayerNorm], ids=["batch_norm", "layer_norm"]
+    )
+    def test_leaves_a_norm_layer_at_the_identity_transform(self, norm_layer):
+        X = pt.tensor("X", shape=(None, 8))
+        norm = norm_layer("norm", n_in=4)
+        y = Sequential(Linear("fc1", 8, 4), norm, ReLU(), Linear("fc2", 4, 2))(X)
+
+        Model(X, y).initialize("xavier_normal", seed=0)
+
+        np.testing.assert_array_equal(norm.scale.get_value(), 1)
+        np.testing.assert_array_equal(norm.loc.get_value(), 0)
+
+    def test_draws_weight_matrices_and_leaves_biases_at_zero(self):
+        X = pt.tensor("X", shape=(None, 8))
+        fc1 = Linear("fc1", 8, 4)
+        y = Sequential(fc1, ReLU(), Linear("fc2", 4, 2))(X)
+
+        Model(X, y).initialize("xavier_normal", seed=0)
+
+        assert np.abs(fc1.W.get_value()).min() > 0
+        np.testing.assert_array_equal(fc1.b.get_value(), 0)
 
 
 def test_compile_train_accepts_a_prebuilt_loss():

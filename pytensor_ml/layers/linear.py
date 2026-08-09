@@ -5,6 +5,7 @@ from pytensor import config
 
 from pytensor_ml.base import Layer, UnaryLayerOp
 from pytensor_ml.params import trainable
+from pytensor_ml.state import ZeroInitializer
 
 
 def shape_to_str(shape):
@@ -23,6 +24,28 @@ class LinearLayer(UnaryLayerOp):
 
 
 class Linear(Layer):
+    r"""
+    Affine map :math:`y = x W + b`.
+
+    Parameters
+    ----------
+    name : str or None
+        Name prefix for the layer's parameters. Defaults to "Linear" when None.
+    n_in : int
+        Size of the input feature axis.
+    n_out : int
+        Size of the output feature axis.
+    bias : bool, optional
+        Add the learned shift :math:`b`, which starts at zero and stays there under a network-wide
+        initialization scheme. Default is True.
+
+    Notes
+    -----
+    The weight matrix :math:`W` starts at zero, and no gradient flows back through a zero matrix, so a
+    stack of these layers learns nothing until the weights are given a starting value. Call
+    :meth:`~pytensor_ml.model.Model.initialize`, or assign a value yourself, before training.
+    """
+
     def __init__(self, name: str | None, n_in: int, n_out: int, bias: bool = True):
         self.name = name if name else "Linear"
         self.n_in = n_in
@@ -34,7 +57,7 @@ class Linear(Layer):
 
         if self.bias:
             b_value = np.zeros(n_out, dtype=config.floatX)
-            self.b = trainable(b_value, f"{self.name}_b")
+            self.b = trainable(b_value, f"{self.name}_b", initializer=ZeroInitializer())
 
     def __call__(self, X: pt.TensorLike) -> pt.TensorVariable:
         X = pt.as_tensor(X)
