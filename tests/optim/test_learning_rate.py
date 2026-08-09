@@ -16,7 +16,9 @@ from pytensor_ml.optim import (
     sgd,
     substitute_schedule,
 )
-from pytensor_ml.params import step_counter, trainable
+from pytensor_ml.params import StepCounter, step_counter, trainable
+from pytensor_ml.pytensorf import collect_step_counters
+from pytensor_ml.pytensorf import function as pytensor_function
 
 RTOL = 1e-6
 
@@ -213,8 +215,9 @@ def test_two_training_functions_share_a_held_clock():
     assert int(clock.get_value()) == 6
 
 
-def test_compile_train_rejects_a_rule_that_advances_the_clock_itself():
-    """Two writers would leave the clock holding one advance while both were configured."""
+def test_compile_train_accepts_a_rule_that_advances_the_clock_the_same_way():
+    """Rules advance the clock they count their own steps on, so their write and the collected one agree.
+    Accepting it is what lets a rule's updates stand on their own outside compile_train."""
     _, loss = quadratic_problem()
     clock = step_counter()
 
@@ -222,7 +225,23 @@ def test_compile_train_rejects_a_rule_that_advances_the_clock_itself():
         updates = sgd(learning_rate=cosine_schedule(0.1, 10)(clock))(loss_or_gradients, parameters)
         return {**updates, clock: clock + 1}
 
-    with pytest.raises(ValueError, match="already updated by the rule"):
+    step = compile_train(loss, rule)
+    step()
+    step()
+
+    assert int(clock.get_value()) == 2  # advanced once per step, not twice
+
+
+def test_compile_train_rejects_a_rule_that_advances_the_clock_differently():
+    """Two disagreeing writers would leave the clock holding one of them while both looked configured."""
+    _, loss = quadratic_problem()
+    clock = step_counter()
+
+    def rule(loss_or_gradients, parameters):
+        updates = sgd(learning_rate=cosine_schedule(0.1, 10)(clock))(loss_or_gradients, parameters)
+        return {**updates, clock: clock + 5}
+
+    with pytest.raises(ValueError, match="not the one-step advance"):
         compile_train(loss, rule)
 
 
@@ -281,3 +300,42 @@ def test_a_clock_that_shadows_a_parameter_name_is_caught():
 
     with pytest.raises(ValueError, match="share the name 'w'"):
         compile_train(loss, sgd(learning_rate=cosine_schedule(0.1, 10)(shadowing_clock)))
+
+
+def test_a_rule_counts_its_own_steps_on_a_clock():
+    """The counter adam keeps for bias correction is a clock, so it is collected as one and a schedule can
+    read the same notion of time the rule uses."""
+    p, loss = quadratic_problem()
+    updates = adam(learning_rate=0.1)(loss, [p])
+
+    counters = collect_step_counters(list(updates.values()))
+    assert [counter.name for counter in counters] == ["adam/step_count"]
+    assert all(isinstance(counter, StepCounter) for counter in counters)
+
+
+def test_a_user_clock_out_of_step_with_a_rule_clock_is_caught():
+    """Two clocks can still coexist when the caller holds one of their own, and a checkpoint that restored
+    only one of them leaves the two measuring different times."""
+    p, loss = quadratic_problem()
+    their_clock = step_counter("their_clock")
+    rule = adam(learning_rate=0.1)
+    adam_clock = next(key for key in rule(loss, [p]) if key.name == "adam/step_count")
+    adam_clock.set_value(np.asarray(37, dtype="int64"))
+
+    with pytest.raises(ValueError, match="hold different step counts"):
+        compile_train(loss, rule, extra_outputs=[their_clock.astype("float64")])
+
+
+def test_a_caller_held_clock_keeps_advancing_for_other_readers():
+    """A clock is state that outlives the compile: the caller reads it, and so can another compiled function.
+    Compiling a training step must not take it out of the set that step advances."""
+    p, loss = quadratic_problem()
+    clock = step_counter("agent_clock")
+    step = compile_train(loss, adam(learning_rate=cosine_schedule(0.1, 100)(clock)))
+    epsilon = pytensor_function([], cosine_schedule(1.0, 100)(clock))
+
+    for _ in range(20):
+        step()
+
+    assert int(clock.get_value()) == 20
+    assert float(epsilon()) < 1.0

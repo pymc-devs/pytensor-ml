@@ -122,8 +122,9 @@ def collect_clock_updates(
     if len(step_counts) > 1:
         raise ValueError(
             f"Training clocks {sorted(str(counter.name) for counter in counters)} hold different step "
-            f"counts {sorted(step_counts)}. They all count training steps, so this means some of them were "
-            "restored from a checkpoint and others were not."
+            f"counts {sorted(step_counts)}. They all count training steps, so this usually means a "
+            "checkpoint restored some of them and not the others. Restore all of them, or set them to the "
+            "same count before compiling."
         )
     return {counter: counter.advance() for counter in counters}
 

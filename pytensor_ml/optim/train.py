@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 
 from pytensor.compile import Function, SharedVariable
-from pytensor.graph.basic import Variable
+from pytensor.graph.basic import Variable, equal_computations
 from pytensor.tensor import TensorVariable
 
 from pytensor_ml.optim.base import Parameter, UpdateRule, require_unique_state_names
@@ -79,12 +79,18 @@ def compile_train(
     for clock, next_count in collect_clock_updates(
         [loss, *extra_outputs, *updates.values()]
     ).items():
-        if clock in updates:
+        written = updates.get(clock)
+        if written is None:
+            updates[clock] = next_count
+        elif equal_computations([written], [next_count]):
+            pass  # the rule advances this clock itself, identically, so its own write stands
+        else:
             raise ValueError(
-                f"The training clock {clock.name!r} is already updated by the rule. Clocks advance once "
-                "per step on their own; drop the explicit update."
+                f"The training clock {clock.name!r} is already advanced by an expression that is not the "
+                "one-step advance. A clock advances once per step, so the two writes cannot both take "
+                "effect; drop yours, or write it as `clock + 1` if it is the same advance spelled "
+                "differently."
             )
-        updates[clock] = next_count
 
     require_unique_state_names(updates)
 

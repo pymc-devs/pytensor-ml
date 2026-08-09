@@ -10,6 +10,7 @@ from pytensor.gradient import grad
 from pytensor.tensor import TensorVariable
 from pytensor.tensor.sharedvar import TensorSharedVariable
 
+from pytensor_ml.params import step_counter
 from pytensor_ml.pytensorf import rewrite_pregrad
 
 type Parameter = TensorSharedVariable
@@ -150,11 +151,14 @@ def state_for(parameter: Parameter, slot: str, fill_value: float = 0.0) -> Param
 
 
 def counter(name: str) -> Parameter:
-    """Return an int64 step counter shared variable initialized to zero, reused across invocations of a
-    rule wrapped in :func:`reuses_state` so its step count keeps advancing."""
-    return _reuse_or_allocate(
-        name, lambda: pytensor.shared(np.asarray(0, dtype="int64"), name=name)
-    )
+    """Return the training clock a rule counts its own steps on, reused across invocations of a rule wrapped
+    in :func:`reuses_state` so the count keeps advancing.
+
+    A :class:`~pytensor_ml.params.StepCounter` rather than a plain shared variable, so a schedule can read
+    the same notion of time the rule uses, and :func:`~pytensor_ml.pytensorf.collect_clock_updates` advances
+    it for a caller who does not write the advance themselves.
+    """
+    return _reuse_or_allocate(name, lambda: step_counter(name))
 
 
 def scalar_state(name: str, fill_value: float = 0.0) -> Parameter:

@@ -152,6 +152,21 @@ def test_adam_first_step_is_sign_descent():
     np.testing.assert_allclose(step, lr * np.sign(start), rtol=RTOL)
 
 
+def test_rule_updates_advance_their_counter_without_compile_train():
+    """adam_updates has to stand on its own: bias correction reads the counter, so a caller who compiles the
+    updates directly must get an advancing count rather than one frozen at the first step."""
+    p = trainable(np.zeros(3), name="w")
+    loss = (p**2).sum()
+    updates = adam_updates(loss, [p])
+    clock = next(key for key in updates if key.name == "adam/step_count")
+
+    step = function([], loss, updates=updates)
+    step()
+    step()
+
+    assert int(clock.get_value()) == 2
+
+
 def test_adam_updates_keyed_by_object_with_named_state():
     """State is discovered by object identity; names exist only for serialization."""
     p = trainable(np.zeros(3), name="w")
