@@ -47,10 +47,11 @@ def sgd(
 
     Parameters
     ----------
-    learning_rate : float, shared tensor variable, or Schedule
-        Step size. A float is baked into the graph; a scalar shared variable can be steered from Python
-        with ``set_value``; a schedule is substituted into the rate the rule uses, on-graph, from an owned
-        step counter. Default 0.01.
+    learning_rate : float, shared tensor variable, symbolic scalar, or Schedule
+        Step size. A float is baked into the graph; a scalar shared variable can be steered from Python with
+        ``set_value``; any scalar graph is used as the rate directly, as in
+        ``cosine_schedule(3e-4, 10_000)(step_counter())``; an unapplied schedule is substituted into the
+        rate the rule uses, on-graph, from an owned step counter. Default 0.01.
     momentum : float
         Momentum coefficient. A value of 0 (the default) gives plain SGD.
     nesterov : bool
@@ -81,7 +82,8 @@ def adam(
     """
     Adam optimizer. See :func:`~pytensor_ml.optim.rules.adam_updates` for the update rule.
 
-    ``learning_rate`` accepts a float, a scalar shared variable, or a schedule; see :func:`sgd`.
+    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
+    :func:`sgd`.
     """
 
     @reuses_state
@@ -116,7 +118,8 @@ def adamw(
     AdamW optimizer (Adam with decoupled weight decay). See
     :func:`~pytensor_ml.optim.rules.adamw_updates`.
 
-    ``learning_rate`` accepts a float, a scalar shared variable, or a schedule; see :func:`sgd`.
+    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
+    :func:`sgd`.
     """
 
     @reuses_state
@@ -150,7 +153,8 @@ def nadam(
     Nadam optimizer (Adam with Nesterov momentum). See
     :func:`~pytensor_ml.optim.rules.nadam_updates`.
 
-    ``learning_rate`` accepts a float, a scalar shared variable, or a schedule; see :func:`sgd`.
+    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
+    :func:`sgd`.
     """
 
     @reuses_state
@@ -181,7 +185,8 @@ def adamax(
     AdaMax optimizer (Adam with an infinity-norm denominator). See
     :func:`~pytensor_ml.optim.rules.adamax_updates`.
 
-    ``learning_rate`` accepts a float, a scalar shared variable, or a schedule; see :func:`sgd`.
+    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
+    :func:`sgd`.
     """
 
     @reuses_state
@@ -242,7 +247,8 @@ def rmsprop(
     """
     RMSProp optimizer. See :func:`~pytensor_ml.optim.rules.rmsprop_updates`.
 
-    ``learning_rate`` accepts a float, a scalar shared variable, or a schedule; see :func:`sgd`.
+    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
+    :func:`sgd`.
     """
 
     @reuses_state
@@ -268,7 +274,8 @@ def adagrad(learning_rate: LearningRate = 0.01, epsilon: float = 1e-8) -> Update
     """
     AdaGrad optimizer. See :func:`~pytensor_ml.optim.rules.adagrad_updates`.
 
-    ``learning_rate`` accepts a float, a scalar shared variable, or a schedule; see :func:`sgd`.
+    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
+    :func:`sgd`.
     """
 
     @reuses_state
@@ -290,7 +297,8 @@ def adadelta(
     """
     AdaDelta optimizer. See :func:`~pytensor_ml.optim.rules.adadelta_updates`.
 
-    ``learning_rate`` accepts a float, a scalar shared variable, or a schedule; see :func:`sgd`.
+    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
+    :func:`sgd`.
     """
 
     @reuses_state
