@@ -79,8 +79,10 @@ def cosine_schedule(
         final_rate = np.asarray(final_learning_rate, dtype=floatX)
 
         progress = _clamped_progress(step_count, total_steps)
-        cosine_factor = 0.5 * (1.0 + pt.cos(np.pi * progress))
-        return final_rate + (initial_rate - final_rate) * cosine_factor
+        # Weighting both endpoints keeps each one exact: at weight 0 or 1 the other term vanishes, where
+        # `final + (initial - final) * factor` recovers `initial` by cancellation instead.
+        weight = 0.5 * (1.0 - pt.cos(np.pi * progress))
+        return initial_rate * (1.0 - weight) + final_rate * weight
 
     return schedule
 
@@ -131,7 +133,7 @@ def linear_schedule(
         final_rate = np.asarray(final_learning_rate, dtype=floatX)
 
         progress = _clamped_progress(step_count, total_steps, transition_begin)
-        return initial_rate + (final_rate - initial_rate) * progress
+        return initial_rate * (1.0 - progress) + final_rate * progress
 
     return schedule
 
@@ -251,7 +253,8 @@ def polynomial_schedule(
         exponent = np.asarray(power, dtype=floatX)
 
         remaining = 1.0 - _clamped_progress(step_count, total_steps, transition_begin)
-        return final_rate + (initial_rate - final_rate) * remaining**exponent
+        weight = 1.0 - remaining**exponent
+        return initial_rate * (1.0 - weight) + final_rate * weight
 
     return schedule
 

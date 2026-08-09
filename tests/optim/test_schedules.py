@@ -215,9 +215,11 @@ def test_schedule_ramps_up_when_the_endpoint_is_higher(schedule_factory):
     no separate warmup function."""
     rates = evaluate_schedule(schedule_factory(1e-4, 4, 1e-2), [0, 1, 2, 3, 4, 100])
 
-    np.testing.assert_allclose(rates[0], 1e-4, rtol=1e-4)
+    # Endpoints two orders of magnitude apart: pytensor refactors the interpolation while fusing it, so
+    # under floatX=float32 the ends land within rounding rather than exactly.
+    np.testing.assert_allclose(rates[0], 1e-4, rtol=1e-5)
     assert np.all(np.diff(rates[:5]) > 0.0)
-    np.testing.assert_allclose(rates[4:], 1e-2, rtol=1e-4)
+    np.testing.assert_allclose(rates[4:], 1e-2, rtol=1e-5)
 
 
 # step_decay decays indefinitely instead of over a horizon, so it takes (decay_every, decay_factor) rather
