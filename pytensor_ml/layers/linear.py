@@ -41,9 +41,10 @@ class Linear(Layer):
 
     Notes
     -----
-    The weight matrix :math:`W` starts at zero, and no gradient flows back through a zero matrix, so a
-    stack of these layers learns nothing until the weights are given a starting value. Call
-    :meth:`~pytensor_ml.model.Model.initialize`, or assign a value yourself, before training.
+    The weight matrix :math:`W` starts at zero, so in a stack every activation below the first layer is
+    zero and every weight matrix receives a zero gradient: an uninitialized network can fit only its
+    output bias, and predicts a constant. Call :meth:`~pytensor_ml.model.Model.initialize`, or assign a
+    value yourself, before training.
     """
 
     def __init__(self, name: str | None, n_in: int, n_out: int, bias: bool = True):
