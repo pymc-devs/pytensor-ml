@@ -1,10 +1,39 @@
 from pytensor.graph import FunctionGraph, RewriteDatabaseQuery, rewrite_graph
 from pytensor.tensor.variable import Variable
 
+# Pytensor's gradient markers -- disconnected_grad, zero_grad, grad_clip, grad_scale -- are all ViewOp
+# subclasses that do nothing at runtime, so canonicalize's local_view_op splices them out. Dropping one
+# before differentiating discards the instruction it encodes, and a stop-gradient silently stops stopping.
+# Keeping them costs nothing: pytensor removes them at compile time, after grad has read them.
+_REWRITES_THAT_DROP_GRADIENT_MARKERS = ("local_view_op",)
+
 
 def rewrite_pregrad(graph):
-    """Apply simplifying or stabilizing rewrites to graph that are safe to use pre-grad."""
-    return rewrite_graph(graph, include=("canonicalize", "stabilize"))
+    """
+    Apply simplifying and stabilizing rewrites that are safe to use before differentiating.
+
+    Canonicalization and stabilization put the graph in the form pytensor differentiates most stably.
+    Rewrites that would strip pytensor's gradient markers are held back, so a
+    :func:`pytensor.gradient.disconnected_grad` or :func:`pytensor.gradient.grad_clip` in the graph still
+    reaches ``grad``.
+
+    Parameters
+    ----------
+    graph : FunctionGraph, Variable, or sequence of Variable
+        The graph to rewrite.
+
+    Returns
+    -------
+    FunctionGraph, Variable, or list of Variable
+        The rewritten graph, matching the form of ``graph``. A FunctionGraph is rewritten in place and
+        returned; a Variable or sequence is rewritten on a clone, leaving the original untouched.
+    """
+    return rewrite_graph(
+        graph,
+        include=("canonicalize", "stabilize"),
+        exclude=_REWRITES_THAT_DROP_GRADIENT_MARKERS,
+        clone=True,
+    )
 
 
 def rewrite_for_prediction(graph):
