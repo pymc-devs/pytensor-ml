@@ -97,6 +97,28 @@ class TestModelInitialize:
         assert np.abs(fc1.W.get_value()).min() > 0
         np.testing.assert_array_equal(fc1.b.get_value(), 0)
 
+    def test_a_declared_initializer_does_not_freeze_the_parameter(self):
+        """Declaring an initializer protects a starting value, not the parameter. Excluding declared
+        parameters from training instead would leave batch norm's scale pinned at one and still satisfy
+        every assertion above."""
+        rng = np.random.default_rng(0)
+        X = pt.tensor("X", shape=(None, 8))
+        norm = BatchNorm2D("norm", n_in=4)
+        y = Sequential(Linear("fc1", 8, 4), norm, ReLU(), Linear("fc2", 4, 2))(X)
+        model = Model(X, y).initialize("xavier_normal", seed=0)
+
+        target = pt.matrix("target")
+        step = model.compile_train(
+            sgd(learning_rate=0.1), loss=((y - target) ** 2).mean(), inputs=[X, target]
+        )
+        step(
+            rng.normal(size=(8, 8)).astype(config.floatX),
+            rng.normal(size=(8, 2)).astype(config.floatX),
+        )
+
+        assert not np.array_equal(norm.scale.get_value(), np.ones(4))
+        assert not np.array_equal(norm.loc.get_value(), np.zeros(4))
+
 
 def test_compile_train_accepts_a_prebuilt_loss():
     # An autoencoder reconstructs its own input, so there is no target separate from X and the supervised
