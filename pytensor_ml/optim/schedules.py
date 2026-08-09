@@ -7,6 +7,15 @@ from pytensor.tensor import TensorVariable
 from pytensor_ml.optim.base import Schedule
 
 
+def _validate_rates(learning_rate: float, min_learning_rate: float) -> None:
+    """Raise ``ValueError`` unless the two rates describe a decay."""
+    if min_learning_rate > learning_rate:
+        raise ValueError(
+            f"min_learning_rate must not exceed learning_rate, got {min_learning_rate} > "
+            f"{learning_rate}. Schedules in this module decay, so the floor is the smaller of the two."
+        )
+
+
 def _validate_horizon(
     learning_rate: float,
     total_steps: int,
@@ -18,11 +27,7 @@ def _validate_horizon(
         raise ValueError(f"total_steps must be at least 1, got {total_steps}.")
     if transition_begin < 0:
         raise ValueError(f"transition_begin must not be negative, got {transition_begin}.")
-    if min_learning_rate > learning_rate:
-        raise ValueError(
-            f"min_learning_rate must not exceed learning_rate, got {min_learning_rate} > "
-            f"{learning_rate}. Schedules in this module decay, so the floor is the smaller of the two."
-        )
+    _validate_rates(learning_rate, min_learning_rate)
 
 
 def _clamped_progress(
