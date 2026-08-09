@@ -8,7 +8,7 @@ from pytensor_ml.optim import (
     adam,
     chain,
     compile_train,
-    cosine_annealing,
+    cosine_schedule,
     rprop,
     rprop_updates,
     scalar_state,
@@ -55,7 +55,7 @@ def test_shared_rate_is_steerable_from_python():
 
 def test_schedule_rate_alone_sets_the_step_size():
     p, loss = quadratic_problem()
-    step = compile_train(loss, sgd(learning_rate=cosine_annealing(0.1, 2)))
+    step = compile_train(loss, sgd(learning_rate=cosine_schedule(0.1, 2)))
 
     step()  # step 0 -> lr = 0.1
     np.testing.assert_allclose(p.get_value(), [1.8], rtol=RTOL)
@@ -68,7 +68,7 @@ def test_schedule_rate_alone_sets_the_step_size():
 def test_substitution_matches_terminal_scaling_for_a_multiplicative_rate():
     """The two mechanisms must agree wherever the rate is a plain multiplier on the step, which holds for
     every rule in the tree. Only their behaviour on rules that consume the rate elsewhere differs."""
-    schedule = cosine_annealing(0.05, 20)
+    schedule = cosine_schedule(0.05, 20)
 
     substituted, substituted_loss = quadratic_problem()
     substituted_step = compile_train(substituted_loss, adam(learning_rate=schedule))
@@ -87,7 +87,7 @@ def test_substitution_matches_terminal_scaling_for_a_multiplicative_rate():
 
 def test_scheduled_rule_publishes_the_applied_rate():
     p, loss = quadratic_problem()
-    rule = adam(learning_rate=cosine_annealing(0.1, 4))
+    rule = adam(learning_rate=cosine_schedule(0.1, 4))
     updates = rule(loss, [p])
     published_rate = next(key for key in updates if key.name == "adam/learning_rate")
 
@@ -97,7 +97,7 @@ def test_scheduled_rule_publishes_the_applied_rate():
 
 @pytest.mark.parametrize(
     "learning_rate",
-    [cosine_annealing(0.1, 10), scalar_state("rprop/rejected_rate", 0.1)],
+    [cosine_schedule(0.1, 10), scalar_state("rprop/rejected_rate", 0.1)],
     ids=["schedule", "shared_variable"],
 )
 def test_rprop_rejects_a_symbolic_rate(learning_rate):
@@ -123,7 +123,7 @@ def test_substitution_preserves_parameter_identity():
     """The updates must keep updating the parameter object the model holds; a clone would train a copy and
     silently leave the model's weights untouched."""
     p, loss = quadratic_problem()
-    rule = adam(learning_rate=cosine_annealing(0.1, 4))
+    rule = adam(learning_rate=cosine_schedule(0.1, 4))
 
     assert p in rule(loss, [p])
     # Adam's first step is -lr * sign(gradient) once bias correction is applied, so p = 2 - 0.1.
@@ -135,7 +135,7 @@ def test_schedule_reaches_a_rate_applied_by_a_chained_scale():
     """sgd with momentum applies its rate through `scale`, not through sgd_updates, so substitution has to
     find it there. Unit-rate sgd gives step -p and momentum leaves the first step unchanged."""
     p, loss = quadratic_problem()
-    step = compile_train(loss, sgd(learning_rate=cosine_annealing(0.1, 4), momentum=0.9))
+    step = compile_train(loss, sgd(learning_rate=cosine_schedule(0.1, 4), momentum=0.9))
 
     step()  # rate 0.1 on a step of -2, so p = 2 - 0.2
     np.testing.assert_allclose(p.get_value(), [1.8], rtol=RTOL)

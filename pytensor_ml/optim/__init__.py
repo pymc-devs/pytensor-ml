@@ -33,10 +33,10 @@ from pytensor_ml.optim.rules import (
     sgd_updates,
 )
 from pytensor_ml.optim.schedules import (
-    cosine_annealing,
-    exponential_decay,
-    linear_decay,
-    polynomial_decay,
+    cosine_schedule,
+    exponential_schedule,
+    linear_schedule,
+    polynomial_schedule,
     step_decay,
 )
 from pytensor_ml.optim.train import compile_train
@@ -70,13 +70,13 @@ __all__ = [
     "clip_by_global_norm",
     "clip_by_value",
     "compile_train",
-    "cosine_annealing",
-    "exponential_decay",
+    "cosine_schedule",
+    "exponential_schedule",
     "get_gradients",
-    "linear_decay",
+    "linear_schedule",
     "nadam",
     "nadam_updates",
-    "polynomial_decay",
+    "polynomial_schedule",
     "rmsprop",
     "rmsprop_updates",
     "rprop",
