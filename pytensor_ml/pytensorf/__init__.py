@@ -1,10 +1,12 @@
 from pytensor_ml.pytensorf.collect import (
     as_output_list,
+    collect_clock_updates,
     collect_data_inputs,
     collect_graph_inputs,
     collect_non_trainable_params,
     collect_non_trainable_updates,
     collect_shared_variables,
+    collect_step_counters,
     collect_trainable_params,
 )
 from pytensor_ml.pytensorf.compile import compile_predict, function
@@ -15,11 +17,13 @@ __all__ = [
     "RandomSeed",
     "SeedSequenceSeed",
     "as_output_list",
+    "collect_clock_updates",
     "collect_data_inputs",
     "collect_graph_inputs",
     "collect_non_trainable_params",
     "collect_non_trainable_updates",
     "collect_shared_variables",
+    "collect_step_counters",
     "collect_trainable_params",
     "compile_predict",
     "find_rng_nodes",

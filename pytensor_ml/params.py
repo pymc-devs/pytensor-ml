@@ -2,6 +2,7 @@ import numpy as np
 
 from pytensor.tensor.sharedvar import TensorSharedVariable
 from pytensor.tensor.type import TensorType
+from pytensor.tensor.variable import TensorVariable
 
 
 class TrainableParameter(TensorSharedVariable):
@@ -10,6 +11,14 @@ class TrainableParameter(TensorSharedVariable):
 
 class NonTrainableParameter(TensorSharedVariable):
     """Marker class for non-trainable state (running mean/var in BatchNorm)."""
+
+
+class StepCounter(TensorSharedVariable):
+    """Training time: an integer scalar counting training steps, whose transition is :meth:`advance`."""
+
+    def advance(self) -> TensorVariable:
+        """Return the expression for this counter's value on the next training step."""
+        return self + 1
 
 
 def _make_parameter[T: TensorSharedVariable](
@@ -54,3 +63,23 @@ def non_trainable(value, name=None, shape=None, strict=False, **kwargs) -> NonTr
     out of the set an optimizer updates.
     """
     return _make_parameter(NonTrainableParameter, value, name, shape, strict, **kwargs)
+
+
+def step_counter(name: str = "step_count") -> StepCounter:
+    """
+    Create a training clock: an integer scalar counting training steps, starting at zero.
+
+    Schedules and policies read the clock to place themselves in time, and
+    :func:`~pytensor_ml.pytensorf.collect_clock_updates` advances it once per step however many of them read
+    it. Hold the returned object and pass it where it is needed: readers share a clock by referring to the
+    same variable, never by name.
+
+    Parameters
+    ----------
+    name : str, optional
+        Name for the counter. Training state is matched by name at serialization boundaries. Default
+        'step_count'.
+    """
+    return _make_parameter(
+        StepCounter, np.asarray(0, dtype="int64"), name, shape=None, strict=False
+    )

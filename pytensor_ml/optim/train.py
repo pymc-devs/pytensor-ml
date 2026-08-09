@@ -6,6 +6,7 @@ from pytensor.tensor import TensorVariable
 
 from pytensor_ml.optim.base import Parameter, UpdateRule, require_unique_state_names
 from pytensor_ml.pytensorf import (
+    collect_clock_updates,
     collect_data_inputs,
     collect_non_trainable_updates,
     collect_trainable_params,
@@ -26,8 +27,8 @@ def compile_train(
     Compile a one-step training function from a loss graph and an update rule.
 
     Differentiates the loss via ``rule``, applies the resulting updates, folds in any non-trainable state
-    updates (such as batch-norm running statistics), and compiles. The parameters and data inputs are
-    collected from ``loss`` unless given explicitly.
+    updates (such as batch-norm running statistics), advances every training clock the step reads, and
+    compiles. The parameters and data inputs are collected from ``loss`` unless given explicitly.
 
     Parameters
     ----------
@@ -69,6 +70,18 @@ def compile_train(
     # dict.update rejects the narrower NonTrainableParameter keys.
     for parameter, new_value in collect_non_trainable_updates(loss).items():
         updates[parameter] = new_value
+
+    # Collected from the assembled updates rather than from the loss alone: a clock is read by a schedule
+    # or a policy, which live in the updates, where an RNG or a running statistic is read by the model.
+    for clock, next_count in collect_clock_updates(
+        [loss, *extra_outputs, *updates.values()]
+    ).items():
+        if clock in updates:
+            raise ValueError(
+                f"The training clock {clock.name!r} is already updated by the rule. Clocks advance once "
+                "per step on their own; drop the explicit update."
+            )
+        updates[clock] = next_count
 
     require_unique_state_names(updates)
 

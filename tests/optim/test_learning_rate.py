@@ -16,7 +16,7 @@ from pytensor_ml.optim import (
     sgd,
     substitute_schedule,
 )
-from pytensor_ml.params import trainable
+from pytensor_ml.params import step_counter, trainable
 
 RTOL = 1e-6
 
@@ -139,3 +139,145 @@ def test_schedule_reaches_a_rate_applied_by_a_chained_scale():
 
     step()  # rate 0.1 on a step of -2, so p = 2 - 0.2
     np.testing.assert_allclose(p.get_value(), [1.8], rtol=RTOL)
+
+
+def test_a_clock_read_by_a_schedule_drives_the_rate():
+    p, loss = quadratic_problem()
+    clock = step_counter()
+    step = compile_train(loss, sgd(learning_rate=cosine_schedule(0.1, 10)(clock)))
+
+    step()  # rate at step 0 is 0.1 -> p = 2 - 0.1 * 2
+    np.testing.assert_allclose(p.get_value(), [1.8], rtol=RTOL)
+    assert int(clock.get_value()) == 1
+
+
+def test_a_clocked_schedule_matches_substitution_over_many_steps():
+    """The clock has to place the schedule at the same step the substituted counter would."""
+    schedule = cosine_schedule(0.05, 20)
+
+    substituted, substituted_loss = quadratic_problem()
+    substituted_step = compile_train(substituted_loss, adam(learning_rate=schedule))
+
+    clocked, clocked_loss = quadratic_problem()
+    clock = step_counter()
+    clocked_step = compile_train(clocked_loss, adam(learning_rate=schedule(clock)))
+
+    for _ in range(40):
+        substituted_step()
+        clocked_step()
+
+    np.testing.assert_allclose(clocked.get_value(), substituted.get_value(), rtol=RTOL)
+
+
+def test_a_clocked_rate_is_available_as_an_extra_output():
+    """The rate is a node in the graph, so the rate that was applied comes back with the loss."""
+    _, loss = quadratic_problem()
+    clock = step_counter()
+    schedule = cosine_schedule(0.1, 4)
+    learning_rate = schedule(clock)
+    step = compile_train(loss, sgd(learning_rate=learning_rate), extra_outputs=[learning_rate])
+
+    applied = [float(step()[1]) for _ in range(4)]
+    expected = [float(schedule(pt.as_tensor(t, dtype="int64")).eval()) for t in range(4)]
+
+    np.testing.assert_allclose(applied, expected, rtol=RTOL)
+
+
+def test_a_clock_advances_once_when_two_schedules_read_it():
+    """Two rates off one clock must not tick it twice, or both schedules run at double speed."""
+    _, loss = quadratic_problem()
+    clock = step_counter()
+    fast = cosine_schedule(0.1, 10)(clock)
+    slow = cosine_schedule(0.01, 10)(clock)
+    step = compile_train(loss, sgd(learning_rate=fast + slow), extra_outputs=[fast, slow])
+
+    for _ in range(3):
+        step()
+
+    assert int(clock.get_value()) == 3
+
+
+def test_two_training_functions_share_a_held_clock():
+    """Compiling twice from one configured rule needs no state memoization when the caller owns time."""
+    _, loss = quadratic_problem()
+    clock = step_counter()
+    rule = sgd(learning_rate=cosine_schedule(0.1, 10)(clock))
+
+    first = compile_train(loss, rule)
+    second = compile_train(loss, rule)
+    for _ in range(3):
+        first()
+    for _ in range(3):
+        second()
+
+    assert int(clock.get_value()) == 6
+
+
+def test_compile_train_rejects_a_rule_that_advances_the_clock_itself():
+    """Two writers would leave the clock holding one advance while both were configured."""
+    _, loss = quadratic_problem()
+    clock = step_counter()
+
+    def rule(loss_or_gradients, parameters):
+        updates = sgd(learning_rate=cosine_schedule(0.1, 10)(clock))(loss_or_gradients, parameters)
+        return {**updates, clock: clock + 1}
+
+    with pytest.raises(ValueError, match="already updated by the rule"):
+        compile_train(loss, rule)
+
+
+def test_a_clock_read_only_by_an_extra_output_still_advances():
+    """Collection covers the diagnostics too, or a reported step count would sit at zero."""
+    _, loss = quadratic_problem()
+    clock = step_counter()
+    step = compile_train(loss, sgd(learning_rate=0.1), extra_outputs=[clock.astype("float64")])
+
+    reported = [float(step()[1]) for _ in range(3)]
+
+    assert reported == [0.0, 1.0, 2.0]
+    assert int(clock.get_value()) == 3
+
+
+def test_a_clock_reachable_only_from_the_reported_loss_still_advances():
+    """A rule is free to ignore the loss it is handed and build updates from gradients it already has, which
+    leaves the loss graph out of the updates entirely. The clock is then reachable only from the loss the
+    function reports, and it still has to tick."""
+    p, loss = quadratic_problem()
+    clock = step_counter()
+    reported_loss = loss + clock.astype(config.floatX)
+    precomputed = [pt.grad(loss, p)]
+
+    step = compile_train(
+        reported_loss,
+        lambda _, parameters: sgd(learning_rate=0.1)(precomputed, parameters),
+        parameters=[p],
+    )
+    step()
+    step()
+
+    assert int(clock.get_value()) == 2
+
+
+def test_a_restored_clock_resumes_the_schedule_where_it_left_off():
+    """Holding the clock is what makes a checkpoint resume mid-curve rather than restart the schedule."""
+    _, loss = quadratic_problem()
+    clock = step_counter()
+    schedule = cosine_schedule(0.1, 20)
+    learning_rate = schedule(clock)
+    step = compile_train(loss, sgd(learning_rate=learning_rate), extra_outputs=[learning_rate])
+
+    clock.set_value(np.asarray(15, dtype="int64"))
+    _, applied = step()
+
+    expected = float(schedule(pt.as_tensor(15, dtype="int64")).eval())
+    np.testing.assert_allclose(applied, expected, rtol=RTOL)
+    assert int(clock.get_value()) == 16
+
+
+def test_a_clock_that_shadows_a_parameter_name_is_caught():
+    """Clocks are collected before the name guard runs, so they cannot silently alias parameter state."""
+    _, loss = quadratic_problem()
+    shadowing_clock = step_counter(name="w")
+
+    with pytest.raises(ValueError, match="share the name 'w'"):
+        compile_train(loss, sgd(learning_rate=cosine_schedule(0.1, 10)(shadowing_clock)))

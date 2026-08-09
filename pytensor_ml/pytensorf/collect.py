@@ -7,7 +7,7 @@ from pytensor.graph.traversal import ancestors
 from pytensor.tensor import TensorVariable
 
 from pytensor_ml.base import StatefulOp
-from pytensor_ml.params import NonTrainableParameter, TrainableParameter
+from pytensor_ml.params import NonTrainableParameter, StepCounter, TrainableParameter
 
 
 def as_output_list(outputs: Variable | Sequence[Variable]) -> list[Variable]:
@@ -55,6 +55,47 @@ def collect_non_trainable_params(
     return _collect_inputs_of_type(outputs, NonTrainableParameter)
 
 
+def collect_step_counters(outputs: Variable | Sequence[Variable]) -> list[StepCounter]:
+    """Collect the training clocks the graph reads."""
+    return _collect_inputs_of_type(outputs, StepCounter)
+
+
+def collect_clock_updates(
+    outputs: Variable | Sequence[Variable],
+) -> dict[StepCounter, TensorVariable]:
+    """
+    Collect the advance for every training clock the graph reads, ready to pass as a function's ``updates``.
+
+    A clock advances once per step however many schedules, policies, and diagnostics read it, because
+    readers share a clock by referring to the same variable rather than by name.
+
+    Parameters
+    ----------
+    outputs
+        One or more graph outputs to trace back from.
+
+    Returns
+    -------
+    clock_updates : dict
+        Mapping from each clock the graph reads to the expression for its next value.
+
+    Raises
+    ------
+    ValueError
+        If two clocks the graph reads hold different step counts. They all count training steps, so a
+        disagreement means some of them were restored from a checkpoint and others were not.
+    """
+    counters = collect_step_counters(outputs)
+    step_counts = {int(counter.get_value()) for counter in counters}
+    if len(step_counts) > 1:
+        raise ValueError(
+            f"Training clocks {sorted(str(counter.name) for counter in counters)} hold different step "
+            f"counts {sorted(step_counts)}. They all count training steps, so this means some of them were "
+            "restored from a checkpoint and others were not."
+        )
+    return {counter: counter.advance() for counter in counters}
+
+
 def collect_non_trainable_updates(
     outputs: Variable | Sequence[Variable],
 ) -> dict[NonTrainableParameter, TensorVariable]:
@@ -86,10 +127,12 @@ def collect_non_trainable_updates(
 
 __all__ = [
     "as_output_list",
+    "collect_clock_updates",
     "collect_data_inputs",
     "collect_graph_inputs",
     "collect_non_trainable_params",
     "collect_non_trainable_updates",
     "collect_shared_variables",
+    "collect_step_counters",
     "collect_trainable_params",
 ]
