@@ -72,12 +72,12 @@ def collect_differentiable_params(
     list of TrainableParameter
         The differentiable parameters, in graph-input order.
     """
-    stop_gradients = [
+    stop_gradient_outputs = [
         variable
         for variable in ancestors(as_output_list(outputs))
         if variable.owner is not None and isinstance(variable.owner.op, DisconnectedGrad | ZeroGrad)
     ]
-    return _collect_inputs_of_type(outputs, TrainableParameter, blockers=stop_gradients)
+    return _collect_inputs_of_type(outputs, TrainableParameter, blockers=stop_gradient_outputs)
 
 
 def collect_non_trainable_params(

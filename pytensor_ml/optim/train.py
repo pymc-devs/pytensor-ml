@@ -38,7 +38,9 @@ def compile_train(
         A configured optimizer ``(loss_or_gradients, parameters) -> Updates``, e.g. ``adam(1e-3)``.
     parameters : sequence of shared tensor variable, optional
         Parameters to optimize. Collected from ``loss`` with :func:`collect_differentiable_params` when
-        omitted, so parameters the loss detaches with a stop-gradient are left alone.
+        omitted, so parameters the loss detaches with a stop-gradient are left alone. A detached parameter
+        is still initialized and checkpointed, since :func:`collect_trainable_params` reaches it; only the
+        optimizer skips it.
     inputs : sequence of Variable, optional
         Data inputs of the compiled function, in call order. Collected from ``loss`` and ``extra_outputs``
         with :func:`collect_data_inputs` when omitted; pass them explicitly when call order matters (e.g.
