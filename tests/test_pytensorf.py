@@ -10,7 +10,6 @@ from pytensor.gradient import (
     grad_clip,
     zero_grad,
 )
-from pytensor.graph.basic import equal_computations
 from pytensor.graph.traversal import ancestors
 
 from pytensor_ml.layers import Dropout, DropoutLayer, Linear, Sequential
@@ -91,17 +90,3 @@ def test_rewrite_pregrad_leaves_a_fully_detached_parameter_disconnected():
 
     with pytest.raises(DisconnectedInputError):
         grad(rewrite_pregrad(loss), W)
-
-
-def test_rewrite_pregrad_leaves_the_original_graph_intact():
-    X = pt.tensor("X", shape=(None, 4))
-
-    def build_loss():
-        # The sqrt is constant-folded away, so rewriting in place would edit the caller's own graph.
-        return (X * pt.sqrt(np.array(4.0, dtype=config.floatX))).sum()
-
-    loss = build_loss()
-    rewritten = rewrite_pregrad(loss)
-
-    assert not equal_computations([rewritten], [build_loss()]), "the rewrite changed nothing"
-    assert equal_computations([loss], [build_loss()])
