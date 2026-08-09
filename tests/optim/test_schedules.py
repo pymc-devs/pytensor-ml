@@ -7,8 +7,10 @@ from pytensor.tensor import lscalar
 from pytensor_ml.optim import (
     chain,
     compile_train,
+    constant_schedule,
     cosine_schedule,
     exponential_schedule,
+    join_schedules,
     linear_schedule,
     polynomial_schedule,
     scale_by_schedule,
@@ -220,6 +222,91 @@ def test_schedule_ramps_up_when_the_endpoint_is_higher(schedule_factory):
     np.testing.assert_allclose(rates[0], 1e-4, rtol=1e-5)
     assert np.all(np.diff(rates[:5]) > 0.0)
     np.testing.assert_allclose(rates[4:], 1e-2, rtol=1e-5)
+
+
+def test_join_schedules_gives_each_segment_its_own_step_count():
+    """Warmup into cosine decay, the standard recipe: the cosine has to start from its own step zero at the
+    boundary rather than partway down its curve."""
+    recipe = join_schedules([linear_schedule(0.0, 3, 1.0), cosine_schedule(1.0, 6)], [3])
+    rates = evaluate_schedule(recipe, range(10))
+
+    np.testing.assert_allclose(
+        rates[:4], [0.0, 1 / 3, 2 / 3, 1.0], rtol=1e-6
+    )  # ramp, peaking at the handoff
+    np.testing.assert_allclose(rates[3], 1.0, rtol=1e-6)  # cosine restarts at its initial rate
+    np.testing.assert_allclose(rates[9], 0.0, rtol=1e-6)  # and reaches its endpoint 6 steps later
+    assert np.all(np.diff(rates[3:10]) < 0.0)
+
+
+def test_join_schedules_switches_at_every_boundary():
+    joined = join_schedules(
+        [constant_schedule(1.0), constant_schedule(0.5), constant_schedule(0.25)], [2, 5]
+    )
+    rates = evaluate_schedule(joined, range(7))
+    np.testing.assert_allclose(rates, [1.0, 1.0, 0.5, 0.5, 0.5, 0.25, 0.25], rtol=1e-6)
+
+
+def test_join_schedules_with_one_schedule_is_that_schedule():
+    steps = range(6)
+    joined = evaluate_schedule(join_schedules([linear_schedule(1.0, 4)], []), steps)
+    alone = evaluate_schedule(linear_schedule(1.0, 4), steps)
+    np.testing.assert_allclose(joined, alone, rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "schedule",
+    [
+        *(factory(0.5, 4, 0.05) for factory in SCHEDULES),
+        step_decay(0.5, decay_every=2),
+        constant_schedule(0.5),
+    ],
+    ids=["cosine", "linear", "exponential", "polynomial", "step", "constant"],
+)
+def test_schedule_tolerates_a_negative_step_count(schedule):
+    """`join_schedules` evaluates every segment and selects, so a later schedule is called with a negative
+    count before its boundary. Each one has to return something finite rather than a NaN."""
+    rates = evaluate_schedule(schedule, [-100, -1])
+    assert np.all(np.isfinite(rates))
+    np.testing.assert_allclose(rates, rates[0], rtol=1e-6)  # held at the pre-horizon value
+
+
+def test_join_schedules_drives_training_through_the_learning_rate_union():
+    """The composed schedule has to survive substitution into a rule, which is how anyone would actually
+    use warmup followed by decay."""
+    p = trainable(np.array([2.0]), name="w")
+    loss = 0.5 * (p**2).sum()  # grad = p, so the unit-rate base step is -p
+    recipe = join_schedules([constant_schedule(0.1), linear_schedule(0.1, 2)], [2])
+    step = compile_train(loss, sgd(learning_rate=recipe))
+
+    step()  # constant segment: p = 2 - 0.1 * 2
+    np.testing.assert_allclose(p.get_value(), [1.8], rtol=1e-6)
+    step()
+    step()  # boundary passed, linear segment at its own step 0, still 0.1
+    np.testing.assert_allclose(p.get_value(), [1.8 * 0.9 * 0.9], rtol=1e-6)
+
+
+def test_constant_schedule_holds_its_rate():
+    rates = evaluate_schedule(constant_schedule(0.25), [0, 1, 10_000])
+    np.testing.assert_allclose(rates, 0.25, rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("schedules", "boundaries", "message"),
+    [
+        ([], [], "at least one schedule"),
+        ([constant_schedule(1.0), constant_schedule(0.5)], [], "one fewer boundary"),
+        ([constant_schedule(1.0), constant_schedule(0.5)], [0], "must be positive"),
+        (
+            [constant_schedule(1.0), constant_schedule(0.5), constant_schedule(0.25)],
+            [5, 2],
+            "strictly increasing",
+        ),
+    ],
+    ids=["empty", "boundary_count", "non_positive", "not_increasing"],
+)
+def test_join_schedules_rejects_a_malformed_sequence(schedules, boundaries, message):
+    with pytest.raises(ValueError, match=message):
+        join_schedules(schedules, boundaries)
 
 
 # step_decay decays indefinitely instead of over a horizon, so it takes (decay_every, decay_factor) rather

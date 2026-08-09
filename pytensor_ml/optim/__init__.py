@@ -33,8 +33,10 @@ from pytensor_ml.optim.rules import (
     sgd_updates,
 )
 from pytensor_ml.optim.schedules import (
+    constant_schedule,
     cosine_schedule,
     exponential_schedule,
+    join_schedules,
     linear_schedule,
     polynomial_schedule,
     step_decay,
@@ -70,9 +72,11 @@ __all__ = [
     "clip_by_global_norm",
     "clip_by_value",
     "compile_train",
+    "constant_schedule",
     "cosine_schedule",
     "exponential_schedule",
     "get_gradients",
+    "join_schedules",
     "linear_schedule",
     "nadam",
     "nadam_updates",

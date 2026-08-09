@@ -1,3 +1,6 @@
+from collections.abc import Sequence
+from itertools import pairwise
+
 import numpy as np
 import pytensor.tensor as pt
 
@@ -315,5 +318,81 @@ def step_decay(
 
         drops = pt.maximum(step_count - transition_begin, 0) // decay_every
         return pt.maximum(initial_rate * factor ** drops.astype(floatX), floor_rate)
+
+    return schedule
+
+
+def constant_schedule(learning_rate: float) -> Schedule:
+    r"""
+    Hold the learning rate at ``learning_rate`` forever.
+
+    Useful as a segment of :func:`join_schedules`, where a constant stretch before or between decays is
+    otherwise awkward to express.
+
+    Parameters
+    ----------
+    learning_rate : float
+        The rate :math:`\eta_0` returned at every step.
+
+    Returns
+    -------
+    Schedule
+        A callable mapping the symbolic step count to a scalar learning rate, for
+        :func:`~pytensor_ml.optim.transform.scale_by_schedule`.
+    """
+
+    def schedule(step_count: TensorVariable) -> TensorVariable:
+        # The rate has to stay a function of `step_count`: callers compile the schedule against the
+        # counter, and a graph that ignores its input raises UnusedInputError.
+        return pt.zeros_like(step_count, dtype=config.floatX) + np.asarray(
+            learning_rate, dtype=config.floatX
+        )
+
+    return schedule
+
+
+def join_schedules(schedules: Sequence[Schedule], boundaries: Sequence[int]) -> Schedule:
+    r"""
+    Run ``schedules`` one after another, switching at ``boundaries``.
+
+    Each schedule after the first receives the step count *since its boundary*, so a decay placed second
+    starts from its own step zero rather than partway down its curve. That is what makes warmup followed by
+    decay a composition rather than a special case.
+
+    Every segment is evaluated at every step and the result selected, so a later schedule is called with a
+    negative count before its boundary. The schedules in this module clamp that to zero; a custom schedule
+    must tolerate it.
+
+    Parameters
+    ----------
+    schedules : sequence of Schedule
+        The schedules to run in order. Must not be empty.
+    boundaries : sequence of int
+        Steps at which to hand over to the next schedule, one fewer than ``schedules``, strictly
+        increasing and positive.
+
+    Returns
+    -------
+    Schedule
+        A callable mapping the symbolic step count to a scalar learning rate, for
+        :func:`~pytensor_ml.optim.transform.scale_by_schedule`.
+    """
+    if not schedules:
+        raise ValueError("join_schedules needs at least one schedule.")
+    if len(boundaries) != len(schedules) - 1:
+        raise ValueError(
+            f"join_schedules needs one fewer boundary than schedules, got {len(boundaries)} "
+            f"boundaries for {len(schedules)} schedules."
+        )
+    if any(boundary < 1 for boundary in boundaries):
+        raise ValueError(f"boundaries must be positive, got {list(boundaries)}.")
+    if any(later <= earlier for earlier, later in pairwise(boundaries)):
+        raise ValueError(f"boundaries must be strictly increasing, got {list(boundaries)}.")
+
+    def schedule(step_count: TensorVariable) -> TensorVariable:
+        rate = schedules[0](step_count)
+        for boundary, next_schedule in zip(boundaries, schedules[1:]):
+            rate = pt.where(step_count < boundary, rate, next_schedule(step_count - boundary))
+        return rate
 
     return schedule
