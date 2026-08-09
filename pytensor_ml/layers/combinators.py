@@ -3,22 +3,19 @@ from collections.abc import Callable
 import pytensor.tensor as pt
 
 
-def Input(name: str, shape: tuple[int, ...], dtype: str | None = None) -> pt.TensorVariable:
+def Input(name: str, shape: tuple[int | None, ...], dtype: str | None = None) -> pt.TensorVariable:
     """
-    Create a named symbolic input tensor with a fully static shape.
+    Create a named symbolic input tensor.
 
     Parameters
     ----------
     name : str
         Name of the input variable.
-    shape : tuple of int
-        Static size of each dimension. Raise ``ValueError`` if any entry is not an integer.
-    dtype : str or None
-        Data type of the input. Defaults to ``floatX`` when None.
+    shape : tuple of int or None
+        Size of each dimension. Use None wherever the size varies between calls, such as a batch axis.
+    dtype : str, optional
+        Data type of the input. Default ``floatX``.
     """
-    if not all(isinstance(dim, int) for dim in shape):
-        raise ValueError("All dimensions must be integers")
-
     return pt.tensor(name=name, shape=shape, dtype=dtype)
 
 

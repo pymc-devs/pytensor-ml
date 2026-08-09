@@ -106,6 +106,17 @@ def test_invalid_dropout_p_raises():
         Dropout(name=None, p=1.1)
 
 
+def test_input_accepts_a_varying_dimension():
+    """One compiled graph has to serve batches of different sizes, which is what an unknown dimension is
+    for -- asserting the declared type alone would pass even if the batch axis were pinned."""
+    X = Input("X", (None, 64))
+    forward = pytensor.function([X], Linear("fc", 64, 8)(X))
+
+    assert X.type.shape == (None, 64)
+    assert forward(np.zeros((3, 64), dtype=floatX)).shape == (3, 8)
+    assert forward(np.zeros((7, 64), dtype=floatX)).shape == (7, 8)
+
+
 def test_embedding_forward(rng):
     n_embeddings, n_features = 10, 4
     embedding = Embedding("emb", n_embeddings, n_features)
