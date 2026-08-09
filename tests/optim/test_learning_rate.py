@@ -5,16 +5,21 @@ import pytest
 from pytensor import config
 
 from pytensor_ml.optim import (
+    adadelta,
+    adagrad,
     adam,
+    adamax,
+    adamw,
     chain,
     compile_train,
     cosine_schedule,
+    nadam,
+    rmsprop,
     rprop,
     rprop_updates,
     scalar_state,
-    scale_by_schedule,
+    scale,
     sgd,
-    substitute_schedule,
 )
 from pytensor_ml.params import StepCounter, step_counter, trainable
 from pytensor_ml.pytensorf import collect_step_counters
@@ -67,34 +72,32 @@ def test_schedule_rate_alone_sets_the_step_size():
     np.testing.assert_allclose(p.get_value(), [1.71], rtol=RTOL)
 
 
-def test_substitution_matches_terminal_scaling_for_a_multiplicative_rate():
-    """The two mechanisms must agree wherever the rate is a plain multiplier on the step, which holds for
-    every rule in the tree. Only their behaviour on rules that consume the rate elsewhere differs."""
+def test_a_scheduled_rate_matches_terminal_scaling_for_a_multiplicative_rate():
+    """A rate the rule reads and the same rate applied to the finished step must agree wherever the rate is a
+    plain multiplier, which holds for every rule in the tree."""
     schedule = cosine_schedule(0.05, 20)
 
-    substituted, substituted_loss = quadratic_problem()
-    substituted_step = compile_train(substituted_loss, adam(learning_rate=schedule))
+    read_by_the_rule, rule_loss = quadratic_problem()
+    rule_step = compile_train(rule_loss, adam(learning_rate=schedule))
 
     scaled, scaled_loss = quadratic_problem()
-    scaled_step = compile_train(
-        scaled_loss, chain(adam(learning_rate=1.0), scale_by_schedule(schedule))
-    )
+    clock = step_counter()
+    scaled_step = compile_train(scaled_loss, chain(adam(learning_rate=1.0), scale(schedule(clock))))
 
     for _ in range(10):
-        substituted_step()
+        rule_step()
         scaled_step()
 
-    np.testing.assert_allclose(substituted.get_value(), scaled.get_value(), rtol=1e-5)
+    np.testing.assert_allclose(read_by_the_rule.get_value(), scaled.get_value(), rtol=1e-5)
 
 
-def test_scheduled_rule_publishes_the_applied_rate():
+def test_a_scheduled_rule_allocates_no_rate_variable():
+    """The rate is an expression over the clock, so there is no rate state to keep or checkpoint. A caller
+    who wants to read it builds `curve(clock)` and asks for it as an extra output."""
     p, loss = quadratic_problem()
-    rule = adam(learning_rate=cosine_schedule(0.1, 4))
-    updates = rule(loss, [p])
-    published_rate = next(key for key in updates if key.name == "adam/learning_rate")
+    updates = adam(learning_rate=cosine_schedule(0.1, 4))(loss, [p])
 
-    compile_train(loss, rule)()
-    np.testing.assert_allclose(published_rate.get_value(), 0.1, rtol=RTOL)
+    assert not any("learning_rate" in (key.name or "") for key in updates)
 
 
 @pytest.mark.parametrize(
@@ -112,16 +115,7 @@ def test_rprop_rejects_a_symbolic_rate(learning_rate):
         rprop_updates(loss, [p], learning_rate=learning_rate)
 
 
-def test_substitute_schedule_raises_when_the_rate_is_absent():
-    p, loss = quadratic_problem()
-    absent_rate = scalar_state("absent/learning_rate", fill_value=0.1)
-    updates = sgd(learning_rate=0.1)(loss, [p])
-
-    with pytest.raises(ValueError, match="does not appear in the updates"):
-        substitute_schedule(updates, absent_rate, lambda step_count: pt.constant(0.05))
-
-
-def test_substitution_preserves_parameter_identity():
+def test_a_scheduled_rule_preserves_parameter_identity():
     """The updates must keep updating the parameter object the model holds; a clone would train a copy and
     silently leave the model's weights untouched."""
     p, loss = quadratic_problem()
@@ -134,8 +128,8 @@ def test_substitution_preserves_parameter_identity():
 
 
 def test_schedule_reaches_a_rate_applied_by_a_chained_scale():
-    """sgd with momentum applies its rate through `scale`, not through sgd_updates, so substitution has to
-    find it there. Unit-rate sgd gives step -p and momentum leaves the first step unchanged."""
+    """sgd with momentum applies its rate through `scale` rather than through sgd_updates, so the rate has to
+    reach it there. Unit-rate sgd gives step -p and momentum leaves the first step unchanged."""
     p, loss = quadratic_problem()
     step = compile_train(loss, sgd(learning_rate=cosine_schedule(0.1, 4), momentum=0.9))
 
@@ -153,22 +147,23 @@ def test_a_clock_read_by_a_schedule_drives_the_rate():
     assert int(clock.get_value()) == 1
 
 
-def test_a_clocked_schedule_matches_substitution_over_many_steps():
-    """The clock has to place the schedule at the same step the substituted counter would."""
+def test_a_caller_held_clock_matches_the_rule_own_clock_over_many_steps():
+    """Handing a rule an unapplied schedule and handing it the same schedule read off a clock of your own must
+    place the curve at the same step, or the two ways of scheduling drift apart."""
     schedule = cosine_schedule(0.05, 20)
 
-    substituted, substituted_loss = quadratic_problem()
-    substituted_step = compile_train(substituted_loss, adam(learning_rate=schedule))
+    rule_clocked, rule_loss = quadratic_problem()
+    rule_step = compile_train(rule_loss, adam(learning_rate=schedule))
 
-    clocked, clocked_loss = quadratic_problem()
+    caller_clocked, caller_loss = quadratic_problem()
     clock = step_counter()
-    clocked_step = compile_train(clocked_loss, adam(learning_rate=schedule(clock)))
+    caller_step = compile_train(caller_loss, adam(learning_rate=schedule(clock)))
 
     for _ in range(40):
-        substituted_step()
-        clocked_step()
+        rule_step()
+        caller_step()
 
-    np.testing.assert_allclose(clocked.get_value(), substituted.get_value(), rtol=RTOL)
+    np.testing.assert_allclose(caller_clocked.get_value(), rule_clocked.get_value(), rtol=RTOL)
 
 
 def test_a_clocked_rate_is_available_as_an_extra_output():
@@ -313,6 +308,16 @@ def test_a_rule_counts_its_own_steps_on_a_clock():
     assert all(isinstance(counter, StepCounter) for counter in counters)
 
 
+def test_a_scheduled_rule_keeps_one_clock():
+    """The schedule reads the clock the rule already counts on, so there is one notion of time to restore and
+    nothing that can disagree with itself."""
+    p, loss = quadratic_problem()
+    step = compile_train(loss, adam(learning_rate=cosine_schedule(0.1, 20)))
+
+    counters = [v for v in step.get_shared() if v.type.dtype.startswith("int")]
+    assert [counter.name for counter in counters] == ["adam/step_count"]
+
+
 def test_a_user_clock_out_of_step_with_a_rule_clock_is_caught():
     """Two clocks can still coexist when the caller holds one of their own, and a checkpoint that restored
     only one of them leaves the two measuring different times."""
@@ -324,6 +329,25 @@ def test_a_user_clock_out_of_step_with_a_rule_clock_is_caught():
 
     with pytest.raises(ValueError, match="hold different step counts"):
         compile_train(loss, rule, extra_outputs=[their_clock.astype("float64")])
+
+
+@pytest.mark.parametrize(
+    "alias",
+    [adam, adamw, nadam, adamax, sgd, rmsprop, adagrad, adadelta],
+    ids=["adam", "adamw", "nadam", "adamax", "sgd", "rmsprop", "adagrad", "adadelta"],
+)
+def test_a_scheduled_rule_keeps_one_notion_of_time(alias):
+    """A rule that counts its own steps and also reads a schedule can end up holding more than one clock,
+    which is harmless as long as they agree: each advances once per step from zero, so the rate the schedule
+    computes and the bias correction the rule applies are always at the same step."""
+    p, loss = quadratic_problem()
+    step = compile_train(loss, alias(learning_rate=cosine_schedule(0.1, 20)))
+
+    for _ in range(3):
+        step()
+
+    clocks = [v for v in step.get_shared() if isinstance(v, StepCounter)]
+    assert clocks and {int(clock.get_value()) for clock in clocks} == {3}
 
 
 def test_a_caller_held_clock_keeps_advancing_for_other_readers():

@@ -549,7 +549,7 @@ def _require_numeric_learning_rate(learning_rate: LearningRate) -> None:
             "rprop's learning rate initializes its per-parameter step sizes rather than scaling the step, "
             "so it must be a plain number and cannot be scheduled or steered. Schedule a rule whose rate "
             "multiplies the step, or scale rprop's finished step with "
-            "`chain(rprop(...), scale_by_schedule(...))`, which is a different algorithm."
+            "`chain(rprop(...), scale(curve(clock)))`, which is a different algorithm."
         )
 
 

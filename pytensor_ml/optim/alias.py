@@ -7,8 +7,8 @@ from pytensor_ml.optim.base import (
     Rate,
     UpdateRule,
     Updates,
+    counter,
     reuses_state,
-    scalar_state,
 )
 from pytensor_ml.optim.rules import (
     _require_numeric_learning_rate,
@@ -22,7 +22,7 @@ from pytensor_ml.optim.rules import (
     rprop_updates,
     sgd_updates,
 )
-from pytensor_ml.optim.transform import scale, substitute_schedule, trace
+from pytensor_ml.optim.transform import scale, trace
 
 
 def _at_learning_rate(
@@ -30,13 +30,13 @@ def _at_learning_rate(
     name: str,
     build_updates: Callable[[Rate], Updates],
 ) -> Updates:
-    """Build updates at ``learning_rate``, substituting a schedule into a shared rate variable named
-    ``"{name}/learning_rate"`` when one was given."""
+    """Build updates at ``learning_rate``, reading a schedule off the rule's step clock. A rule that keeps its
+    own clock under another name ends up with two, which is harmless: every clock advances once per step from
+    zero, so they agree about the step at every point."""
     if not callable(learning_rate):
         return build_updates(learning_rate)
 
-    rate_variable = scalar_state(f"{name}/learning_rate")
-    return substitute_schedule(build_updates(rate_variable), rate_variable, learning_rate)
+    return build_updates(learning_rate(counter(f"{name}/step_count")))
 
 
 def sgd(
@@ -50,8 +50,8 @@ def sgd(
     learning_rate : float, shared tensor variable, symbolic scalar, or Schedule
         Step size. A float is baked into the graph; a scalar shared variable can be steered from Python with
         ``set_value``; any scalar graph is used as the rate directly, as in
-        ``cosine_schedule(3e-4, 10_000)(step_counter())``; an unapplied schedule is substituted into the
-        rate the rule uses, on-graph, from an owned step counter. Default 0.01.
+        ``cosine_schedule(3e-4, 10_000)(step_counter())``; an unapplied schedule is read off the clock the
+        rule counts its own steps on. Default 0.01.
     momentum : float
         Momentum coefficient. A value of 0 (the default) gives plain SGD.
     nesterov : bool

@@ -13,11 +13,11 @@ from pytensor_ml.optim import (
     join_schedules,
     linear_schedule,
     polynomial_schedule,
-    scale_by_schedule,
+    scale,
     sgd,
     step_decay,
 )
-from pytensor_ml.params import trainable
+from pytensor_ml.params import step_counter, trainable
 from pytensor_ml.pytensorf import function
 
 # Every schedule takes (learning_rate, total_steps, final_learning_rate) and owes the same contract at the
@@ -178,26 +178,25 @@ def test_schedule_rejects_negative_transition_begin(schedule_factory):
 
 @pytest.mark.parametrize("schedule_factory", SCHEDULES)
 def test_schedule_drives_training_through_the_learning_rate_union(schedule_factory):
-    """Passing a schedule as `learning_rate` substitutes it into the rule's own rate, which is a different
-    path from `scale_by_schedule` and the one a new schedule is most likely to miss."""
+    """Passing a schedule as `learning_rate` reads it off the clock the rule counts on, which is the path a
+    new schedule is most likely to miss."""
     p = trainable(np.array([2.0]), name="w")
     loss = 0.5 * (p**2).sum()  # grad = p, so the unit-rate base step is -p
     rule = sgd(learning_rate=schedule_factory(0.1, 2, 0.01))
-    published_rate = next(key for key in rule(loss, [p]) if key.name == "sgd/learning_rate")
 
     compile_train(loss, rule)()  # every schedule starts at its initial rate, so p = 2 - 0.1 * 2
-    np.testing.assert_allclose(published_rate.get_value(), 0.1, rtol=1e-6)
     np.testing.assert_allclose(p.get_value(), [1.8], rtol=1e-6)
 
 
 # Geometric decay never reaches zero, so the schedule that cannot hit a zero floor sits this one out.
 @pytest.mark.parametrize("schedule_factory", [cosine_schedule, linear_schedule])
-def test_schedule_drives_training_through_scale_by_schedule(schedule_factory):
+def test_schedule_drives_training_through_a_scaled_chain(schedule_factory):
     # Decaying to zero over two steps, every curve passes through the same midpoint, so one set of expected
     # values covers them: 0.1 -> 0.05 -> 0.
     p = trainable(np.array([2.0]), name="w")
     loss = 0.5 * (p**2).sum()  # grad = p, so the unit-rate base step is -p
-    rule = chain(sgd(learning_rate=1.0), scale_by_schedule(schedule_factory(0.1, 2)))
+    clock = step_counter()
+    rule = chain(sgd(learning_rate=1.0), scale(schedule_factory(0.1, 2)(clock)))
     step = compile_train(loss, rule)
 
     step()  # step 0 -> lr = 0.1, p = 2 - 0.1 * 2 = 1.8

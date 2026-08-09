@@ -1,18 +1,7 @@
 import numpy as np
 import pytensor.tensor as pt
-import pytest
 
-from pytensor import config
-
-from pytensor_ml.optim import (
-    add_weight_decay,
-    chain,
-    scalar_state,
-    scale,
-    scale_by_schedule,
-    sgd_updates,
-    trace,
-)
+from pytensor_ml.optim import add_weight_decay, chain, scale, sgd_updates, trace
 from pytensor_ml.params import trainable
 from pytensor_ml.pytensorf import function
 
@@ -61,28 +50,12 @@ def test_chain_threads_updates_in_order():
     np.testing.assert_allclose(function([], out[p])(), [0.9])
 
 
-def test_scale_by_schedule_applies_decaying_rate():
-    p = trainable(np.array([2.0]), name="w")
-    loss = 0.5 * (p**2).sum()  # grad = p, so the unit-rate base step is -p
-
-    def schedule(step_count):
-        return 0.1 / (1.0 + step_count.astype("float64"))
-
-    out = scale_by_schedule(schedule)(sgd_updates(loss, [p], learning_rate=1.0), [p])
-    step = function([], loss, updates=out)
-
-    step()  # step_count=0 -> lr=0.1, step=-2, p = 2 - 0.1 * 2 = 1.8
-    np.testing.assert_allclose(p.get_value(), [1.8], rtol=1e-6)
-    step()  # step_count=1 -> lr=0.05, step=-1.8, p = 1.8 - 0.05 * 1.8 = 1.71
-    np.testing.assert_allclose(p.get_value(), [1.71], rtol=1e-6)
-
-
 def test_chain_reuses_transform_state_across_invocations():
     """A chain's transforms allocate state too, so two functions compiled from one chain must share it.
-    Without reuse the second function silently restarts the schedule with its own step counter."""
+    Without reuse the second function silently restarts with its own velocity buffer."""
     p = trainable(np.array([2.0]), name="w")
     loss = 0.5 * (p**2).sum()
-    rule = chain(trace(0.9), scale_by_schedule(lambda step_count: pt.constant(0.1)))
+    rule = chain(trace(0.9), scale(0.1))
 
     first = {key for key in rule(sgd_updates(loss, [p], learning_rate=1.0), [p]) if key is not p}
     second = {key for key in rule(sgd_updates(loss, [p], learning_rate=1.0), [p]) if key is not p}
@@ -95,89 +68,10 @@ def test_separately_configured_chains_keep_independent_state():
     loss = 0.5 * (p**2).sum()
 
     def build_updates():
-        rule = chain(trace(0.9), scale_by_schedule(lambda step_count: pt.constant(0.1)))
+        rule = chain(trace(0.9), scale(0.1))
         return {key for key in rule(sgd_updates(loss, [p], learning_rate=1.0), [p]) if key is not p}
 
     assert not build_updates() & build_updates()
-
-
-def test_scale_by_schedule_publishes_the_applied_rate():
-    p = trainable(np.array([2.0]), name="w")
-    loss = 0.5 * (p**2).sum()
-    out = scale_by_schedule(lambda step_count: 0.1 / (1.0 + step_count.astype(config.floatX)))(
-        sgd_updates(loss, [p], learning_rate=1.0), [p]
-    )
-    published_rate = next(key for key in out if key.name == "schedule/learning_rate")
-    step = function([], loss, updates=out)
-
-    # The rate published is the rate applied this step, not the one used on the step before: p goes
-    # 2 -> 1.8 under lr=0.1, and the variable holds 0.1 rather than its initial 0.
-    step()
-    np.testing.assert_allclose(published_rate.get_value(), 0.1, rtol=1e-6)
-    np.testing.assert_allclose(p.get_value(), [1.8], rtol=1e-6)
-    step()
-    np.testing.assert_allclose(published_rate.get_value(), 0.05, rtol=1e-6)
-
-
-def test_scale_by_schedule_publishes_to_a_caller_held_variable():
-    p = trainable(np.array([2.0]), name="w")
-    loss = 0.5 * (p**2).sum()
-    learning_rate = scalar_state("my/learning_rate")
-    out = scale_by_schedule(lambda step_count: pt.constant(0.25), learning_rate=learning_rate)(
-        sgd_updates(loss, [p], learning_rate=1.0), [p]
-    )
-    step = function([], loss, updates=out)
-
-    step()
-    np.testing.assert_allclose(learning_rate.get_value(), 0.25, rtol=1e-6)
-    assert not any(key.name == "schedule/learning_rate" for key in out)
-
-
-def test_two_scheduled_scalings_in_one_chain_raise():
-    p = trainable(np.array([2.0]), name="w")
-    loss = 0.5 * (p**2).sum()
-    constant_scaling = scale_by_schedule(lambda step_count: pt.constant(0.1))
-    with pytest.raises(ValueError, match="Two scheduled scalings in one chain"):
-        chain(constant_scaling, constant_scaling)(sgd_updates(loss, [p], learning_rate=1.0), [p])
-
-
-def test_scale_by_schedule_casts_rate_to_parameter_dtype():
-    # A float64 schedule must not upcast a float32 parameter's update, which pytensor rejects outright.
-    with config.change_flags(floatX="float32"):
-        p = trainable(np.array([2.0], dtype="float32"), name="w")
-        loss = 0.5 * (p**2).sum()
-        out = scale_by_schedule(lambda step_count: 0.1 / (1.0 + step_count.astype("float64")))(
-            sgd_updates(loss, [p], learning_rate=1.0), [p]
-        )
-        published_rate = next(key for key in out if key.name == "schedule/learning_rate")
-        assert out[p].type.dtype == "float32"
-        assert out[published_rate].type.dtype == "float32"
-
-        step = function([], loss, updates=out)
-        step()
-        np.testing.assert_allclose(p.get_value(), [1.8], rtol=1e-6)
-
-
-def test_two_scheduled_scalings_compose_when_given_distinct_variables():
-    """The workaround the rejection above recommends: distinct rate variables let two schedules stack.
-    Each publishes its own factor, they share one step counter, and the parameters see the product."""
-    p = trainable(np.array([2.0]), name="w")
-    loss = 0.5 * (p**2).sum()
-    warmup_rate = scalar_state("warmup/learning_rate")
-    decay_rate = scalar_state("decay/learning_rate")
-
-    out = chain(
-        scale_by_schedule(lambda step_count: pt.constant(0.5), learning_rate=warmup_rate),
-        scale_by_schedule(lambda step_count: pt.constant(0.2), learning_rate=decay_rate),
-    )(sgd_updates(loss, [p], learning_rate=1.0), [p])
-    step_count = next(key for key in out if key.name == "schedule/step_count")
-    step = function([], loss, updates=out)
-
-    step()  # the applied rate is 0.5 * 0.2, so p = 2 - 0.1 * 2
-    np.testing.assert_allclose(p.get_value(), [1.8], rtol=1e-6)
-    np.testing.assert_allclose(warmup_rate.get_value(), 0.5, rtol=1e-6)
-    np.testing.assert_allclose(decay_rate.get_value(), 0.2, rtol=1e-6)
-    assert int(step_count.get_value()) == 1  # one counter, advanced once: both schedules see one t
 
 
 def test_add_weight_decay_subtracts_decay_term():
