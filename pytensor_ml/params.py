@@ -1,12 +1,28 @@
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from pytensor.tensor.sharedvar import TensorSharedVariable
 from pytensor.tensor.type import TensorType
 from pytensor.tensor.variable import TensorVariable
 
+if TYPE_CHECKING:
+    from pytensor_ml.state import Initializer
+
 
 class TrainableParameter(TensorSharedVariable):
-    """Marker class for trainable parameters (weights, biases)."""
+    """
+    Marker class for trainable parameters (weights, biases).
+
+    Attributes
+    ----------
+    initializer : Initializer or None
+        The parameter's own initializer, which wins over any scheme passed to
+        :func:`~pytensor_ml.state.initialize_params`. A layer declares one when the starting value is
+        part of its definition, such as batch norm's unit scale. None defers to the caller's scheme.
+    """
+
+    initializer: "Initializer | None" = None
 
 
 class NonTrainableParameter(TensorSharedVariable):
@@ -31,12 +47,20 @@ def _make_parameter[T: TensorSharedVariable](
     return parameter_type(name=name, type=ttype, value=value, strict=strict, **kwargs)
 
 
-def trainable(value, name=None, shape=None, strict=False, **kwargs) -> TrainableParameter:
+def trainable(
+    value,
+    name=None,
+    shape=None,
+    strict=False,
+    initializer: "Initializer | None" = None,
+    **kwargs,
+) -> TrainableParameter:
     """
     Create a shared variable marked as a trainable parameter.
 
-    The marker class is the only difference from a plain pytensor shared variable. It exists so that graph
-    traversal can tell parameters apart from other shared state; it adds no behavior of its own.
+    The marker class lets graph traversal tell parameters apart from other shared state, so that an
+    optimizer updates exactly these. A parameter may also declare its own initializer, which protects a
+    meaningful starting value from being overwritten by a network-wide initialization scheme.
 
     Parameters
     ----------
@@ -49,10 +73,16 @@ def trainable(value, name=None, shape=None, strict=False, **kwargs) -> Trainable
         entries for dynamic dimensions, e.g. ``(None, None)`` for a fully dynamic matrix.
     strict : bool, optional
         If True, the value must exactly match the dtype.
+    initializer : Initializer, optional
+        Initializer that reinitializing this parameter must use, whatever scheme the caller asks for.
+        Declare one when the starting value belongs to the layer's definition, such as a unit scale or a
+        zero bias. Default None, which defers to the caller's scheme.
     **kwargs
         Additional arguments passed to the SharedVariable constructor.
     """
-    return _make_parameter(TrainableParameter, value, name, shape, strict, **kwargs)
+    parameter = _make_parameter(TrainableParameter, value, name, shape, strict, **kwargs)
+    parameter.initializer = initializer
+    return parameter
 
 
 def non_trainable(value, name=None, shape=None, strict=False, **kwargs) -> NonTrainableParameter:

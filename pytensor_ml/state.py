@@ -6,11 +6,12 @@ import numpy as np
 
 from pytensor.compile.sharedvalue import SharedVariable
 
+from pytensor_ml.params import TrainableParameter
 from pytensor_ml.pytensorf import RandomSeed
 
 RandomState = RandomSeed | np.random.RandomState | np.random.Generator
 
-InitializationScheme = Literal["zeros", "xavier_uniform", "xavier_normal", "unit_uniform"]
+InitializationScheme = Literal["zeros", "ones", "xavier_uniform", "xavier_normal", "unit_uniform"]
 
 SamplingFunction = Callable[[tuple[int, ...], str, np.random.Generator], np.ndarray]
 
@@ -42,6 +43,11 @@ class Initializer(ABC):
 class ZeroInitializer(Initializer):
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
         return np.zeros(shape, dtype=dtype)
+
+
+class OneInitializer(Initializer):
+    def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
+        return np.ones(shape, dtype=dtype)
 
 
 class UnitUniformInitializer(Initializer):
@@ -80,12 +86,19 @@ class CustomInitializer(Initializer):
 
 _INITIALIZERS: dict[str, type[Initializer]] = {
     "zeros": ZeroInitializer,
+    "ones": OneInitializer,
     "xavier_uniform": XavierUniformInitializer,
     "xavier_normal": XavierNormalInitializer,
     "unit_uniform": UnitUniformInitializer,
 }
 
 InitializationSchemeLike = InitializationScheme | Initializer
+
+
+def _declared_initializer(param: SharedVariable, default: Initializer) -> Initializer:
+    """The parameter's own initializer, or ``default`` when it does not declare one."""
+    declared = param.initializer if isinstance(param, TrainableParameter) else None
+    return default if declared is None else declared
 
 
 def initialize_params(
@@ -96,13 +109,19 @@ def initialize_params(
     """
     Initialize parameter values using the specified scheme.
 
+    A :class:`~pytensor_ml.params.TrainableParameter` that declares its own ``initializer`` uses it
+    instead of ``scheme``, leaving batch norm at its unit scale while the weight matrices around it are
+    drawn from the requested scheme. Call an :class:`Initializer` on a parameter directly to overwrite a
+    declared value anyway.
+
     Parameters
     ----------
     params
         SharedVariables to initialize values for.
     scheme
-        Initialization scheme to use: the name of a built-in scheme, or any :class:`Initializer`
-        instance (including a :class:`CustomInitializer` wrapping your own sampling function).
+        Initialization scheme for parameters that do not declare one: the name of a built-in scheme, or
+        any :class:`Initializer` instance (including a :class:`CustomInitializer` wrapping your own
+        sampling function).
     rng
         Random number generator. If None, a new one is created.
 
@@ -115,4 +134,7 @@ def initialize_params(
     rng = np.random.default_rng(rng)
 
     initializer = scheme if isinstance(scheme, Initializer) else _INITIALIZERS[scheme]()
-    return [initializer._sample_like(param, rng) for param in params]
+    return [
+        _declared_initializer(param, default=initializer)._sample_like(param, rng)
+        for param in params
+    ]
