@@ -10,6 +10,7 @@ from pytensor_ml.optim import (
     cosine_annealing,
     exponential_decay,
     linear_decay,
+    polynomial_decay,
     scale_by_schedule,
     sgd,
 )
@@ -18,7 +19,7 @@ from pytensor_ml.pytensorf import function
 
 # Every schedule takes (learning_rate, total_steps, min_learning_rate) and owes the same contract at the
 # horizon, so those properties are asserted once for all of them.
-SCHEDULES = [cosine_annealing, linear_decay, exponential_decay]
+SCHEDULES = [cosine_annealing, linear_decay, exponential_decay, polynomial_decay]
 
 
 def evaluate_schedule(schedule, steps):
@@ -97,7 +98,7 @@ def test_linear_decay_holds_the_initial_rate_until_transition_begin():
     np.testing.assert_allclose(rates, [1.0, 1.0, 0.8125, 0.625, 0.25, 0.25], rtol=1e-6)
 
 
-@pytest.mark.parametrize("schedule_factory", [linear_decay, exponential_decay])
+@pytest.mark.parametrize("schedule_factory", [linear_decay, exponential_decay, polynomial_decay])
 def test_schedule_holds_the_initial_rate_until_transition_begin(schedule_factory):
     """Each schedule has to pass its own `transition_begin` through, so the shared clamp being right is not
     enough — asserted as a property because the curve between B and B + T differs per schedule."""
@@ -108,6 +109,47 @@ def test_schedule_holds_the_initial_rate_until_transition_begin(schedule_factory
     np.testing.assert_allclose(rates[:3], 1.0, rtol=1e-6)  # held through step B
     assert rates[3] < 1.0  # decaying afterwards
     np.testing.assert_allclose(rates[4:], 0.25, rtol=1e-6)  # floor from step B + T
+
+
+def test_polynomial_decay_bends_with_the_power():
+    # (1 - p) ** 2 over four steps: quick drop, then a long flat tail.
+    rates = evaluate_schedule(polynomial_decay(1.0, 4, power=2.0), range(5))
+    np.testing.assert_allclose(rates, [1.0, 0.5625, 0.25, 0.0625, 0.0], rtol=1e-6)
+
+
+def test_polynomial_decay_at_power_one_matches_linear_decay():
+    """`linear_decay` is the `power=1` case, and the two are separate implementations, so pin the identity
+    rather than trusting that they stay in step."""
+    steps = range(6)
+    polynomial = evaluate_schedule(
+        polynomial_decay(1.0, 4, min_learning_rate=0.25, power=1.0), steps
+    )
+    linear = evaluate_schedule(linear_decay(1.0, 4, min_learning_rate=0.25), steps)
+    np.testing.assert_allclose(polynomial, linear, rtol=1e-6)
+
+
+def test_polynomial_decay_reaches_the_floor_at_a_fractional_power():
+    # A power below one holds the rate high and then drops, and raises exactly zero to a fractional
+    # exponent at the horizon, which is where a NaN would appear.
+    rates = evaluate_schedule(polynomial_decay(1.0, 4, 0.25, power=0.5), [0, 2, 4, 100])
+    np.testing.assert_allclose(rates, [1.0, 0.75 * 2**-0.5 + 0.25, 0.25, 0.25], rtol=1e-6)
+    assert rates[1] > 0.625  # above the straight line, which passes through 0.625 at the midpoint
+
+
+@pytest.mark.parametrize("schedule_factory", [linear_decay, exponential_decay, polynomial_decay])
+def test_delayed_schedules_agree_on_their_positional_arguments(schedule_factory):
+    """Copying a call from one schedule to another must not change what it means, so the fourth positional
+    argument is `transition_begin` in every schedule that takes a delay — not, say, a curve parameter."""
+    steps = [0, 3, 4, 7]
+    positional = evaluate_schedule(schedule_factory(1.0, 4, 0.25, 3), steps)
+    keyword = evaluate_schedule(schedule_factory(1.0, 4, 0.25, transition_begin=3), steps)
+    np.testing.assert_allclose(positional, keyword, rtol=1e-6)
+
+
+@pytest.mark.parametrize("power", [0.0, -1.0])
+def test_polynomial_decay_rejects_a_non_positive_power(power):
+    with pytest.raises(ValueError, match="power must be positive"):
+        polynomial_decay(0.1, 4, power=power)
 
 
 def test_exponential_decay_falls_by_a_constant_factor():
@@ -127,7 +169,7 @@ def test_exponential_decay_rejects_a_non_positive_rate(learning_rate, min_learni
         exponential_decay(learning_rate, 4, min_learning_rate)
 
 
-@pytest.mark.parametrize("schedule_factory", [linear_decay, exponential_decay])
+@pytest.mark.parametrize("schedule_factory", [linear_decay, exponential_decay, polynomial_decay])
 def test_schedule_rejects_negative_transition_begin(schedule_factory):
     with pytest.raises(ValueError, match="transition_begin must not be negative"):
         schedule_factory(1e-3, 10, 1e-5, transition_begin=-1)

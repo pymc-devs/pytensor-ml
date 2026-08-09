@@ -201,3 +201,61 @@ def exponential_decay(
         return initial_rate * pt.exp(log_decay * progress)
 
     return schedule
+
+
+def polynomial_decay(
+    learning_rate: float,
+    total_steps: int,
+    min_learning_rate: float = 0.0,
+    transition_begin: int = 0,
+    power: float = 1.0,
+) -> Schedule:
+    r"""
+    Decay the learning rate from ``learning_rate`` to ``min_learning_rate`` along a power curve.
+
+    At step :math:`t`, decaying over :math:`T` steps starting from step :math:`B`, and writing
+    :math:`p = \min(\max(t - B, 0),\; T) / T`,
+
+    .. math::
+
+        \eta_t = \eta_{\min} + (\eta_0 - \eta_{\min}) (1 - p)^{\gamma}
+
+    so :math:`\gamma > 1` drops the rate quickly and then flattens, :math:`\gamma < 1` holds it high and
+    then drops, and :math:`\gamma = 1` is a straight line. The rate holds at :math:`\eta_{\min}` from step
+    :math:`B + T` on.
+
+    Parameters
+    ----------
+    learning_rate : float
+        Initial rate :math:`\eta_0`, returned at every step up to ``transition_begin``.
+    total_steps : int
+        Number of steps :math:`T` the decay itself spans. Must be at least one.
+    min_learning_rate : float, optional
+        Floor :math:`\eta_{\min}` reached at step ``transition_begin + total_steps``. Default 0.0.
+    transition_begin : int, optional
+        Number of steps :math:`B` to hold the initial rate before decaying. Must not be negative.
+        Default 0.
+    power : float, optional
+        Exponent :math:`\gamma` applied to the remaining fraction of the horizon. Must be positive.
+        Default 1.0, which decays linearly.
+
+    Returns
+    -------
+    Schedule
+        A callable mapping the symbolic step count to a scalar learning rate, for
+        :func:`~pytensor_ml.optim.transform.scale_by_schedule`.
+    """
+    _validate_horizon(learning_rate, total_steps, min_learning_rate, transition_begin)
+    if power <= 0.0:
+        raise ValueError(f"power must be positive, got {power}.")
+
+    def schedule(step_count: TensorVariable) -> TensorVariable:
+        floatX = config.floatX
+        initial_rate = np.asarray(learning_rate, dtype=floatX)
+        final_rate = np.asarray(min_learning_rate, dtype=floatX)
+        exponent = np.asarray(power, dtype=floatX)
+
+        remaining = 1.0 - _clamped_progress(step_count, total_steps, transition_begin)
+        return final_rate + (initial_rate - final_rate) * remaining**exponent
+
+    return schedule
