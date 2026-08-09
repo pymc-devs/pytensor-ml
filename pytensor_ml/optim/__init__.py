@@ -37,6 +37,7 @@ from pytensor_ml.optim.schedules import (
     exponential_decay,
     linear_decay,
     polynomial_decay,
+    step_decay,
 )
 from pytensor_ml.optim.train import compile_train
 from pytensor_ml.optim.transform import (
@@ -85,6 +86,7 @@ __all__ = [
     "scale_by_schedule",
     "sgd",
     "sgd_updates",
+    "step_decay",
     "substitute_schedule",
     "trace",
 ]

@@ -13,6 +13,7 @@ from pytensor_ml.optim import (
     polynomial_decay,
     scale_by_schedule,
     sgd,
+    step_decay,
 )
 from pytensor_ml.params import trainable
 from pytensor_ml.pytensorf import function
@@ -205,3 +206,69 @@ def test_schedule_drives_training_through_scale_by_schedule(schedule_factory):
     np.testing.assert_allclose(p.get_value(), [1.71], rtol=1e-6)
     step()  # step 2 -> lr = 0, p unchanged
     np.testing.assert_allclose(p.get_value(), [1.71], rtol=1e-6)
+
+
+# step_decay decays indefinitely instead of over a horizon, so it takes (decay_every, decay_factor) rather
+# than (total_steps, min_learning_rate) positionally and sits outside the shared contract tests above.
+def test_step_decay_drops_by_a_factor_at_each_interval():
+    rates = evaluate_schedule(step_decay(1.0, decay_every=3, decay_factor=0.5), range(10))
+    expected = [1.0, 1.0, 1.0, 0.5, 0.5, 0.5, 0.25, 0.25, 0.25, 0.125]
+    np.testing.assert_allclose(rates, expected, rtol=1e-6)
+
+
+def test_step_decay_stops_at_the_floor():
+    schedule = step_decay(1.0, decay_every=3, decay_factor=0.5, min_learning_rate=0.3)
+    rates = evaluate_schedule(schedule, [3, 6, 9, 100])
+    np.testing.assert_allclose(rates, [0.5, 0.3, 0.3, 0.3], rtol=1e-6)
+
+
+def test_step_decay_delays_the_first_drop_until_transition_begin():
+    schedule = step_decay(1.0, decay_every=3, decay_factor=0.5, transition_begin=2)
+    rates = evaluate_schedule(schedule, [0, 4, 5, 8])
+    np.testing.assert_allclose(rates, [1.0, 1.0, 0.5, 0.25], rtol=1e-6)
+
+
+def test_step_decay_underflows_to_zero_without_a_floor():
+    # A long run multiplies the factor thousands of times; the result has to reach zero rather than a NaN.
+    rate = evaluate_schedule(step_decay(1.0, decay_every=1, decay_factor=0.5), [10_000])
+    np.testing.assert_array_equal(rate, [0.0])
+
+
+def test_step_decay_requires_keyword_arguments():
+    """The positional slots mean something different here than in the horizon-based schedules, so passing
+    them positionally is an error rather than a silent reinterpretation."""
+    with pytest.raises(TypeError, match="positional"):
+        step_decay(1.0, 3)  # type: ignore[misc]
+
+
+def test_step_decay_reads_floatX_at_graph_build_time():
+    # Not covered by the shared contract test, and this is the one schedule with an integer intermediate
+    # (the drop count), so it is the likeliest to leak a float64 rate into a float32 graph.
+    schedule = step_decay(1e-3, decay_every=10, min_learning_rate=1e-5)
+    with config.change_flags(floatX="float32"):
+        assert schedule(lscalar("step_count")).type.dtype == "float32"
+    with config.change_flags(floatX="float64"):
+        assert schedule(lscalar("step_count")).type.dtype == "float64"
+
+
+def test_step_decay_accepts_a_unit_factor_as_a_constant_rate():
+    # The factor check admits 1.0, which is a flat schedule rather than a rejected input.
+    rates = evaluate_schedule(step_decay(0.1, decay_every=3, decay_factor=1.0), [0, 3, 30])
+    np.testing.assert_allclose(rates, 0.1, rtol=1e-6)
+
+
+@pytest.mark.parametrize("decay_every", [0, -1])
+def test_step_decay_rejects_a_non_positive_interval(decay_every):
+    with pytest.raises(ValueError, match="decay_every must be at least 1"):
+        step_decay(1.0, decay_every=decay_every)
+
+
+@pytest.mark.parametrize("decay_factor", [0.0, -0.5, 1.5])
+def test_step_decay_rejects_a_factor_outside_the_unit_interval(decay_factor):
+    with pytest.raises(ValueError, match=r"decay_factor must be in \(0, 1]"):
+        step_decay(1.0, decay_every=3, decay_factor=decay_factor)
+
+
+def test_step_decay_rejects_a_floor_above_the_initial_rate():
+    with pytest.raises(ValueError, match="min_learning_rate must not exceed learning_rate"):
+        step_decay(0.001, decay_every=3, min_learning_rate=0.1)

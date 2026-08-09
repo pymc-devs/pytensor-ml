@@ -264,3 +264,64 @@ def polynomial_decay(
         return final_rate + (initial_rate - final_rate) * remaining**exponent
 
     return schedule
+
+
+def step_decay(
+    learning_rate: float,
+    *,
+    decay_every: int,
+    decay_factor: float = 0.1,
+    min_learning_rate: float = 0.0,
+    transition_begin: int = 0,
+) -> Schedule:
+    r"""
+    Multiply the learning rate by ``decay_factor`` every ``decay_every`` steps.
+
+    At step :math:`t`, dropping by :math:`\gamma` every :math:`E` steps and starting from step :math:`B`,
+
+    .. math::
+
+        \eta_t = \max\left(\eta_0\, \gamma^{\lfloor \max(t - B,\, 0) / E \rfloor},\; \eta_{\min}\right)
+
+    so the rate is a staircase rather than a curve, and it decays indefinitely rather than over a fixed
+    horizon. Every argument after the rate is keyword-only, because with no horizon its positional slots
+    would not line up with the other schedules'.
+
+    Parameters
+    ----------
+    learning_rate : float
+        Initial rate :math:`\eta_0`, returned until the first drop.
+    decay_every : int
+        Number of steps :math:`E` between drops. Must be at least one.
+    decay_factor : float, optional
+        Multiplier :math:`\gamma` applied at each drop. Must be in ``(0, 1]``. Default 0.1.
+    min_learning_rate : float, optional
+        Floor :math:`\eta_{\min}` the staircase never goes below. Default 0.0.
+    transition_begin : int, optional
+        Number of steps :math:`B` to hold the initial rate before the first drop can occur. Must not be
+        negative. Default 0.
+
+    Returns
+    -------
+    Schedule
+        A callable mapping the symbolic step count to a scalar learning rate, for
+        :func:`~pytensor_ml.optim.transform.scale_by_schedule`.
+    """
+    if decay_every < 1:
+        raise ValueError(f"decay_every must be at least 1, got {decay_every}.")
+    if not 0.0 < decay_factor <= 1.0:
+        raise ValueError(f"decay_factor must be in (0, 1], got {decay_factor}.")
+    if transition_begin < 0:
+        raise ValueError(f"transition_begin must not be negative, got {transition_begin}.")
+    _validate_rates(learning_rate, min_learning_rate)
+
+    def schedule(step_count: TensorVariable) -> TensorVariable:
+        floatX = config.floatX
+        initial_rate = np.asarray(learning_rate, dtype=floatX)
+        floor_rate = np.asarray(min_learning_rate, dtype=floatX)
+        factor = np.asarray(decay_factor, dtype=floatX)
+
+        drops = pt.maximum(step_count - transition_begin, 0) // decay_every
+        return pt.maximum(initial_rate * factor ** drops.astype(floatX), floor_rate)
+
+    return schedule
