@@ -6,7 +6,7 @@ import numpy as np
 import pytensor
 
 from pytensor.compile.sharedvalue import SharedVariable
-from pytensor.gradient import grad
+from pytensor.gradient import DisconnectedInputError, DisconnectedType, grad
 from pytensor.tensor import TensorVariable
 from pytensor.tensor.sharedvar import TensorSharedVariable
 
@@ -56,13 +56,44 @@ def get_gradients(
     -------
     list of TensorVariable
         One gradient per parameter, in the order of ``parameters``.
+
+    Raises
+    ------
+    DisconnectedInputError
+        If the loss has no gradient with respect to one of ``parameters``, naming the ones it cannot reach.
     """
     if isinstance(loss_or_gradients, list | tuple):
         gradients = list(loss_or_gradients)
         if len(gradients) != len(parameters):
             raise ValueError(f"Got {len(gradients)} gradients for {len(parameters)} parameters.")
         return gradients
-    return grad(rewrite_pregrad(loss_or_gradients), list(parameters))  # type: ignore[return-value]
+
+    loss = rewrite_pregrad(loss_or_gradients)
+    try:
+        return grad(loss, list(parameters))  # type: ignore[return-value]
+    except DisconnectedInputError as error:
+        unreachable = _unreachable_parameter_names(loss, parameters)
+        if not unreachable:
+            raise
+        raise DisconnectedInputError(
+            f"The loss has no gradient with respect to {unreachable}. Leave them out of `parameters`, or "
+            "check that the loss is meant to depend on them: a term that differentiates away, such as an "
+            "output bias under a second derivative, is the usual cause."
+        ) from error
+
+
+def _unreachable_parameter_names(
+    loss: TensorVariable, parameters: Sequence[Parameter]
+) -> list[str]:
+    """Name the parameters the loss carries no gradient signal to, which pytensor's own error omits."""
+    gradients = grad(
+        loss, list(parameters), disconnected_inputs="ignore", return_disconnected="disconnected"
+    )
+    return [
+        parameter.name or str(parameter)
+        for parameter, gradient in zip(parameters, gradients)  # type: ignore[arg-type]
+        if isinstance(gradient.type, DisconnectedType)
+    ]
 
 
 # A per-parameter slot, or the bare name of a rule-wide counter.

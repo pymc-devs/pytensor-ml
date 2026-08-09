@@ -5,6 +5,8 @@ import pytensor
 import pytensor.tensor as pt
 import pytest
 
+from pytensor.gradient import DisconnectedInputError, grad
+
 from pytensor_ml import params
 from pytensor_ml.optim import (
     adadelta,
@@ -452,3 +454,27 @@ def test_get_gradients_rejects_count_mismatch():
     one_gradient = [pt.constant(np.ones(2, dtype=floatX))]
     with pytest.raises(ValueError, match="1 gradients for 2 parameters"):
         sgd_updates(one_gradient, [weight, bias])
+
+
+def test_get_gradients_names_the_parameters_the_loss_cannot_reach():
+    """Pytensor raises with an empty message here, which says nothing about which parameter is at fault."""
+    reachable = trainable(np.ones(2), name="reachable")
+    unreachable = trainable(np.ones(2), name="unreachable")
+    loss = (reachable**2).sum()
+
+    with pytest.raises(DisconnectedInputError, match=r"\['unreachable'\]"):
+        sgd_updates(loss, [reachable, unreachable])
+
+
+def test_get_gradients_names_a_parameter_lost_to_a_second_derivative():
+    """The shape a PINN hits: an output bias is additive in the network output, so it survives in the loss as
+    written and vanishes once the loss differentiates twice with respect to the input."""
+    x = pt.scalar("x")
+    weight = trainable(1.0, name="weight")
+    scale = trainable(1.0, name="scale")
+    output_bias = trainable(1.0, name="output_bias")
+    u = pt.tanh(x * weight) * scale + output_bias
+    loss = grad(grad(u, x), x) ** 2
+
+    with pytest.raises(DisconnectedInputError, match=r"\['output_bias'\]"):
+        sgd_updates(loss, [weight, scale, output_bias])
