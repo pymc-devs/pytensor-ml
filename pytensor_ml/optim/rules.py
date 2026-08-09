@@ -195,7 +195,7 @@ def adamw_updates(
     """
     gradients = get_gradients(loss_or_gradients, parameters)
 
-    step_count = counter("adam/step_count")
+    step_count = counter("adamw/step_count")
     new_step_count = step_count + 1
     new_step_count_float = new_step_count.astype(config.floatX)
     first_moment_bias_correction = 1 - beta1**new_step_count_float
@@ -203,8 +203,8 @@ def adamw_updates(
 
     updates: Updates = {step_count: new_step_count}
     for parameter, gradient in zip(parameters, gradients):
-        first_moment = state_for(parameter, "adam/first_moment")
-        second_moment = state_for(parameter, "adam/second_moment")
+        first_moment = state_for(parameter, "adamw/first_moment")
+        second_moment = state_for(parameter, "adamw/second_moment")
 
         new_first_moment = beta1 * first_moment + (1 - beta1) * gradient
         new_second_moment = beta2 * second_moment + (1 - beta2) * gradient**2
@@ -213,7 +213,7 @@ def adamw_updates(
 
         second_moment_for_denominator = (
             _running_max_second_moment(
-                parameter, new_second_moment, updates, "adam/max_second_moment"
+                parameter, new_second_moment, updates, "adamw/max_second_moment"
             )
             if amsgrad
             else new_second_moment

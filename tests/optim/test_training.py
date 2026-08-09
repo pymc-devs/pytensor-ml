@@ -220,6 +220,28 @@ def test_compile_train_rejects_duplicate_parameter_names():
         compile_train(loss, adam(1e-3), parameters=[first, second], inputs=[])
 
 
+def test_two_rules_over_different_parameter_groups_train_both():
+    # Decaying the weights and leaving the biases alone means two rules in one training step. Their
+    # rule-wide state is not parameter-scoped, so a name shared between two rules stops the step compiling.
+    weight = trainable(np.array([2.0]), name="weight")
+    bias = trainable(np.array([3.0]), name="bias")
+    loss = 0.5 * ((weight**2).sum() + (bias**2).sum())
+
+    def decay_the_weights_only(loss_or_gradients, parameters):
+        return {
+            **adamw(learning_rate=0.1)(loss_or_gradients, [weight]),
+            **adam(learning_rate=0.1)(loss_or_gradients, [bias]),
+        }
+
+    step = compile_train(loss, decay_the_weights_only, parameters=[weight, bias], inputs=[])
+    step()
+
+    # Both rules take a first step of -lr * sign(gradient) once bias correction is applied, and adamw adds
+    # its decoupled decay of weight_decay * parameter on top.
+    np.testing.assert_allclose(weight.get_value(), [2.0 - 0.1 * (1 + 0.01 * 2.0)], rtol=1e-3)
+    np.testing.assert_allclose(bias.get_value(), [3.0 - 0.1], rtol=1e-3)
+
+
 def test_compile_train_includes_non_trainable_updates():
     # compile_train merges batch-norm running-stat updates that a bare gradient rule would omit.
     X = pt.tensor("X", shape=(None, 4))
