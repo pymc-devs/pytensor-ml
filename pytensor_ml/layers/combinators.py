@@ -20,6 +20,8 @@ def Input(name: str, shape: tuple[int | None, ...], dtype: str | None = None) ->
 
 
 def Sequential(*layers: Callable) -> Callable:
+    """Compose layers left to right into a single callable that threads its input through each in turn."""
+
     def forward(x: pt.TensorLike) -> pt.TensorLike:
         for layer in layers:
             x = layer(x)
