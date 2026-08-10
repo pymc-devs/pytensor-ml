@@ -6,6 +6,7 @@ from pytensor.tensor.variable import TensorVariable
 
 from pytensor_ml.base import Layer, UnaryLayerOp
 from pytensor_ml.layers.linear import Linear
+from pytensor_ml.state import Initializer
 
 
 class AttentionLayer(UnaryLayerOp):
@@ -152,6 +153,11 @@ class MultiheadAttention(Layer):
         Include bias terms in the projections. Default is True.
     is_causal : bool, optional
         Apply a causal mask in the attention. Default is False.
+    out_proj_initializer : Initializer, optional
+        How the output projection's weight is drawn, in place of whatever scheme
+        :meth:`~pytensor_ml.model.Model.initialize` is given. The three input projections are unaffected,
+        which is what a scaling applied only to the projection writing back into a residual stream needs.
+        Left to the scheme when omitted.
     """
 
     def __init__(
@@ -162,6 +168,8 @@ class MultiheadAttention(Layer):
         n_kv_head: int | None = None,
         bias: bool = True,
         is_causal: bool = False,
+        *,
+        out_proj_initializer: Initializer | None = None,
     ):
         if n_embd % n_head != 0:
             raise ValueError(f"n_embd ({n_embd}) must be divisible by n_head ({n_head})")
@@ -179,7 +187,13 @@ class MultiheadAttention(Layer):
         self.q_proj = Linear(f"{self.name}_q_proj", n_embd, n_head * self.head_dim, bias)
         self.k_proj = Linear(f"{self.name}_k_proj", n_embd, n_kv_head * self.head_dim, bias)
         self.v_proj = Linear(f"{self.name}_v_proj", n_embd, n_kv_head * self.head_dim, bias)
-        self.out_proj = Linear(f"{self.name}_out_proj", n_head * self.head_dim, n_embd, bias)
+        self.out_proj = Linear(
+            f"{self.name}_out_proj",
+            n_head * self.head_dim,
+            n_embd,
+            bias,
+            weight_initializer=out_proj_initializer,
+        )
 
     def _split_heads(self, x: pt.TensorVariable, n_head: int) -> pt.TensorVariable:
         # (..., seq, n_head * head_dim) -> (..., n_head, seq, head_dim). split_dims keeps the static
@@ -225,6 +239,8 @@ class CausalSelfAttention(MultiheadAttention):
         Number of key/value heads, for grouped-query attention. Defaults to ``n_head``.
     bias : bool, optional
         Include bias terms in the projections. Default is True.
+    out_proj_initializer : Initializer, optional
+        How the output projection's weight is drawn. See :class:`MultiheadAttention`.
     """
 
     def __init__(
@@ -234,6 +250,8 @@ class CausalSelfAttention(MultiheadAttention):
         n_head: int,
         n_kv_head: int | None = None,
         bias: bool = True,
+        *,
+        out_proj_initializer: Initializer | None = None,
     ):
         super().__init__(
             name if name else "CausalSelfAttention",
@@ -242,6 +260,7 @@ class CausalSelfAttention(MultiheadAttention):
             n_kv_head=n_kv_head,
             bias=bias,
             is_causal=True,
+            out_proj_initializer=out_proj_initializer,
         )
 
 

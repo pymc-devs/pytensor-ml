@@ -8,8 +8,10 @@ from pytensor.graph.traversal import ancestors
 from pytensor.tensor.random.op import RandomVariable
 
 from pytensor_ml.activations import ReLU
+from pytensor_ml.layers.attention import CausalSelfAttention
 from pytensor_ml.layers.transformer import FeedForward, TransformerBlock
 from pytensor_ml.pytensorf import collect_trainable_params
+from pytensor_ml.state import CustomInitializer, initialize_params
 
 floatX = pytensor.config.floatX
 # The python linker evaluates the same graph without a slow numba compile of these block-sized graphs.
@@ -140,3 +142,18 @@ def test_block_forwards_attention_config(rng):
 
     X_np = rng.normal(size=(1, 4, 8)).astype(floatX)
     assert not np.allclose(out.eval({X: X_np}, mode=FAST), masked_out.eval({X: X_np}, mode=FAST))
+
+
+def test_a_causal_attention_forwards_the_out_projection_initializer():
+    """CausalSelfAttention builds its projections through its base class, so the keyword has to survive the
+    super().__init__ call rather than being silently dropped by the subclass."""
+    sentinel = 7.0
+    scaled = CustomInitializer(lambda shape, dtype, rng: np.full(shape, sentinel, dtype=dtype))
+    attention = CausalSelfAttention("attn", n_embd=8, n_head=2, out_proj_initializer=scaled)
+    out = attention(pt.tensor("x", shape=(None, 4, 8), dtype=floatX))
+
+    params = collect_trainable_params(out)
+    values = dict(zip((p.name for p in params), initialize_params(params, scheme="zeros", rng=0)))
+
+    np.testing.assert_allclose(values["attn_out_proj_W"], sentinel)
+    np.testing.assert_allclose(values["attn_q_proj_W"], 0.0)
