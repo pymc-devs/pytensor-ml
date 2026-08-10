@@ -412,6 +412,30 @@ INITIALIZER_KEYWORDS = {
         "emb_W",
         {},
     ),
+    "BatchNorm2D.scale": (
+        lambda init: BatchNorm2D("bn", n_in=4, scale_initializer=init),
+        FEATURES,
+        "bn_scale",
+        {"bn_loc": 0.0},
+    ),
+    "BatchNorm2D.loc": (
+        lambda init: BatchNorm2D("bn", n_in=4, loc_initializer=init),
+        FEATURES,
+        "bn_loc",
+        {"bn_scale": 1.0},
+    ),
+    "LayerNorm.scale": (
+        lambda init: LayerNorm("ln", n_in=4, scale_initializer=init),
+        FEATURES,
+        "ln_scale",
+        {"ln_loc": 0.0},
+    ),
+    "LayerNorm.loc": (
+        lambda init: LayerNorm("ln", n_in=4, loc_initializer=init),
+        FEATURES,
+        "ln_loc",
+        {"ln_scale": 1.0},
+    ),
 }
 
 

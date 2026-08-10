@@ -5,7 +5,7 @@ from pytensor import config
 
 from pytensor_ml.base import Layer, LayerOp, UnaryLayerOp
 from pytensor_ml.params import NonTrainableParameter, TrainableParameter, non_trainable, trainable
-from pytensor_ml.state import OneInitializer, ZeroInitializer
+from pytensor_ml.state import Initializer, OneInitializer, ZeroInitializer
 
 
 def _standardize(X, epsilon, axis, keepdims=False):
@@ -76,18 +76,28 @@ def _resolve_n_in(name: str, n_in: int | None, X: pt.TensorVariable | None) -> i
     return inferred
 
 
-def _affine_parameters(name: str, n_in: int) -> tuple[TrainableParameter, TrainableParameter]:
+def _affine_parameters(
+    name: str,
+    n_in: int,
+    loc_initializer: Initializer | None = None,
+    scale_initializer: Initializer | None = None,
+) -> tuple[TrainableParameter, TrainableParameter]:
     """Build the learned shift and scale. Returns them in the ``(loc, scale)`` order that every norm
     op unpacks its inputs in, so the two cannot drift apart.
 
     Both declare their initializer, so a network-wide scheme leaves the identity transform in place --
-    normalizing and then rescaling by a random factor defeats the point of the layer.
+    normalizing and then rescaling by a random factor defeats the point of the layer. A caller who wants
+    something else says so, and their choice becomes the declaration.
     """
     loc = trainable(
-        np.zeros(n_in, dtype=config.floatX), f"{name}_loc", initializer=ZeroInitializer()
+        np.zeros(n_in, dtype=config.floatX),
+        f"{name}_loc",
+        initializer=ZeroInitializer() if loc_initializer is None else loc_initializer,
     )
     scale = trainable(
-        np.ones(n_in, dtype=config.floatX), f"{name}_scale", initializer=OneInitializer()
+        np.ones(n_in, dtype=config.floatX),
+        f"{name}_scale",
+        initializer=OneInitializer() if scale_initializer is None else scale_initializer,
     )
     return loc, scale
 
@@ -163,6 +173,11 @@ class BatchNorm2D(Layer):
         Apply the learned scale :math:`\gamma` and shift :math:`\beta`, starting from the identity
         transform :math:`\gamma = 1`, :math:`\beta = 0`, which a network-wide initialization scheme
         leaves in place. Default is True.
+    scale_initializer : Initializer, optional
+        How :math:`\gamma` is drawn. Ones when omitted, which is the identity transform; a scheme that
+        rescaled a normalized activation by a random factor would defeat the layer.
+    loc_initializer : Initializer, optional
+        How :math:`\beta` is drawn. Zeros when omitted.
     track_running_stats : bool, optional
         Maintain running mean and variance for use at prediction time. Default is True.
 
@@ -186,6 +201,9 @@ class BatchNorm2D(Layer):
         momentum: float = 0.1,
         affine: bool = True,
         track_running_stats: bool = True,
+        *,
+        scale_initializer: Initializer | None = None,
+        loc_initializer: Initializer | None = None,
     ):
         self.name = name if name else "BatchNorm"
         self.n_in = n_in
@@ -193,6 +211,8 @@ class BatchNorm2D(Layer):
         self.momentum = momentum
         self.affine = affine
         self.track_running_stats = track_running_stats
+        self._scale_initializer = scale_initializer
+        self._loc_initializer = loc_initializer
 
         self.scale: TrainableParameter | None = None
         self.loc: TrainableParameter | None = None
@@ -213,7 +233,12 @@ class BatchNorm2D(Layer):
             return
 
         if self.affine:
-            self.loc, self.scale = _affine_parameters(self.name, n_in)
+            self.loc, self.scale = _affine_parameters(
+                self.name,
+                n_in,
+                loc_initializer=self._loc_initializer,
+                scale_initializer=self._scale_initializer,
+            )
 
         if self.track_running_stats:
             zeros = np.zeros(n_in, dtype=config.floatX)
@@ -297,6 +322,11 @@ class LayerNorm(Layer):
         Apply the learned scale :math:`\gamma` and shift :math:`\beta`, starting from the identity
         transform :math:`\gamma = 1`, :math:`\beta = 0`, which a network-wide initialization scheme
         leaves in place. Default is True.
+    scale_initializer : Initializer, optional
+        How :math:`\gamma` is drawn. Ones when omitted, which is the identity transform; a scheme that
+        rescaled a normalized activation by a random factor would defeat the layer.
+    loc_initializer : Initializer, optional
+        How :math:`\beta` is drawn. Zeros when omitted.
     """
 
     def __init__(
@@ -305,11 +335,16 @@ class LayerNorm(Layer):
         n_in: int | None = None,
         epsilon: float = 1e-5,
         affine: bool = True,
+        *,
+        scale_initializer: Initializer | None = None,
+        loc_initializer: Initializer | None = None,
     ):
         self.name = name if name else "LayerNorm"
         self.n_in = n_in
         self.epsilon = epsilon
         self.affine = affine
+        self._scale_initializer = scale_initializer
+        self._loc_initializer = loc_initializer
 
         self.scale: TrainableParameter | None = None
         self.loc: TrainableParameter | None = None
@@ -326,7 +361,12 @@ class LayerNorm(Layer):
             return
 
         if self.affine:
-            self.loc, self.scale = _affine_parameters(self.name, n_in)
+            self.loc, self.scale = _affine_parameters(
+                self.name,
+                n_in,
+                loc_initializer=self._loc_initializer,
+                scale_initializer=self._scale_initializer,
+            )
 
         self.initialized = True
 
