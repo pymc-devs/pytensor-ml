@@ -166,6 +166,19 @@ def test_a_reused_dropout_instance_keeps_drawing_new_masks():
     )  # a fresh mask on every call, not just eventually
 
 
+def test_a_returned_generator_is_the_one_the_caller_asked_for():
+    """Returning a generator alongside a draw from it is not two draws: an output reads the generator without
+    consuming it, so it must keep reading the caller's own."""
+    rng = shared(np.random.default_rng(0), name="rng")
+    _, noise = ptr.normal(rng=rng, return_next_rng=True)
+    draw = function([], [noise, rng])
+
+    expected = rng.get_value(borrow=True).bit_generator.state
+    returned = draw()[1].bit_generator.state
+
+    assert returned == expected
+
+
 def test_a_generator_read_only_by_an_update_still_advances():
     """A rule that adds noise to its step reads a generator the outputs never touch, so collecting updates
     from the outputs alone left that generator frozen and every step took the identical perturbation."""
@@ -183,3 +196,41 @@ def test_a_generator_read_only_by_an_update_still_advances():
 
     assert not np.allclose(increments[0], increments[1])
     assert not np.allclose(increments[1], increments[2])
+
+
+def test_two_distinct_draws_off_one_generator_are_rejected():
+    """One generator cannot serve two different draws: it has no single next state, so nothing can advance
+    it and every call would repeat. pytensor calls such a graph inconsistent and threads no update, which
+    would otherwise show up as a training run whose noise never changes."""
+    rng = shared(np.random.default_rng(0), name="rng")
+    _, normal_draw = ptr.normal(rng=rng, return_next_rng=True)
+    _, uniform_draw = ptr.uniform(rng=rng, return_next_rng=True)
+
+    with pytest.raises(ValueError, match="which nothing advances"):
+        function([], [normal_draw, uniform_draw])
+
+
+def test_a_shared_generator_is_accepted_when_the_caller_advances_it():
+    """The check is about the assembled updates, not about how the graph looks: a caller who threads the
+    generator themselves has answered the question, and their update stands."""
+    rng = shared(np.random.default_rng(0), name="rng")
+    next_rng, normal_draw = ptr.normal(rng=rng, return_next_rng=True)
+    _, uniform_draw = ptr.uniform(rng=next_rng, return_next_rng=True)
+
+    draw = function([], [normal_draw, uniform_draw], updates={rng: next_rng})
+
+    first, second = draw(), draw()
+    assert float(first[0]) != float(second[0])  # the draw off the generator advances
+    assert float(first[1]) != float(second[1])  # and so does the one off the threaded next state
+
+
+def test_a_draw_shared_between_an_output_and_an_update_is_rejected():
+    """An update expression is a reader like any other, so a generator drawn from by both an output and an
+    update is read twice and cannot be advanced once."""
+    rng = shared(np.random.default_rng(0), name="rng")
+    accumulator = shared(np.zeros(()), name="accumulator")
+    _, output_draw = ptr.normal(rng=rng, return_next_rng=True)
+    _, update_draw = ptr.uniform(rng=rng, return_next_rng=True)
+
+    with pytest.raises(ValueError, match="which nothing advances"):
+        function([], output_draw, updates={accumulator: accumulator + update_draw})

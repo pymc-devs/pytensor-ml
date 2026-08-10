@@ -46,6 +46,34 @@ def reseed_rngs(rngs: Sequence[SharedVariable], seed: SeedSequenceSeed) -> None:
         rng.set_value(np.random.Generator(bit_generator), borrow=True)
 
 
+def find_generators_drawn_from(
+    outputs: Sequence[Variable],
+) -> list[RandomGeneratorSharedVariable]:
+    """
+    Return the shared generators the graph draws from, excluding any it only hands back.
+
+    A generator returned as an output is read without being consumed, so it needs no update; one an op draws
+    from does, and a graph that draws from a generator nothing advances repeats the same values forever.
+
+    Parameters
+    ----------
+    outputs : sequence of Variable
+        Graph outputs to trace back from.
+
+    Returns
+    -------
+    list of RandomGeneratorSharedVariable
+        The generators some node in the graph draws from, in graph-input order.
+    """
+    fgraph = FunctionGraph(outputs=list(outputs), clone=False)
+    return [
+        generator
+        for generator in fgraph.inputs
+        if isinstance(generator, RandomGeneratorSharedVariable)
+        and any(not isinstance(client.op, Output) for client, _ in fgraph.clients[generator])
+    ]
+
+
 def collect_default_updates_inner_fgraph(node: Apply) -> dict[Variable, Variable]:
     """Collect default RNG updates from a node carrying an inner function graph, mapped to outer variables."""
     op = node.op

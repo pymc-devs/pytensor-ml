@@ -1,3 +1,5 @@
+import warnings
+
 from collections.abc import Sequence
 
 import pytensor
@@ -12,6 +14,7 @@ from pytensor_ml.pytensorf.rng import (
     SeedSequenceSeed,
     atleast_list,
     collect_default_updates,
+    find_generators_drawn_from,
     find_rng_nodes,
     reseed_rngs,
 )
@@ -49,6 +52,12 @@ def function(
     -------
     Function
         The compiled function.
+
+    Raises
+    ------
+    ValueError
+        If the graph draws from a shared generator that nothing advances, which would repeat the same values
+        on every call. Two different draws reading one generator is the usual cause.
     """
     updates = dict(kwargs.pop("updates", {}))
     input_variables = [inp.variable if isinstance(inp, pytensor.In) else inp for inp in inputs]
@@ -62,7 +71,27 @@ def function(
     if random_seed is not None:
         reseed_rngs(find_rng_nodes(read_variables), random_seed)
 
-    rng_updates = collect_default_updates(inputs=input_variables, outputs=read_variables)
+    with warnings.catch_warnings():
+        # This warns for a generator with several distinct draws and returns no update for it. The check
+        # below reports that better, and only once the caller's own updates are known.
+        warnings.filterwarnings(
+            "ignore", message="RNG Variable .* multiple distinct clients", category=UserWarning
+        )
+        rng_updates = collect_default_updates(inputs=input_variables, outputs=read_variables)
+
+    frozen = [
+        generator
+        for generator in find_generators_drawn_from(read_variables)
+        if generator not in rng_updates and generator not in updates
+    ]
+    if frozen:
+        raise ValueError(
+            f"The graph draws from {[str(generator.name or generator) for generator in frozen]}, which "
+            "nothing advances, so every call would repeat the same values. A generator read by two "
+            "different draws has no single next state, which is the usual cause. Give each draw its own "
+            "generator, thread one through with `next_rng, draw = pt.random.normal(rng=rng, "
+            "return_next_rng=True)`, or pass an update for it yourself."
+        )
 
     base_mode = get_mode(mode)
     mode = Mode(
