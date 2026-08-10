@@ -16,7 +16,7 @@ from pytensor_ml.pytensorf import (
     collect_trainable_params,
     rewrite_for_prediction,
 )
-from pytensor_ml.state import CustomInitializer, initialize_params
+from pytensor_ml.state import CustomInitializer, NormalInitializer, initialize_params
 
 floatX = pytensor.config.floatX
 
@@ -386,3 +386,53 @@ def test_a_layer_declares_the_initializers_its_parameters_need(layer_name):
             np.testing.assert_allclose(value, sentinel)  # no declaration: the scheme applies
         else:
             np.testing.assert_allclose(value, expected[param.name])
+
+
+# One case per keyword: the layer to build with it, the parameter it must reach, and the parameters it must
+# leave alone. A keyword that hits the wrong parameter, or that quietly strips a sibling's declaration, is
+# the failure this is aimed at.
+INITIALIZER_KEYWORDS = {
+    "Linear.weight": (
+        lambda init: Linear("fc", n_in=4, n_out=4, weight_initializer=init),
+        FEATURES,
+        "fc_W",
+        {"fc_b": 0.0},
+    ),
+    "Linear.bias": (
+        lambda init: Linear("fc", n_in=4, n_out=4, bias_initializer=init),
+        FEATURES,
+        "fc_b",
+        {
+            "fc_W": 0.0
+        },  # the scheme's value: a bias initializer reaching the weight would show up here
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(INITIALIZER_KEYWORDS), ids=sorted(INITIALIZER_KEYWORDS))
+def test_an_initializer_keyword_reaches_only_the_parameter_it_names(case):
+    build, layer_input, target, siblings = INITIALIZER_KEYWORDS[case]
+    sentinel = 7.0
+    layer = build(
+        CustomInitializer(lambda shape, dtype, rng: np.full(shape, sentinel, dtype=dtype))
+    )
+    prediction = layer(layer_input)
+
+    params = collect_trainable_params(prediction)
+    values = dict(zip((p.name for p in params), initialize_params(params, scheme="zeros", rng=0)))
+
+    np.testing.assert_allclose(values[target], sentinel)
+    for name, expected in siblings.items():
+        np.testing.assert_allclose(values[name], expected)
+
+
+def test_a_bias_initializer_replaces_the_zero_declaration_rather_than_fighting_it():
+    """The keyword becomes the declaration, so it survives a network-wide scheme the same way the zero it
+    replaced did. torch draws biases from a fan-scaled uniform, and this is how you say that here."""
+    layer = Linear("fc", n_in=4, n_out=4, bias_initializer=NormalInitializer(0.0, 1.0))
+    prediction = layer(pt.tensor("features", shape=(None, 4), dtype=floatX))
+
+    params = collect_trainable_params(prediction)
+    values = dict(zip((p.name for p in params), initialize_params(params, scheme="zeros", rng=0)))
+
+    assert not np.allclose(values["fc_b"], 0.0)

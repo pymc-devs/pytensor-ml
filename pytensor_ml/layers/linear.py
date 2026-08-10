@@ -5,7 +5,7 @@ from pytensor import config
 
 from pytensor_ml.base import Layer, UnaryLayerOp
 from pytensor_ml.params import trainable
-from pytensor_ml.state import ZeroInitializer
+from pytensor_ml.state import Initializer, ZeroInitializer
 
 
 def shape_to_str(shape):
@@ -38,6 +38,12 @@ class Linear(Layer):
     bias : bool, optional
         Add the learned shift :math:`b`, which starts at zero and stays there under a network-wide
         initialization scheme. Default is True.
+    weight_initializer : Initializer, optional
+        How :math:`W` is drawn, in place of whatever scheme :meth:`~pytensor_ml.model.Model.initialize` is
+        given. Left to the scheme when omitted, which is what makes a network-wide choice reach the weights.
+    bias_initializer : Initializer, optional
+        How :math:`b` is drawn. Zeros when omitted, following Keras and flax rather than torch, which draws
+        the bias from :math:`\mathcal{U}(\pm 1/\sqrt{\text{fan\_in}})`.
 
     Notes
     -----
@@ -47,18 +53,31 @@ class Linear(Layer):
     value yourself, before training.
     """
 
-    def __init__(self, name: str | None, n_in: int, n_out: int, bias: bool = True):
+    def __init__(
+        self,
+        name: str | None,
+        n_in: int,
+        n_out: int,
+        bias: bool = True,
+        *,
+        weight_initializer: Initializer | None = None,
+        bias_initializer: Initializer | None = None,
+    ):
         self.name = name if name else "Linear"
         self.n_in = n_in
         self.n_out = n_out
         self.bias = bias
 
         W_value = np.zeros((n_in, n_out), dtype=config.floatX)
-        self.W = trainable(W_value, f"{self.name}_W")
+        self.W = trainable(W_value, f"{self.name}_W", initializer=weight_initializer)
 
         if self.bias:
             b_value = np.zeros(n_out, dtype=config.floatX)
-            self.b = trainable(b_value, f"{self.name}_b", initializer=ZeroInitializer())
+            self.b = trainable(
+                b_value,
+                f"{self.name}_b",
+                initializer=ZeroInitializer() if bias_initializer is None else bias_initializer,
+            )
 
     def __call__(self, X: pt.TensorLike) -> pt.TensorVariable:
         X = pt.as_tensor(X)
