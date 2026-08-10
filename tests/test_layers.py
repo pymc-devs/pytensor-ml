@@ -406,6 +406,12 @@ INITIALIZER_KEYWORDS = {
             "fc_W": 0.0
         },  # the scheme's value: a bias initializer reaching the weight would show up here
     ),
+    "Embedding.weight": (
+        lambda init: Embedding("emb", n_embeddings=6, n_features=4, weight_initializer=init),
+        IDS,
+        "emb_W",
+        {},
+    ),
 }
 
 
