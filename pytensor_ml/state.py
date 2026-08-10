@@ -119,6 +119,18 @@ def fans(shape: tuple[int, ...]) -> tuple[int, int]:
 
 
 class XavierUniformInitializer(Initializer):
+    r"""
+    Draw from :math:`\mathcal{U}(\pm\sqrt{6 / (\text{fan\_in} + \text{fan\_out})})`.
+
+    The bound is chosen so the variance of the activations, and of the gradients flowing back, stays roughly
+    constant through depth. Also called Glorot initialization.
+
+    References
+    ----------
+    .. [1] Glorot, X. and Bengio, Y. (2010). Understanding the difficulty of training deep feedforward
+           neural networks. Proceedings of AISTATS, 249-256.
+    """
+
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
         fan_in, fan_out = fans(shape)
         scale = np.sqrt(6.0 / (fan_in + fan_out))
@@ -126,6 +138,17 @@ class XavierUniformInitializer(Initializer):
 
 
 class XavierNormalInitializer(Initializer):
+    r"""
+    Draw from :math:`\mathcal{N}(0, 2 / (\text{fan\_in} + \text{fan\_out}))`.
+
+    The normal counterpart of :class:`XavierUniformInitializer`, targeting the same variance.
+
+    References
+    ----------
+    .. [1] Glorot, X. and Bengio, Y. (2010). Understanding the difficulty of training deep feedforward
+           neural networks. Proceedings of AISTATS, 249-256.
+    """
+
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
         fan_in, fan_out = fans(shape)
         scale = np.sqrt(2.0 / (fan_in + fan_out))
