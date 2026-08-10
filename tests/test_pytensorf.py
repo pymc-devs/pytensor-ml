@@ -164,3 +164,22 @@ def test_a_reused_dropout_instance_keeps_drawing_new_masks():
     assert all(
         np.any(outputs[i] != outputs[j]) for i in range(4) for j in range(i + 1, 4)
     )  # a fresh mask on every call, not just eventually
+
+
+def test_a_generator_read_only_by_an_update_still_advances():
+    """A rule that adds noise to its step reads a generator the outputs never touch, so collecting updates
+    from the outputs alone left that generator frozen and every step took the identical perturbation."""
+    rng = shared(np.random.default_rng(0), name="rng")
+    parameter = shared(np.zeros(()), name="w")
+    _, noise = ptr.normal(rng=rng, return_next_rng=True)
+
+    step = function([], parameter**2, updates={parameter: parameter + noise})
+
+    increments = []
+    for _ in range(3):
+        before = float(parameter.get_value())
+        step()
+        increments.append(float(parameter.get_value()) - before)
+
+    assert not np.allclose(increments[0], increments[1])
+    assert not np.allclose(increments[1], increments[2])

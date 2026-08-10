@@ -50,15 +50,19 @@ def function(
     Function
         The compiled function.
     """
+    updates = dict(kwargs.pop("updates", {}))
     input_variables = [inp.variable if isinstance(inp, pytensor.In) else inp for inp in inputs]
-    output_variables = [
-        out.variable if isinstance(out, pytensor.Out) else out for out in atleast_list(outputs)
+    # Updates count as readers: a generator a rule draws its noise from is read by the update expression
+    # and often by nothing else, and one read by both an output and an update is read twice.
+    read_variables = [
+        *(out.variable if isinstance(out, pytensor.Out) else out for out in atleast_list(outputs)),
+        *updates.values(),
     ]
 
     if random_seed is not None:
-        reseed_rngs(find_rng_nodes(output_variables), random_seed)
+        reseed_rngs(find_rng_nodes(read_variables), random_seed)
 
-    rng_updates = collect_default_updates(inputs=input_variables, outputs=output_variables)
+    rng_updates = collect_default_updates(inputs=input_variables, outputs=read_variables)
 
     base_mode = get_mode(mode)
     mode = Mode(
@@ -69,7 +73,7 @@ def function(
     return pytensor.function(
         inputs,
         outputs,
-        updates={**rng_updates, **kwargs.pop("updates", {})},
+        updates={**rng_updates, **updates},
         mode=mode,
         **kwargs,
     )
