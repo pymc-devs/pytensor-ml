@@ -16,6 +16,7 @@ from pytensor_ml.layers import Dropout, DropoutLayer, Linear, Sequential
 from pytensor_ml.pytensorf import (
     collect_trainable_params,
     compile_predict,
+    function,
     rewrite_for_prediction,
     rewrite_pregrad,
 )
@@ -90,3 +91,26 @@ def test_rewrite_pregrad_leaves_a_fully_detached_parameter_disconnected():
 
     with pytest.raises(DisconnectedInputError):
         grad(rewrite_pregrad(loss), W)
+
+
+def test_a_reused_dropout_instance_keeps_drawing_new_masks():
+    """Using one Dropout object at two points in a network is an ordinary thing to write, and it used to
+    freeze the mask for the whole run."""
+    X = pt.tensor("X", shape=(None, 3))
+    dropout = Dropout(p=0.5, random_state=0)
+    prediction = Sequential(
+        Linear("fc1", n_in=3, n_out=4), dropout, Linear("fc2", n_in=4, n_out=2), dropout
+    )(X)
+    for parameter in collect_trainable_params(prediction):
+        parameter.set_value(np.ones_like(parameter.get_value()))
+
+    forward = function([X], prediction)
+    features = np.ones((4, 3), dtype=config.floatX)
+    outputs = [forward(features) for _ in range(4)]
+
+    assert (
+        len(dropout.generators) == 2
+    )  # one per application, so neither draw is starved of updates
+    assert all(
+        np.any(outputs[i] != outputs[j]) for i in range(4) for j in range(i + 1, 4)
+    )  # a fresh mask on every call, not just eventually
