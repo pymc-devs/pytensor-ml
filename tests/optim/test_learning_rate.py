@@ -22,8 +22,7 @@ from pytensor_ml.optim import (
     sgd,
 )
 from pytensor_ml.params import StepCounter, step_counter, trainable
-from pytensor_ml.pytensorf import collect_step_counters
-from pytensor_ml.pytensorf import function as pytensor_function
+from pytensor_ml.pytensorf import collect_step_counters, function
 
 RTOL = 1e-6
 
@@ -353,13 +352,15 @@ def test_a_scheduled_rule_keeps_exactly_one_clock(alias, clock_name):
 def test_a_caller_held_clock_keeps_advancing_for_other_readers():
     """A clock is state that outlives the compile: the caller reads it, and so can another compiled function.
     Compiling a training step must not take it out of the set that step advances."""
-    p, loss = quadratic_problem()
+    _, loss = quadratic_problem()
     clock = step_counter("agent_clock")
     step = compile_train(loss, adam(learning_rate=cosine_schedule(0.1, 100)(clock)))
-    epsilon = pytensor_function([], cosine_schedule(1.0, 100)(clock))
+    exploration_schedule = cosine_schedule(1.0, 100)
+    epsilon = function([], exploration_schedule(clock))
 
     for _ in range(20):
         step()
 
     assert int(clock.get_value()) == 20
-    assert float(epsilon()) < 1.0
+    expected = float(exploration_schedule(pt.as_tensor(20, dtype="int64")).eval())
+    np.testing.assert_allclose(epsilon(), expected, rtol=RTOL)
