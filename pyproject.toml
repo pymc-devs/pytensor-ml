@@ -54,6 +54,10 @@ dev = [
     "jax",
     "pyyaml",
 ]
+examples = [
+    "matplotlib",
+    "tqdm",
+]
 
 [tool.hatch.version]
 source = "vcs"
