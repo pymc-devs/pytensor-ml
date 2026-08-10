@@ -16,6 +16,7 @@ from pytensor_ml.pytensorf import (
     collect_trainable_params,
     rewrite_for_prediction,
 )
+from pytensor_ml.state import CustomInitializer, initialize_params
 
 floatX = pytensor.config.floatX
 
@@ -344,3 +345,44 @@ def test_batch_norm_variants_agree_on_output_arity():
     # batch statistics but must not write them anywhere.
     assert len(tracked.owner.outputs) == len(untracked.owner.outputs)
     assert collect_non_trainable_updates(untracked) == {}
+
+
+# Every parameter a layer owns, and the value a network-wide scheme must leave it at. A scheme reaching a
+# batch-norm scale would rescale a normalized activation by a random factor, defeating the layer; reaching a
+# bias would undo the zero start these layers are documented to have.
+FEATURES = pt.tensor("features", shape=(None, 4), dtype=floatX)
+IDS = pt.tensor("ids", shape=(None, 4), dtype="int32")
+
+DECLARED_BY_LAYERS = {
+    "Linear": (lambda: Linear("fc", n_in=4, n_out=4), FEATURES, {"fc_W": None, "fc_b": 0.0}),
+    "Embedding": (
+        lambda: Embedding("emb", n_embeddings=6, n_features=4),
+        IDS,
+        {"emb_W": None},
+    ),
+    "BatchNorm2D": (lambda: BatchNorm2D("bn", n_in=4), FEATURES, {"bn_scale": 1.0, "bn_loc": 0.0}),
+    "LayerNorm": (lambda: LayerNorm("ln", n_in=4), FEATURES, {"ln_scale": 1.0, "ln_loc": 0.0}),
+}
+
+
+@pytest.mark.parametrize("layer_name", sorted(DECLARED_BY_LAYERS), ids=sorted(DECLARED_BY_LAYERS))
+def test_a_layer_declares_the_initializers_its_parameters_need(layer_name):
+    """A parameter whose starting value is part of the layer's definition declares an initializer, so a
+    network-wide scheme passes it by. The scheme here returns a sentinel, so any parameter it reaches is
+    obvious and any declaration that stopped working shows up as that sentinel."""
+    build, layer_input, expected = DECLARED_BY_LAYERS[layer_name]
+    prediction = build()(layer_input)
+
+    sentinel = 7.0
+    reached_by_the_scheme = CustomInitializer(
+        lambda shape, dtype, rng: np.full(shape, sentinel, dtype=dtype)
+    )
+    params = collect_trainable_params(prediction)
+    values = initialize_params(params, scheme=reached_by_the_scheme, rng=0)
+
+    assert {p.name for p in params} == set(expected)
+    for param, value in zip(params, values):
+        if expected[param.name] is None:
+            np.testing.assert_allclose(value, sentinel)  # no declaration: the scheme applies
+        else:
+            np.testing.assert_allclose(value, expected[param.name])
