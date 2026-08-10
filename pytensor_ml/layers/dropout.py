@@ -5,8 +5,7 @@ import pytensor.tensor as pt
 import pytensor.tensor.random as ptr
 
 from pytensor import config
-from pytensor.compile.sharedvalue import shared
-from pytensor.tensor.random.variable import RandomGeneratorSharedVariable
+from pytensor.tensor.random.variable import RandomGeneratorSharedVariable, shared_rng
 
 from pytensor_ml.base import Layer, UnaryLayerOp
 
@@ -54,7 +53,7 @@ class Dropout(Layer):
         draws has no single next state, and nothing can advance it. Spawning keeps the whole layer
         reproducible under ``random_state`` however many times it is applied.
         """
-        generator = shared(
+        generator = shared_rng(
             self._generator_source.spawn(1)[0], name=f"{self.name}/rng_{len(self.generators)}"
         )
         self.generators.append(generator)
