@@ -4,6 +4,7 @@ import numpy as np
 import pytensor
 import pytest
 
+from pytensor_ml.layers import Linear
 from pytensor_ml.params import trainable
 from pytensor_ml.pytensorf import collect_trainable_params
 from pytensor_ml.state import (
@@ -11,7 +12,10 @@ from pytensor_ml.state import (
     CustomInitializer,
     InitializationScheme,
     OneInitializer,
+    XavierNormalInitializer,
+    XavierUniformInitializer,
     ZeroInitializer,
+    fans,
     initialize_params,
 )
 
@@ -128,3 +132,54 @@ def test_calling_an_initializer_assigns_the_parameter_in_place():
 
     np.testing.assert_array_equal(param.get_value(), 0)
     assert returned is param
+
+
+def test_a_convolution_kernel_folds_its_receptive_field_into_both_fans():
+    """Summing the shape is the fan computation only for a matrix. For an ``(in, out, kH, kW)`` kernel every
+    input channel reaches an output at each of the kH*kW offsets, so leaving the receptive field out of the
+    fans overstates the spread: 0.258 where the correct scale for this shape is 0.096."""
+    kernel_shape = (8, 16, 3, 3)  # asymmetric, so the orientation of the two fans is pinned as well
+    fan_in, fan_out = fans(kernel_shape)
+    assert (fan_in, fan_out) == (8 * 9, 16 * 9)
+
+    value = XavierNormalInitializer().sample(kernel_shape, "float64", np.random.default_rng(0))
+
+    assert value.std() == pytest.approx(np.sqrt(2.0 / (fan_in + fan_out)), rel=0.05)
+
+
+@pytest.mark.parametrize(
+    "shape", [(768, 768), (50257, 768), (4, 7)], ids=["square", "embedding", "small"]
+)
+def test_a_weight_matrix_draws_exactly_as_it_did_before(shape):
+    """No parameter that already existed may move: a matrix has no dimensions past the second, so the sum of
+    its fans is the sum of its shape, which is what the draw was scaled by before."""
+    fan_in, fan_out = fans(shape)
+    assert fan_in + fan_out == sum(shape)
+
+    with_fans = XavierNormalInitializer().sample(shape, "float64", np.random.default_rng(7))
+    with_shape_sum = np.random.default_rng(7).normal(0, np.sqrt(2.0 / sum(shape)), size=shape)
+
+    np.testing.assert_array_equal(with_fans, with_shape_sum)
+
+
+def test_the_fan_in_is_the_dimension_the_layers_treat_as_input():
+    """Weights here are ``(n_in, n_out)``, the transpose of torch's layout, so the leading dimension is the
+    fan-in. Xavier only reads the sum and cannot tell the difference; anything scaling by fan-in alone can."""
+    layer = Linear("fc", n_in=4, n_out=7)
+
+    fan_in, fan_out = fans(layer.W.get_value().shape)
+
+    assert (fan_in, fan_out) == (4, 7)
+
+
+@pytest.mark.parametrize(
+    "initializer",
+    [XavierNormalInitializer(), XavierUniformInitializer()],
+    ids=["normal", "uniform"],
+)
+def test_a_fan_scaled_initializer_rejects_a_parameter_with_no_fans(initializer):
+    """A bias or a norm scale has no fan-in and fan-out, and scaling by the length of a vector is a number
+    with no meaning behind it. Such parameters declare their own initializer; reaching one with a scheme
+    instead should say so rather than draw something arbitrary."""
+    with pytest.raises(ValueError, match="at least two dimensions"):
+        initializer.sample((768,), "float64", np.random.default_rng(0))

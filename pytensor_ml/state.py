@@ -55,15 +55,54 @@ class UnitUniformInitializer(Initializer):
         return rng.uniform(0.0, 1.0, size=shape).astype(dtype)
 
 
+def fans(shape: tuple[int, ...]) -> tuple[int, int]:
+    r"""
+    Return the number of units feeding into and out of one position of a parameter of ``shape``.
+
+    Weights here are laid out input dimension first, as :class:`~pytensor_ml.layers.Linear` builds
+    ``(n_in, n_out)`` for ``X @ W`` and :class:`~pytensor_ml.layers.Embedding` builds
+    ``(vocabulary, features)``, so the leading dimension is the fan-in and the second the fan-out. This is
+    the transpose of torch's convention, where the output dimension leads. Any dimension past the second is
+    a receptive field: every input reaches an output at each of its offsets, so both fans carry a factor of
+    :math:`\prod \text{kernel}`.
+
+    Only the sum of the two matters to a Xavier draw, which is why the orientation is invisible there and
+    load-bearing for anything scaling by fan-in alone.
+
+    Parameters
+    ----------
+    shape : tuple of int
+        Shape of the parameter, with at least two dimensions.
+
+    Returns
+    -------
+    fan_in : int
+        Units feeding one output position.
+    fan_out : int
+        Output positions one input feeds.
+    """
+    if len(shape) < 2:
+        raise ValueError(
+            f"A fan-scaled initializer needs a parameter of at least two dimensions to size its draws, but "
+            f"got shape {shape}. A bias or a norm scale has no fans; give it an initializer of its own -- "
+            "`trainable(value, name, initializer=ZeroInitializer())` -- or initialize it with the 'zeros' "
+            "or 'ones' scheme."
+        )
+    receptive_field = int(np.prod(shape[2:]))
+    return shape[0] * receptive_field, shape[1] * receptive_field
+
+
 class XavierUniformInitializer(Initializer):
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
-        scale = np.sqrt(6.0 / np.sum(shape))
+        fan_in, fan_out = fans(shape)
+        scale = np.sqrt(6.0 / (fan_in + fan_out))
         return rng.uniform(-scale, scale, size=shape).astype(dtype)
 
 
 class XavierNormalInitializer(Initializer):
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
-        scale = np.sqrt(2.0 / np.sum(shape))
+        fan_in, fan_out = fans(shape)
+        scale = np.sqrt(2.0 / (fan_in + fan_out))
         return rng.normal(0, scale, size=shape).astype(dtype)
 
 
