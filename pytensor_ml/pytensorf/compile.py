@@ -1,10 +1,9 @@
 from collections.abc import Sequence
-from typing import cast
 
 import pytensor
 
 from pytensor import Mode
-from pytensor.compile import Function, SharedVariable, get_mode
+from pytensor.compile import Function, get_mode
 from pytensor.tensor.variable import Variable
 
 from pytensor_ml.pytensorf.collect import collect_graph_inputs
@@ -13,6 +12,7 @@ from pytensor_ml.pytensorf.rng import (
     SeedSequenceSeed,
     atleast_list,
     collect_default_updates,
+    find_rng_nodes,
     reseed_rngs,
 )
 
@@ -37,8 +37,9 @@ def function(
     outputs : Variable or list of Variable
         Outputs of the compiled function.
     random_seed : int, array-like of int, or SeedSequence, optional
-        Seed used to reseed the graph's shared generators. They are replaced whether or not a seed is
-        given, so omitting it reseeds from fresh entropy rather than leaving them untouched.
+        Seed used to replace the graph's shared generators, making the compiled function's draws
+        reproducible. The generators are left as they are when omitted, so compiling has no effect on a
+        generator the caller seeded, or on one another function is drawing from.
     mode : Mode or str, optional
         PyTensor mode used to compile the function.
     **kwargs
@@ -49,16 +50,15 @@ def function(
     Function
         The compiled function.
     """
-    rng_updates = collect_default_updates(
-        inputs=[inp.variable if isinstance(inp, pytensor.In) else inp for inp in inputs],
-        outputs=[
-            out.variable if isinstance(out, pytensor.Out) else out for out in atleast_list(outputs)
-        ],
-    )
+    input_variables = [inp.variable if isinstance(inp, pytensor.In) else inp for inp in inputs]
+    output_variables = [
+        out.variable if isinstance(out, pytensor.Out) else out for out in atleast_list(outputs)
+    ]
 
-    if rng_updates:
-        rngs = cast(list[SharedVariable], list(rng_updates))
-        reseed_rngs(rngs, random_seed)
+    if random_seed is not None:
+        reseed_rngs(find_rng_nodes(output_variables), random_seed)
+
+    rng_updates = collect_default_updates(inputs=input_variables, outputs=output_variables)
 
     base_mode = get_mode(mode)
     mode = Mode(
