@@ -426,3 +426,50 @@ def test_an_extra_update_that_draws_noise_advances_its_generator():
     step()
 
     assert not np.allclose(first, perturbed.get_value())
+
+
+def test_updates_in_compile_kwargs_are_taken_as_extra_updates():
+    # `updates` is what pytensor calls this, so it is the first place a caller looks. Forwarding it would
+    # collide with the compiler's own updates argument and raise a TypeError naming an internal function.
+    p = trainable(np.array([2.0]), name="w")
+    call_count = shared(np.array(0.0, dtype=config.floatX), name="call_count")
+    loss = 0.5 * (p**2).sum()
+
+    step = compile_train(
+        loss, sgd(1e-1), inputs=[], compile_kwargs={"updates": {call_count: call_count + 1.0}}
+    )
+    step()
+    step()
+
+    assert float(call_count.get_value()) == 2.0
+
+
+def test_an_update_given_in_both_places_is_rejected():
+    p = trainable(np.array([2.0]), name="w")
+    call_count = shared(np.array(0.0, dtype=config.floatX), name="call_count")
+    loss = 0.5 * (p**2).sum()
+
+    with pytest.raises(ValueError, match="given twice"):
+        compile_train(
+            loss,
+            sgd(1e-1),
+            inputs=[],
+            extra_updates={call_count: call_count + 1.0},
+            compile_kwargs={"updates": {call_count: call_count + 2.0}},
+        )
+
+
+def test_compile_kwargs_is_not_mutated():
+    # Taking `updates` out of the caller's dict would empty it, so compiling twice from one settings dict
+    # would silently drop the update the second time.
+    p = trainable(np.array([2.0]), name="w")
+    call_count = shared(np.array(0.0, dtype=config.floatX), name="call_count")
+    loss = 0.5 * (p**2).sum()
+    compile_kwargs = {"updates": {call_count: call_count + 1.0}}
+
+    compile_train(loss, sgd(1e-1), inputs=[], compile_kwargs=compile_kwargs)
+    second = compile_train(loss, sgd(1e-1), inputs=[], compile_kwargs=compile_kwargs)
+    second()
+
+    assert "updates" in compile_kwargs
+    assert float(call_count.get_value()) == 1.0

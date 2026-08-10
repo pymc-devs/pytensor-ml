@@ -60,7 +60,9 @@ def compile_train(
         variable cannot both take effect. An expression here is part of the step like any other, so a clock it
         reads still advances once, and a generator it draws from still advances.
     compile_kwargs : dict, optional
-        Extra keyword arguments forwarded to the function compiler.
+        Extra keyword arguments forwarded to the function compiler. An ``updates`` entry is taken as
+        ``extra_updates`` rather than forwarded, since the compiler's own ``updates`` carries the whole
+        assembled step. Raise if a variable is given in both.
 
     Returns
     -------
@@ -70,6 +72,19 @@ def compile_train(
     """
     extra_outputs = list(extra_outputs or [])
     extra_updates = dict(extra_updates or {})
+    # Copied rather than mutated, so popping the caller's `updates` out does not empty their dict.
+    compile_kwargs = dict(compile_kwargs or {})
+
+    # `updates` is pytensor's own name for this, so a caller who puts one in compile_kwargs is asking for
+    # what extra_updates does; take it as one instead of letting it collide with this function's own call.
+    for variable, new_value in compile_kwargs.pop("updates", {}).items():
+        if variable in extra_updates:
+            raise ValueError(
+                f"The update for {variable.name!r} is given twice, once in `extra_updates` and once in "
+                "`compile_kwargs['updates']`. Both are folded into the training step, so keep whichever one "
+                "is right and drop the other."
+            )
+        extra_updates[variable] = new_value
 
     if parameters is None:
         parameters = collect_differentiable_params(loss)
@@ -117,4 +132,4 @@ def compile_train(
 
     outputs = [loss, *extra_outputs] if extra_outputs else loss
 
-    return function(list(inputs), outputs, updates=updates, **(compile_kwargs or {}))
+    return function(list(inputs), outputs, updates=updates, **compile_kwargs)
