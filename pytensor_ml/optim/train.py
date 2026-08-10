@@ -1,10 +1,10 @@
 from collections.abc import Sequence
 
-from pytensor.compile import Function, SharedVariable
+from pytensor.compile import Function
 from pytensor.graph.basic import Variable, equal_computations
 from pytensor.tensor import TensorVariable
 
-from pytensor_ml.optim.base import Parameter, UpdateRule, require_unique_state_names
+from pytensor_ml.optim.base import Parameter, UpdateRule, Updates, require_unique_state_names
 from pytensor_ml.pytensorf import (
     collect_clock_updates,
     collect_data_inputs,
@@ -21,14 +21,16 @@ def compile_train(
     parameters: Sequence[Parameter] | None = None,
     inputs: Sequence[Variable] | None = None,
     extra_outputs: Sequence[Variable] | None = None,
+    extra_updates: Updates | None = None,
     compile_kwargs: dict | None = None,
 ) -> Function:
     """
     Compile a one-step training function from a loss graph and an update rule.
 
     Differentiates the loss via ``rule``, applies the resulting updates, folds in any non-trainable state
-    updates (such as batch-norm running statistics), advances every training clock the step reads, and
-    compiles. The parameters and data inputs are collected from ``loss`` unless given explicitly.
+    updates (such as batch-norm running statistics) and any given in ``extra_updates``, advances every
+    training clock the step reads, and compiles. The parameters and data inputs are collected from ``loss``
+    unless given explicitly.
 
     Parameters
     ----------
@@ -42,15 +44,21 @@ def compile_train(
         is still initialized and checkpointed, since :func:`collect_trainable_params` reaches it; only the
         optimizer skips it.
     inputs : sequence of Variable, optional
-        Data inputs of the compiled function, in call order. Collected from ``loss`` and ``extra_outputs``
-        with :func:`collect_data_inputs` when omitted; pass them explicitly when call order matters (e.g.
-        features before targets).
+        Data inputs of the compiled function, in call order. Collected from ``loss``, ``extra_outputs`` and
+        ``extra_updates`` with :func:`collect_data_inputs` when omitted; pass them explicitly when call order
+        matters (e.g. features before targets).
     extra_outputs : sequence of Variable, optional
         Diagnostics to return alongside the loss, such as gradient norms or a batch accuracy. Evaluated in
         the same pass as the gradients, so they see the pre-update parameter values, and they add no
         non-trainable state updates of their own. A random node reached only through an extra output does
         still advance its generator, since :func:`~pytensor_ml.pytensorf.function` threads the next-RNG
         update for every generator the outputs draw from.
+    extra_updates : dict, optional
+        State the step should write that no gradient produces -- a target-network sync, a Polyak average,
+        replay priorities. Mapping from shared variable to its next value, folded in alongside the rule's own
+        updates. Raise if the rule or the model already writes one of these variables, since two writes to one
+        variable cannot both take effect. An expression here is part of the step like any other, so a clock it
+        reads still advances once, and a generator it draws from still advances.
     compile_kwargs : dict, optional
         Extra keyword arguments forwarded to the function compiler.
 
@@ -61,18 +69,31 @@ def compile_train(
         ``(loss, *extra_outputs)`` when diagnostics were requested.
     """
     extra_outputs = list(extra_outputs or [])
+    extra_updates = dict(extra_updates or {})
 
     if parameters is None:
         parameters = collect_differentiable_params(loss)
     if inputs is None:
-        inputs = collect_data_inputs([loss, *extra_outputs])
+        inputs = collect_data_inputs([loss, *extra_outputs, *extra_updates.values()])
 
-    updates: dict[SharedVariable, TensorVariable] = dict(rule(loss, parameters))
+    updates: Updates = dict(rule(loss, parameters))
 
     # Assigned per key rather than merged: SupportsKeysAndGetItem is invariant in its key type, so
     # dict.update rejects the narrower NonTrainableParameter keys.
     for parameter, new_value in collect_non_trainable_updates(loss).items():
         updates[parameter] = new_value
+
+    # Folded in after the rule's and the model's, so a collision with either is caught rather than deciding
+    # by insertion order which of the two writes survives.
+    for variable, new_value in extra_updates.items():
+        if variable in updates:
+            raise ValueError(
+                f"The extra update for {variable.name!r} writes a variable the training step already "
+                "writes, so the two writes cannot both take effect. Optimizer state and batch-norm "
+                "statistics are written by the step itself; drop this one, or fold what it does into the "
+                "expression that already writes the variable."
+            )
+        updates[variable] = new_value
 
     # Collected from the assembled updates rather than from the loss alone: a clock is read by a schedule
     # or a policy, which live in the updates, where an RNG or a running statistic is read by the model.

@@ -2,7 +2,7 @@ import numpy as np
 import pytensor.tensor as pt
 import pytest
 
-from pytensor import config
+from pytensor import config, shared
 from pytensor.gradient import disconnected_grad, zero_grad
 from sklearn.datasets import load_digits, make_regression
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder, StandardScaler
@@ -10,9 +10,9 @@ from sklearn.preprocessing import MinMaxScaler, OneHotEncoder, StandardScaler
 from pytensor_ml.activations import LeakyReLU
 from pytensor_ml.layers import BatchNorm2D, Linear, Sequential
 from pytensor_ml.loss import CrossEntropy, SquaredError, supervised_loss
-from pytensor_ml.optim import adam, adamw, compile_train, sgd
+from pytensor_ml.optim import adam, adamw, compile_train, cosine_schedule, sgd
 from pytensor_ml.optim.base import state_for
-from pytensor_ml.params import trainable
+from pytensor_ml.params import step_counter, trainable
 from pytensor_ml.pytensorf import collect_non_trainable_params, collect_trainable_params
 from pytensor_ml.state import initialize_params
 from pytensor_ml.util import DataLoader
@@ -307,3 +307,122 @@ def test_compile_train_leaves_a_zero_grad_parameter_untouched_under_weight_decay
         for parameter, value in before.items()
     }
     assert moved == {"live_W": True, "live_b": True, "frozen_W": False, "frozen_b": False}
+
+
+def test_extra_updates_write_state_no_gradient_produces():
+    # The DQN shape from the other side: a target network kept as a Polyak average of the online weights.
+    # No gradient produces that write, so without extra_updates it cannot ride along in the training step.
+    X = pt.tensor("X", shape=(None, 4))
+    online_layer = Linear("online", n_in=4, n_out=2)
+    prediction = online_layer(X)
+    parameters = collect_trainable_params(prediction)
+    initialize(parameters)
+    target_weight = shared(online_layer.W.get_value().copy(), name="target_W")
+    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+
+    step = compile_train(
+        loss,
+        sgd(1e-1),
+        parameters=parameters,
+        inputs=[X, target],
+        extra_updates={target_weight: 0.5 * target_weight + 0.5 * online_layer.W},
+    )
+
+    online_before = online_layer.W.get_value().copy()
+    target_before = target_weight.get_value().copy()
+
+    rng = np.random.default_rng(0)
+    features = rng.normal(size=(16, 4)).astype(config.floatX)
+    targets = np.ones((16, 2), dtype=config.floatX)
+    step(features, targets)
+
+    # Updates are computed from the pre-update values, so the target lands halfway between where the two
+    # started -- neither staying put nor jumping to where the online weights ended up.
+    assert not np.allclose(online_layer.W.get_value(), online_before)
+    np.testing.assert_allclose(
+        target_weight.get_value(), 0.5 * target_before + 0.5 * online_before, rtol=1e-5
+    )
+
+
+def test_extra_updates_reject_a_write_the_rule_already_makes():
+    # Silently overwriting an optimizer buffer would leave the rule configured but not working, for the whole
+    # run, so the collision has to be loud.
+    p = trainable(np.array([2.0]), name="w")
+    loss = 0.5 * (p**2).sum()
+    rule = adam(1e-1)
+    first_moment = next(key for key in rule(loss, [p]) if key.name == "w/adam/first_moment")
+
+    with pytest.raises(ValueError, match="already writes"):
+        compile_train(loss, rule, extra_updates={first_moment: first_moment * 0.0}, inputs=[])
+
+
+def test_extra_updates_reject_a_write_the_model_already_makes():
+    # Batch-norm statistics are written by the model rather than the rule, and collide just the same.
+    X = pt.tensor("X", shape=(None, 4))
+    prediction = Sequential(Linear("fc", n_in=4, n_out=4), BatchNorm2D("bn", n_in=4))(X)
+    parameters = collect_trainable_params(prediction)
+    initialize(parameters)
+    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    running_mean = next(
+        p for p in collect_non_trainable_params(prediction) if "running_mean" in p.name
+    )
+
+    with pytest.raises(ValueError, match="already writes"):
+        compile_train(
+            loss,
+            sgd(1e-2),
+            parameters=parameters,
+            inputs=[X, target],
+            extra_updates={running_mean: running_mean * 0.0},
+        )
+
+
+def test_extra_updates_contribute_their_data_inputs():
+    # An extra update may read data the loss never touches -- replay priorities, an importance weight. Unless
+    # those inputs are collected too, compiling raises MissingInputError.
+    p = trainable(np.array([2.0]), name="w")
+    priorities = shared(np.zeros(3, dtype=config.floatX), name="priorities")
+    fresh_priorities = pt.vector("fresh_priorities", shape=(3,))
+    loss = 0.5 * (p**2).sum()
+
+    step = compile_train(loss, sgd(1e-1), extra_updates={priorities: fresh_priorities})
+
+    step(fresh_priorities=np.array([1.0, 2.0, 3.0], dtype=config.floatX))
+    np.testing.assert_allclose(priorities.get_value(), [1.0, 2.0, 3.0])
+
+
+def test_an_extra_update_reads_the_clock_and_advances_it_once():
+    # An extra update is part of the step, so a clock it reads is a clock the step reads: it advances once
+    # per step, and the expression sees the count from before the advance, like the rule's updates do.
+    p = trainable(np.array([2.0]), name="w")
+    decayed = shared(np.array(1.0, dtype=config.floatX), name="decayed")
+    clock = step_counter(name="training_step")
+    schedule = cosine_schedule(1.0, 10)
+    loss = 0.5 * (p**2).sum()
+
+    step = compile_train(loss, sgd(1e-1), extra_updates={decayed: schedule(clock)}, inputs=[])
+    for _ in range(3):
+        step()
+
+    assert int(clock.get_value()) == 3
+    expected = float(schedule(pt.as_tensor(2, dtype="int64")).eval())
+    np.testing.assert_allclose(decayed.get_value(), expected, rtol=1e-6)
+
+
+def test_an_extra_update_that_draws_noise_advances_its_generator():
+    # A perturbed step -- SGLD, exploration noise -- draws inside the update rather than the loss. Nothing
+    # else reads that generator, so unless the step advances it every call adds the identical perturbation.
+    p = trainable(np.array([2.0]), name="w")
+    perturbed = shared(np.zeros(3, dtype=config.floatX), name="perturbed")
+    noise_rng = shared(np.random.default_rng(0), name="noise_rng")
+    _, noise = pt.random.normal(size=(3,), rng=noise_rng, return_next_rng=True)
+    loss = 0.5 * (p**2).sum()
+
+    step = compile_train(
+        loss, sgd(1e-1), extra_updates={perturbed: noise.astype(config.floatX)}, inputs=[]
+    )
+    step()
+    first = perturbed.get_value().copy()
+    step()
+
+    assert not np.allclose(first, perturbed.get_value())
