@@ -110,12 +110,6 @@ def collect_clock_updates(
     -------
     clock_updates : dict
         Mapping from each clock the graph reads to the expression for its next value.
-
-    Raises
-    ------
-    ValueError
-        If two clocks the graph reads hold different step counts. They all count training steps, so a
-        disagreement means some of them were restored from a checkpoint and others were not.
     """
     counters = collect_step_counters(outputs)
     step_counts = {int(counter.get_value()) for counter in counters}

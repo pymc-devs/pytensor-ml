@@ -57,11 +57,6 @@ def get_gradients(
     -------
     list of TensorVariable
         One gradient per parameter, in the order of ``parameters``.
-
-    Raises
-    ------
-    DisconnectedInputError
-        If the loss has no gradient with respect to one of ``parameters``, naming the ones it cannot reach.
     """
     if isinstance(loss_or_gradients, list | tuple):
         gradients = list(loss_or_gradients)

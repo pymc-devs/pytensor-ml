@@ -52,12 +52,6 @@ def function(
     -------
     Function
         The compiled function.
-
-    Raises
-    ------
-    ValueError
-        If the graph draws from a shared generator that nothing advances, which would repeat the same values
-        on every call. Two different draws reading one generator is the usual cause.
     """
     updates = dict(kwargs.pop("updates", {}))
     input_variables = [inp.variable if isinstance(inp, pytensor.In) else inp for inp in inputs]
