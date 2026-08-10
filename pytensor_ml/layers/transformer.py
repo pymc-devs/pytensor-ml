@@ -6,6 +6,7 @@ from pytensor_ml.layers.attention import MultiheadAttention
 from pytensor_ml.layers.dropout import Dropout
 from pytensor_ml.layers.linear import Linear
 from pytensor_ml.layers.norm import LayerNorm
+from pytensor_ml.state import Initializer
 
 
 def _identity(x: pt.TensorVariable) -> pt.TensorVariable:
@@ -41,6 +42,10 @@ class FeedForward(Layer):
         Activation applied to the hidden layer. Default is :class:`GELU`.
     bias : bool, optional
         Include bias terms in both linear layers. Default is True.
+    fc_out_initializer : Initializer, optional
+        How the second layer's weight is drawn, in place of whatever scheme
+        :meth:`~pytensor_ml.model.Model.initialize` is given. The hidden layer is unaffected. Left to the
+        scheme when omitted.
     """
 
     def __init__(
@@ -51,6 +56,8 @@ class FeedForward(Layer):
         mlp_ratio: int = 4,
         activation: Activation | None = None,
         bias: bool = True,
+        *,
+        fc_out_initializer: Initializer | None = None,
     ):
         self.name = name if name else "FeedForward"
         self.d_model = d_model
@@ -58,7 +65,13 @@ class FeedForward(Layer):
         self.activation = activation if activation is not None else GELU()
 
         self.fc_in = Linear(f"{self.name}_fc_in", d_model, self.hidden_dim, bias)
-        self.fc_out = Linear(f"{self.name}_fc_out", self.hidden_dim, d_model, bias)
+        self.fc_out = Linear(
+            f"{self.name}_fc_out",
+            self.hidden_dim,
+            d_model,
+            bias,
+            weight_initializer=fc_out_initializer,
+        )
 
     def __call__(self, x: pt.TensorLike) -> pt.TensorVariable:
         x = pt.as_tensor(x)
@@ -110,6 +123,12 @@ class TransformerBlock(Layer):
         Number of key/value heads for grouped-query attention. Defaults to ``n_head``.
     epsilon : float, optional
         Constant added to the layer-norm variance for numerical stability. Default is 1e-5.
+    residual_initializer : Initializer, optional
+        How the two projections that write back into the residual stream are drawn -- attention's output
+        projection and the feed-forward's second layer. Their siblings are left to the scheme, which is what
+        GPT-style initialization asks for: a residual stream accumulates one contribution per block, so those
+        projections are scaled by :math:`1/\sqrt{2 n_\text{layer}}` while the rest are not. The depth is not
+        known here, so the scaling belongs in the initializer the caller passes.
     """
 
     def __init__(
@@ -126,6 +145,7 @@ class TransformerBlock(Layer):
         is_causal: bool = False,
         n_kv_head: int | None = None,
         epsilon: float = 1e-5,
+        residual_initializer: Initializer | None = None,
     ):
         self.name = name if name else "TransformerBlock"
         self.d_model = d_model
@@ -140,9 +160,15 @@ class TransformerBlock(Layer):
             n_kv_head=n_kv_head,
             bias=bias,
             is_causal=is_causal,
+            out_proj_initializer=residual_initializer,
         )
         self.ff = FeedForward(
-            f"{self.name}_ff", d_model, mlp_ratio=mlp_ratio, activation=activation, bias=bias
+            f"{self.name}_ff",
+            d_model,
+            mlp_ratio=mlp_ratio,
+            activation=activation,
+            bias=bias,
+            fc_out_initializer=residual_initializer,
         )
         self.attn_dropout = (
             Dropout(f"{self.name}_attn_dropout", p=dropout) if dropout > 0 else _identity

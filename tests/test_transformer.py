@@ -144,6 +144,61 @@ def test_block_forwards_attention_config(rng):
     assert not np.allclose(out.eval({X: X_np}, mode=FAST), masked_out.eval({X: X_np}, mode=FAST))
 
 
+def test_a_residual_initializer_reaches_both_projections_into_the_residual_stream():
+    """The scaling GPT-2 applies targets the two projections that write back into the residual stream --
+    attention's output projection and the feed-forward's second layer -- and must leave the other four weight
+    matrices to the scheme. A keyword that caught a sibling would inflate the very variance it exists to
+    control, and reading the constructors cannot tell you which it reached."""
+    sentinel = 7.0
+    scaled = CustomInitializer(lambda shape, dtype, rng: np.full(shape, sentinel, dtype=dtype))
+    block = TransformerBlock("blk", d_model=8, n_head=2, residual_initializer=scaled)
+    out = block(pt.tensor("x", shape=(None, 4, 8), dtype=floatX))
+
+    params = collect_trainable_params(out)
+    values = dict(zip((p.name for p in params), initialize_params(params, scheme="zeros", rng=0)))
+
+    for name in ["blk_attn_out_proj_W", "blk_ff_fc_out_W"]:
+        np.testing.assert_allclose(values[name], sentinel, err_msg=f"{name} was not scaled")
+    for name in [
+        "blk_attn_q_proj_W",
+        "blk_attn_k_proj_W",
+        "blk_attn_v_proj_W",
+        "blk_ff_fc_in_W",
+    ]:
+        np.testing.assert_allclose(values[name], 0.0, err_msg=f"{name} should follow the scheme")
+
+
+def test_a_block_built_without_a_residual_initializer_is_unchanged():
+    """Omitting the keyword has to leave every parameter exactly where it was: the weights drawn by the
+    scheme, the biases at zero, the norms at the identity transform. The scheme returns a sentinel rather
+    than ones, so a norm scale that lost its declaration is distinguishable from one that kept it."""
+    sentinel = 7.0
+    reached_by_the_scheme = CustomInitializer(
+        lambda shape, dtype, rng: np.full(shape, sentinel, dtype=dtype)
+    )
+    block = TransformerBlock("blk", d_model=8, n_head=2)
+    out = block(pt.tensor("x", shape=(None, 4, 8), dtype=floatX))
+
+    params = collect_trainable_params(out)
+    values = dict(
+        zip(
+            (p.name for p in params), initialize_params(params, scheme=reached_by_the_scheme, rng=0)
+        )
+    )
+
+    for name, expected in [
+        ("blk_attn_out_proj_W", sentinel),
+        ("blk_ff_fc_out_W", sentinel),
+        ("blk_attn_out_proj_b", 0.0),
+        ("blk_ff_fc_out_b", 0.0),
+        ("blk_norm1_scale", 1.0),
+        ("blk_norm1_loc", 0.0),
+        ("blk_norm2_scale", 1.0),
+        ("blk_norm2_loc", 0.0),
+    ]:
+        np.testing.assert_allclose(values[name], expected, err_msg=name)
+
+
 def test_a_causal_attention_forwards_the_out_projection_initializer():
     """CausalSelfAttention builds its projections through its base class, so the keyword has to survive the
     super().__init__ call rather than being silently dropped by the subclass."""
