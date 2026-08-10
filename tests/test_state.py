@@ -11,6 +11,7 @@ from pytensor_ml.state import (
     _INITIALIZERS,
     CustomInitializer,
     InitializationScheme,
+    NormalInitializer,
     OneInitializer,
     XavierNormalInitializer,
     XavierUniformInitializer,
@@ -183,3 +184,36 @@ def test_a_fan_scaled_initializer_rejects_a_parameter_with_no_fans(initializer):
     instead should say so rather than draw something arbitrary."""
     with pytest.raises(ValueError, match="at least two dimensions"):
         initializer.sample((768,), "float64", np.random.default_rng(0))
+
+
+def test_a_normal_initializer_draws_at_the_standard_deviation_it_was_given():
+    """The fan-scaled initializers derive their spread from the shape; this one is told it, so the same
+    standard deviation has to come out whatever the shape's fans work out to. GPT-2 applies 0.02 to a
+    50257x768 embedding and a 768x768 weight alike, where Xavier gives 0.006 and 0.036. Both orientations
+    are checked at a size large enough to estimate a standard deviation from; four samples cannot."""
+    initializer = NormalInitializer(0.0, 0.02)
+
+    for shape in [(1000, 64), (64, 1000)]:
+        value = initializer.sample(shape, "float64", np.random.default_rng(0))
+        assert value.std() == pytest.approx(0.02, rel=0.05)
+        assert value.mean() == pytest.approx(0.0, abs=0.001)
+
+
+def test_a_normal_initializer_has_no_fans_to_satisfy():
+    """Unlike Xavier it accepts a 1-D parameter, which is the point: a bias drawn from a normal is torch's
+    convention and needs no fan computation. Asserting the spread rather than only the shape, so this says
+    the draw was right and not merely that nothing raised."""
+    value = NormalInitializer(0.0, 1.0).sample((4096,), "float64", np.random.default_rng(0))
+
+    assert value.shape == (4096,)
+    assert value.std() == pytest.approx(1.0, rel=0.05)
+
+
+def test_the_normal_scheme_is_reachable_by_name():
+    """Its arguments both have defaults, which is what lets it into a registry whose entries are built with
+    no arguments. Anything parameterized differently has to be passed as an instance."""
+    parameter = trainable(np.zeros((100, 100), dtype="float64"), "w")
+
+    [value] = initialize_params([parameter], scheme="normal", rng=0)
+
+    assert value.std() == pytest.approx(0.01, rel=0.05)  # the default std

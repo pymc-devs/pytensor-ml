@@ -11,7 +11,9 @@ from pytensor_ml.pytensorf import RandomSeed
 
 RandomState = RandomSeed | np.random.RandomState | np.random.Generator
 
-InitializationScheme = Literal["zeros", "ones", "xavier_uniform", "xavier_normal", "unit_uniform"]
+InitializationScheme = Literal[
+    "zeros", "ones", "xavier_uniform", "xavier_normal", "unit_uniform", "normal"
+]
 
 SamplingFunction = Callable[[tuple[int, ...], str, np.random.Generator], np.ndarray]
 
@@ -53,6 +55,30 @@ class OneInitializer(Initializer):
 class UnitUniformInitializer(Initializer):
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
         return rng.uniform(0.0, 1.0, size=shape).astype(dtype)
+
+
+class NormalInitializer(Initializer):
+    r"""
+    Draw every element from :math:`\mathcal{N}(\mu, \sigma^2)`, independent of the parameter's shape.
+
+    The fan-scaled initializers derive their spread from the shape; this one is told it, which is what a
+    reference implementation quoting a specific standard deviation needs -- GPT-2 initializes its embeddings
+    and weights from ``NormalInitializer(0.0, 0.02)`` whatever their fans work out to.
+
+    Parameters
+    ----------
+    mean : float
+        Center of the distribution :math:`\mu`. Default 0.0.
+    std : float
+        Standard deviation :math:`\sigma`. Default 0.01.
+    """
+
+    def __init__(self, mean: float = 0.0, std: float = 0.01):
+        self.mean = mean
+        self.std = std
+
+    def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
+        return rng.normal(self.mean, self.std, size=shape).astype(dtype)
 
 
 def fans(shape: tuple[int, ...]) -> tuple[int, int]:
@@ -129,6 +155,8 @@ _INITIALIZERS: dict[str, type[Initializer]] = {
     "xavier_uniform": XavierUniformInitializer,
     "xavier_normal": XavierNormalInitializer,
     "unit_uniform": UnitUniformInitializer,
+    # Reachable by name because both of its arguments have defaults; pass an instance for anything else.
+    "normal": NormalInitializer,
 }
 
 InitializationSchemeLike = InitializationScheme | Initializer
