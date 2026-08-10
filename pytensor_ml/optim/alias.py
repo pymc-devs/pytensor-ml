@@ -30,9 +30,9 @@ def _at_learning_rate(
     name: str,
     build_updates: Callable[[Rate], Updates],
 ) -> Updates:
-    """Build updates at ``learning_rate``, reading a schedule off the rule's step clock. A rule that keeps its
-    own clock under another name ends up with two, which is harmless: every clock advances once per step from
-    zero, so they agree about the step at every point."""
+    """Build updates at ``learning_rate``, reading a schedule off the clock the rule counts its own steps on.
+    Both reach that clock through :func:`counter` under ``"{name}/step_count"``, so a rule that keeps a step
+    count hands the schedule the same variable instead of a second one measuring the same time."""
     if not callable(learning_rate):
         return build_updates(learning_rate)
 

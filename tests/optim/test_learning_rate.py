@@ -308,16 +308,6 @@ def test_a_rule_counts_its_own_steps_on_a_clock():
     assert all(isinstance(counter, StepCounter) for counter in counters)
 
 
-def test_a_scheduled_rule_keeps_one_clock():
-    """The schedule reads the clock the rule already counts on, so there is one notion of time to restore and
-    nothing that can disagree with itself."""
-    p, loss = quadratic_problem()
-    step = compile_train(loss, adam(learning_rate=cosine_schedule(0.1, 20)))
-
-    counters = [v for v in step.get_shared() if v.type.dtype.startswith("int")]
-    assert [counter.name for counter in counters] == ["adam/step_count"]
-
-
 def test_a_user_clock_out_of_step_with_a_rule_clock_is_caught():
     """Two clocks can still coexist when the caller holds one of their own, and a checkpoint that restored
     only one of them leaves the two measuring different times."""
@@ -332,22 +322,32 @@ def test_a_user_clock_out_of_step_with_a_rule_clock_is_caught():
 
 
 @pytest.mark.parametrize(
-    "alias",
-    [adam, adamw, nadam, adamax, sgd, rmsprop, adagrad, adadelta],
+    "alias, clock_name",
+    [
+        (adam, "adam/step_count"),
+        (adamw, "adamw/step_count"),
+        (nadam, "nadam/step_count"),
+        (adamax, "adamax/step_count"),
+        (sgd, "sgd/step_count"),
+        (rmsprop, "rmsprop/step_count"),
+        (adagrad, "adagrad/step_count"),
+        (adadelta, "adadelta/step_count"),
+    ],
     ids=["adam", "adamw", "nadam", "adamax", "sgd", "rmsprop", "adagrad", "adadelta"],
 )
-def test_a_scheduled_rule_keeps_one_notion_of_time(alias):
-    """A rule that counts its own steps and also reads a schedule can end up holding more than one clock,
-    which is harmless as long as they agree: each advances once per step from zero, so the rate the schedule
-    computes and the bias correction the rule applies are always at the same step."""
-    p, loss = quadratic_problem()
+def test_a_scheduled_rule_keeps_exactly_one_clock(alias, clock_name):
+    """One notion of time per rule, under the name the schedule and the rule's own step count agree on. A rule
+    that counted its steps under a different name would hold a second clock measuring the same time, and a
+    checkpoint would carry two counts to keep in step."""
+    _, loss = quadratic_problem()
     step = compile_train(loss, alias(learning_rate=cosine_schedule(0.1, 20)))
 
     for _ in range(3):
         step()
 
     clocks = [v for v in step.get_shared() if isinstance(v, StepCounter)]
-    assert clocks and {int(clock.get_value()) for clock in clocks} == {3}
+    assert [clock.name for clock in clocks] == [clock_name]
+    assert int(clocks[0].get_value()) == 3
 
 
 def test_a_caller_held_clock_keeps_advancing_for_other_readers():
