@@ -89,15 +89,11 @@ def _affine_parameters(
     normalizing and then rescaling by a random factor defeats the point of the layer. A caller who wants
     something else says so, and their choice becomes the declaration.
     """
-    loc = trainable(
-        np.zeros(n_in, dtype=config.floatX),
-        f"{name}_loc",
-        initializer=ZeroInitializer() if loc_initializer is None else loc_initializer,
-    )
+    resolved_loc = ZeroInitializer() if loc_initializer is None else loc_initializer
+    resolved_scale = OneInitializer() if scale_initializer is None else scale_initializer
+    loc = trainable(resolved_loc.initial_value((n_in,)), f"{name}_loc", initializer=resolved_loc)
     scale = trainable(
-        np.ones(n_in, dtype=config.floatX),
-        f"{name}_scale",
-        initializer=OneInitializer() if scale_initializer is None else scale_initializer,
+        resolved_scale.initial_value((n_in,)), f"{name}_scale", initializer=resolved_scale
     )
     return loc, scale
 

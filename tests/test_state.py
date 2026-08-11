@@ -217,3 +217,13 @@ def test_the_normal_scheme_is_reachable_by_name():
     [value] = initialize_params([parameter], scheme="normal", rng=0)
 
     assert value.std() == pytest.approx(0.01, rel=0.05)  # the default std
+
+
+def test_initial_value_draws_at_floatx_in_the_requested_shape():
+    """What every layer relies on when it creates a parameter: the dtype matches the graph's, so nothing has
+    to remember `config.floatX` at each of the five call sites."""
+    value = XavierNormalInitializer().initial_value((6, 4))
+
+    assert value.shape == (6, 4)
+    assert str(value.dtype) == pytensor.config.floatX
+    assert len(np.unique(value)) > 1  # drawn, not filled

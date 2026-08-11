@@ -4,6 +4,7 @@ from typing import Literal
 
 import numpy as np
 
+from pytensor import config
 from pytensor.compile.sharedvalue import SharedVariable
 
 from pytensor_ml.params import TrainableParameter
@@ -35,6 +36,20 @@ class Initializer(ABC):
     def sample(
         self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator
     ) -> np.ndarray: ...
+
+    def initial_value(self, shape: tuple[int, ...]) -> np.ndarray:
+        """
+        Draw the value a parameter of ``shape`` is born holding, at the current ``floatX``.
+
+        Uses fresh entropy: reproducibility comes from :meth:`~pytensor_ml.model.Model.initialize`, which
+        redraws every parameter from one seed and discards whatever this produced.
+
+        Parameters
+        ----------
+        shape : tuple of int
+            Shape of the parameter to draw.
+        """
+        return self.sample(shape, config.floatX, np.random.default_rng())
 
     def _sample_like(self, param: SharedVariable, rng: RandomState | None = None) -> np.ndarray:
         rng = np.random.default_rng(rng)

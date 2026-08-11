@@ -1,11 +1,8 @@
-import numpy as np
 import pytensor.tensor as pt
-
-from pytensor import config
 
 from pytensor_ml.base import Layer, UnaryLayerOp
 from pytensor_ml.params import trainable
-from pytensor_ml.state import Initializer, ZeroInitializer
+from pytensor_ml.state import Initializer, XavierNormalInitializer, ZeroInitializer
 
 
 def shape_to_str(shape):
@@ -47,10 +44,9 @@ class Linear(Layer):
 
     Notes
     -----
-    The weight matrix :math:`W` starts at zero, so in a stack every activation below the first layer is
-    zero and every weight matrix receives a zero gradient: an uninitialized network can fit only its
-    output bias, and predicts a constant. Call :meth:`~pytensor_ml.model.Model.initialize`, or assign a
-    value yourself, before training.
+    Both parameters are drawn when the layer is built, so a network trains without any further call.
+    :meth:`~pytensor_ml.model.Model.initialize` redraws them from a single seed, which is what makes a run
+    reproducible; :math:`W` follows its ``scheme`` there, since the draw here declares no initializer.
     """
 
     def __init__(
@@ -68,15 +64,25 @@ class Linear(Layer):
         self.n_out = n_out
         self.bias = bias
 
-        W_value = np.zeros((n_in, n_out), dtype=config.floatX)
-        self.W = trainable(W_value, f"{self.name}_W", initializer=weight_initializer)
+        # Drawn here rather than left at zero: a weight and its value are one thing, and a stack of zero
+        # weights passes no gradient below its last layer. Note what is declared and what is not --
+        # `weight_initializer` is, so it survives a network-wide scheme, while the fallback below must not
+        # be, or a scheme could never reach a weight matrix at all.
+        W_initializer = (
+            XavierNormalInitializer() if weight_initializer is None else weight_initializer
+        )
+        self.W = trainable(
+            W_initializer.initial_value((n_in, n_out)),
+            f"{self.name}_W",
+            initializer=weight_initializer,
+        )
 
         if self.bias:
-            b_value = np.zeros(n_out, dtype=config.floatX)
+            b_initializer = ZeroInitializer() if bias_initializer is None else bias_initializer
             self.b = trainable(
-                b_value,
+                b_initializer.initial_value((n_out,)),
                 f"{self.name}_b",
-                initializer=ZeroInitializer() if bias_initializer is None else bias_initializer,
+                initializer=b_initializer,
             )
 
     def __call__(self, X: pt.TensorLike) -> pt.TensorVariable:

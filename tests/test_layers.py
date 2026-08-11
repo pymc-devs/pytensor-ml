@@ -466,3 +466,69 @@ def test_a_bias_initializer_replaces_the_zero_declaration_rather_than_fighting_i
     values = dict(zip((p.name for p in params), initialize_params(params, scheme="zeros", rng=0)))
 
     assert not np.allclose(values["fc_b"], 0.0)
+
+
+@pytest.mark.parametrize("layer_name", sorted(DECLARED_BY_LAYERS), ids=sorted(DECLARED_BY_LAYERS))
+def test_a_layer_is_born_holding_a_draw_from_its_own_initializer(layer_name):
+    """Creating a parameter and giving it a value are one event, as they are in torch, flax and keras. A
+    weight left at zero passes no gradient below the last layer of a stack, so a network nobody remembered to
+    initialize trains its output bias and nothing else."""
+    build, layer_input, expected = DECLARED_BY_LAYERS[layer_name]
+    prediction = build()(layer_input)
+
+    for param in collect_trainable_params(prediction):
+        declared = expected[param.name]
+        value = param.get_value()
+        if declared is None:
+            assert len(np.unique(value)) > 1, (
+                f"{param.name} was born holding one repeated value rather than a draw"
+            )
+        else:
+            np.testing.assert_allclose(value, declared, err_msg=param.name)
+
+
+def test_a_keyword_initializer_reaches_the_value_and_not_only_the_declaration():
+    """The bias case: a keyword used to be recorded as a declaration while the value stayed zero, so it took
+    effect only if someone happened to call initialize afterwards."""
+    sentinel = 7.0
+    layer = Linear(
+        "fc",
+        n_in=4,
+        n_out=4,
+        bias_initializer=CustomInitializer(
+            lambda shape, dtype, rng: np.full(shape, sentinel, dtype=dtype)
+        ),
+    )
+
+    np.testing.assert_allclose(layer.b.get_value(), sentinel)
+
+
+def test_a_non_default_scheme_still_reaches_every_weight_matrix():
+    """The trap in drawing at construction: recording the fallback as a declaration would outrank `scheme`
+    and silently disable it library-wide, while every test that initializes with the default still passed."""
+    X = pt.tensor("features", shape=(None, 4), dtype=floatX)
+    prediction = Sequential(Linear("fc1", 4, 4), Linear("fc2", 4, 4))(X)
+    params = collect_trainable_params(prediction)
+
+    values = dict(zip((p.name for p in params), initialize_params(params, scheme="ones", rng=0)))
+
+    np.testing.assert_allclose(values["fc1_W"], 1.0)
+    np.testing.assert_allclose(values["fc2_W"], 1.0)
+    np.testing.assert_allclose(values["fc1_b"], 0.0)  # its declaration still outranks the scheme
+
+
+def test_construction_draws_do_not_leak_into_a_seeded_initialize():
+    """Construction draws from fresh entropy, so two identically seeded runs must still agree: the seeded
+    initialize has to overwrite every value rather than build on what construction happened to produce."""
+
+    def seeded_values():
+        X = pt.tensor("features", shape=(None, 4), dtype=floatX)
+        prediction = Sequential(Linear("fc1", 4, 4), Linear("fc2", 4, 4))(X)
+        params = collect_trainable_params(prediction)
+        return dict(zip((p.name for p in params), initialize_params(params, rng=0)))
+
+    first, second = seeded_values(), seeded_values()
+
+    assert set(first) == set(second)
+    for name in first:
+        np.testing.assert_array_equal(first[name], second[name], err_msg=name)

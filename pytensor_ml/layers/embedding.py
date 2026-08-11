@@ -1,11 +1,8 @@
-import numpy as np
 import pytensor.tensor as pt
-
-from pytensor import config
 
 from pytensor_ml.base import Layer, UnaryLayerOp
 from pytensor_ml.params import trainable
-from pytensor_ml.state import Initializer
+from pytensor_ml.state import Initializer, XavierNormalInitializer
 
 
 class EmbeddingLayer(UnaryLayerOp):
@@ -50,8 +47,16 @@ class Embedding(Layer):
         self.n_embeddings = n_embeddings
         self.n_features = n_features
 
-        W_value = np.zeros((n_embeddings, n_features), dtype=config.floatX)
-        self.W = trainable(W_value, f"{self.name}_W", initializer=weight_initializer)
+        # Drawn here, as in Linear, and for the same reason. The fallback is deliberately not declared, so
+        # a network-wide scheme still reaches the table.
+        W_initializer = (
+            XavierNormalInitializer() if weight_initializer is None else weight_initializer
+        )
+        self.W = trainable(
+            W_initializer.initial_value((n_embeddings, n_features)),
+            f"{self.name}_W",
+            initializer=weight_initializer,
+        )
 
     def __call__(self, ids: pt.TensorLike) -> pt.TensorVariable:
         ids = pt.as_tensor(ids)
