@@ -154,10 +154,9 @@ class MultiheadAttention(Layer):
     is_causal : bool, optional
         Apply a causal mask in the attention. Default is False.
     out_proj_initializer : Initializer, optional
-        How the output projection's weight is drawn, in place of whatever scheme
-        :meth:`~pytensor_ml.model.Model.initialize` is given. The three input projections are unaffected,
-        which is what a scaling applied only to the projection writing back into a residual stream needs.
-        Left to the scheme when omitted.
+        How the output projection's weight is drawn. The three input projections are unaffected, which is
+        what a scaling applied only to the projection writing back into a residual stream needs. Xavier
+        normal when omitted, as for any other weight.
     """
 
     def __init__(

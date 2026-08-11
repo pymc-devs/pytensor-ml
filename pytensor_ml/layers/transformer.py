@@ -43,9 +43,8 @@ class FeedForward(Layer):
     bias : bool, optional
         Include bias terms in both linear layers. Default is True.
     fc_out_initializer : Initializer, optional
-        How the second layer's weight is drawn, in place of whatever scheme
-        :meth:`~pytensor_ml.model.Model.initialize` is given. The hidden layer is unaffected. Left to the
-        scheme when omitted.
+        How the second layer's weight is drawn. The hidden layer is unaffected. Xavier normal when omitted,
+        as for any other weight.
     """
 
     def __init__(
@@ -125,7 +124,7 @@ class TransformerBlock(Layer):
         Constant added to the layer-norm variance for numerical stability. Default is 1e-5.
     residual_initializer : Initializer, optional
         How the two projections that write back into the residual stream are drawn -- attention's output
-        projection and the feed-forward's second layer. Their siblings are left to the scheme, which is what
+        projection and the feed-forward's second layer. Their siblings keep the default, which is what
         GPT-style initialization asks for: a residual stream accumulates one contribution per block, so those
         projections are scaled by :math:`1/\sqrt{2 n_\text{layer}}` while the rest are not. The depth is not
         known here, so the scaling belongs in the initializer the caller passes.

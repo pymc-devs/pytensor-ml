@@ -11,8 +11,10 @@ from pytensor_ml.state import (
     _INITIALIZERS,
     CustomInitializer,
     InitializationScheme,
+    Initializer,
     NormalInitializer,
     OneInitializer,
+    UnitUniformInitializer,
     XavierNormalInitializer,
     XavierUniformInitializer,
     ZeroInitializer,
@@ -21,22 +23,31 @@ from pytensor_ml.state import (
 )
 
 
-def unit_constant(value: float = 7.0) -> CustomInitializer:
-    """An initializer whose draws are unmistakable, so a value says which of the three sources produced it."""
-    return CustomInitializer(lambda shape, dtype, rng: np.full(shape, value, dtype=dtype))
+def unit_constant() -> CustomInitializer:
+    """An initializer whose draws are unmistakable, so a value says which source produced it."""
+    return CustomInitializer(lambda shape, dtype, rng: np.full(shape, 7.0, dtype=dtype))
 
 
-def test_scheme_names_match_the_initializer_registry():
+def test_every_registered_name_maps_to_a_class_that_needs_no_arguments():
+    """The registry is how an initializer crosses into a serialized config, as a name. A class needing a
+    constructor argument could be written out and not read back, so the Literal and the registry have to
+    agree and every entry has to rebuild from its name alone."""
     assert set(get_args(InitializationScheme)) == set(_INITIALIZERS)
+
+    for name, initializer_class in _INITIALIZERS.items():
+        assert isinstance(initializer_class(), Initializer), name
 
 
 class TestInitializeParams:
-    @pytest.mark.parametrize("scheme", sorted(_INITIALIZERS))
-    def test_values_match_parameter_shapes_and_dtypes(self, scheme, simple_network):
+    @pytest.mark.parametrize("initializer_class", sorted(_INITIALIZERS.values(), key=repr))
+    def test_values_match_parameter_shapes_and_dtypes(self, initializer_class, simple_network):
         X, y = simple_network
         params = collect_trainable_params(y)
+        # Only the weight matrices, since a fan-scaled initializer cannot draw a 1-D bias. The biases come
+        # from their own declarations, and the assertion covers every parameter either way.
+        drawn_by = {p: initializer_class() for p in params if p.get_value().ndim > 1}
 
-        values = initialize_params(params, scheme=scheme, rng=np.random.default_rng(0))
+        values = initialize_params(params, rng=np.random.default_rng(0), initializers=drawn_by)
 
         assert len(values) == len(params)
         for param, val in zip(params, values):
@@ -44,26 +55,16 @@ class TestInitializeParams:
             assert str(val.dtype) == str(param.get_value().dtype)
 
     def test_xavier_normal_scales_by_fan_in_plus_fan_out(self, simple_network):
+        # Drawn from fc1_W's own declaration, which is what a Linear layer records for its weight.
         X, y = simple_network
         weight = next(p for p in collect_trainable_params(y) if p.name == "fc1_W")
         fan_sum = sum(weight.get_value().shape)
 
-        [value] = initialize_params([weight], scheme="xavier_normal", rng=np.random.default_rng(42))
+        [value] = initialize_params([weight], rng=np.random.default_rng(42))
 
         assert value.std() == pytest.approx(np.sqrt(2.0 / fan_sum), rel=0.05)
         # Xavier uniform targets this same variance; only a normal draw crosses its hard bound.
         assert np.abs(value).max() > np.sqrt(6.0 / fan_sum)
-
-    @pytest.mark.parametrize("scheme", ["zeros", ZeroInitializer()], ids=["by_name", "by_instance"])
-    def test_zeros(self, scheme, simple_network):
-        X, y = simple_network
-        params = collect_trainable_params(y)
-
-        values = initialize_params(params, scheme=scheme)
-
-        assert len(values) == len(params)
-        for val in values:
-            np.testing.assert_array_equal(val, 0)
 
     def test_reproducible_with_seed(self, simple_network):
         X, y = simple_network
@@ -77,10 +78,11 @@ class TestInitializeParams:
 
     def test_parameters_do_not_all_receive_the_same_draws(self):
         # The seed must be an int: passing a Generator masks the regression this guards.
-        first = trainable(np.zeros((4, 4), dtype="float64"), "first")
-        second = trainable(np.zeros((4, 4), dtype="float64"), "second")
+        drawn = UnitUniformInitializer()
+        first = trainable(np.zeros((4, 4), dtype="float64"), "first", initializer=drawn)
+        second = trainable(np.zeros((4, 4), dtype="float64"), "second", initializer=drawn)
 
-        values = initialize_params([first, second], scheme="unit_uniform", rng=0)
+        values = initialize_params([first, second], rng=0)
 
         assert not np.array_equal(values[0], values[1])
 
@@ -91,7 +93,7 @@ class TestInitializeParams:
         ]
         constant = CustomInitializer(lambda shape, dtype, rng: np.full(shape, 7.0, dtype=dtype))
 
-        values = initialize_params(params, scheme=constant)
+        values = initialize_params(params, initializers=dict.fromkeys(params, constant))
 
         assert len(values) == len(params)
         for val in values:
@@ -99,29 +101,39 @@ class TestInitializeParams:
 
 
 class TestDeclaredInitializers:
-    def test_a_declared_initializer_wins_over_the_scheme(self):
+    def test_a_declaration_is_what_a_redraw_draws_from(self):
         # Starting from zeros, so the assertion only holds if the declared initializer actually ran.
         scale = trainable(np.zeros(4, dtype="float64"), "scale", initializer=OneInitializer())
 
-        [value] = initialize_params([scale], scheme="xavier_normal", rng=0)
+        [value] = initialize_params([scale], rng=0)
 
         np.testing.assert_array_equal(value, 1)
 
-    def test_undeclared_parameters_still_follow_the_scheme(self):
+    def test_a_parameter_declaring_nothing_refuses_to_be_redrawn(self):
+        """There is no law to draw it from, and the alternative is worse than an error: a hand-built weight
+        left at the value it was given is a stack of zeros that trains only its last bias."""
         weight = trainable(np.zeros((4, 4), dtype="float64"), "weight")
-        bias = trainable(np.zeros(4, dtype="float64"), "bias", initializer=ZeroInitializer())
 
-        weight_value, bias_value = initialize_params([weight, bias], scheme="unit_uniform", rng=0)
+        with pytest.raises(ValueError, match="'weight' declares no initializer"):
+            initialize_params([weight], rng=0)
 
-        assert weight_value.min() > 0
-        np.testing.assert_array_equal(bias_value, 0)
+    def test_naming_a_parameter_that_declares_nothing_is_enough(self):
+        weight = trainable(np.zeros((4, 4), dtype="float64"), "weight")
 
-    def test_shared_variables_without_the_marker_class_follow_the_scheme(self):
+        [value] = initialize_params([weight], rng=0, initializers={weight: unit_constant()})
+
+        np.testing.assert_array_equal(value, 7.0)
+
+    def test_a_shared_variable_without_the_marker_class_has_to_be_named(self):
+        """Plain shared state carries no ``initializer`` attribute at all, so the declaration lookup has to
+        tolerate its absence rather than raise an AttributeError on the way past."""
         state = pytensor.shared(np.zeros(4, dtype="float64"), name="state")
 
-        [value] = initialize_params([state], scheme="unit_uniform", rng=0)
+        with pytest.raises(ValueError, match="'state' declares no initializer"):
+            initialize_params([state], rng=0)
 
-        assert value.min() > 0
+        [value] = initialize_params([state], rng=0, initializers={state: unit_constant()})
+        np.testing.assert_array_equal(value, 7.0)
 
     def test_calling_an_initializer_overrides_a_declaration(self):
         scale = trainable(np.ones(3, dtype="float64"), "scale", initializer=OneInitializer())
@@ -185,8 +197,8 @@ def test_the_fan_in_is_the_dimension_the_layers_treat_as_input():
 )
 def test_a_fan_scaled_initializer_rejects_a_parameter_with_no_fans(initializer):
     """A bias or a norm scale has no fan-in and fan-out, and scaling by the length of a vector is a number
-    with no meaning behind it. Such parameters declare their own initializer; reaching one with a scheme
-    instead should say so rather than draw something arbitrary."""
+    with no meaning behind it. Pointing one of these at such a parameter -- through a layer keyword or an
+    `initializers` entry -- should say so rather than draw something arbitrary."""
     with pytest.raises(ValueError, match="at least two dimensions"):
         initializer.sample((768,), "float64", np.random.default_rng(0))
 
@@ -214,14 +226,12 @@ def test_a_normal_initializer_has_no_fans_to_satisfy():
     assert value.std() == pytest.approx(1.0, rel=0.05)
 
 
-def test_the_normal_scheme_is_reachable_by_name():
-    """Its arguments both have defaults, which is what lets it into a registry whose entries are built with
-    no arguments. Anything parameterized differently has to be passed as an instance."""
-    parameter = trainable(np.zeros((100, 100), dtype="float64"), "w")
+def test_a_normal_initializer_built_from_its_registry_name_has_a_usable_default_spread():
+    """Both arguments default, which is what lets it into the registry at all. The default has to be a
+    spread something could train from, since a config naming 'normal' rebuilds exactly this."""
+    value = _INITIALIZERS["normal"]().sample((100, 100), "float64", np.random.default_rng(0))
 
-    [value] = initialize_params([parameter], scheme="normal", rng=0)
-
-    assert value.std() == pytest.approx(0.01, rel=0.05)  # the default std
+    assert value.std() == pytest.approx(0.01, rel=0.05)
 
 
 def test_initial_value_draws_at_floatx_in_the_requested_shape():
@@ -236,26 +246,24 @@ def test_initial_value_draws_at_floatx_in_the_requested_shape():
 
 class TestPerParameterInitializers:
     """Naming a parameter is how a caller overrules its declaration, which is otherwise impossible: the
-    declaration always wins, and the only escape was assigning `param.initializer` between construction and
-    initialization."""
+    declaration is the only thing a redraw consults, and the alternative is assigning `param.initializer`
+    between construction and initialization."""
 
     def test_a_named_initializer_beats_a_declaration(self):
-        # A norm scale declares ones precisely so a scheme cannot move it; naming the parameter is the one
+        # A norm scale declares ones precisely so nothing else can move it; naming the parameter is the one
         # thing that should, since the caller picked this parameter rather than every parameter.
         scale = trainable(np.zeros(4, dtype="float64"), "scale", initializer=OneInitializer())
 
-        [value] = initialize_params(
-            [scale], scheme="zeros", initializers={scale: unit_constant()}, rng=0
-        )
+        [value] = initialize_params([scale], initializers={scale: unit_constant()}, rng=0)
 
         np.testing.assert_allclose(value, 7.0)
 
-    def test_a_declaration_beats_the_scheme_when_nothing_names_it(self):
+    def test_an_unnamed_parameter_keeps_its_declaration(self):
         scale = trainable(np.zeros(4, dtype="float64"), "scale", initializer=OneInitializer())
-        weight = trainable(np.zeros((4, 4), dtype="float64"), "w")
+        weight = trainable(np.zeros((4, 4), dtype="float64"), "w", initializer=ZeroInitializer())
 
         scale_value, weight_value = initialize_params(
-            [scale, weight], scheme="zeros", initializers={weight: unit_constant()}, rng=0
+            [scale, weight], initializers={weight: unit_constant()}, rng=0
         )
 
         np.testing.assert_allclose(
@@ -263,25 +271,15 @@ class TestPerParameterInitializers:
         )  # its declaration, untouched by the entry below
         np.testing.assert_allclose(weight_value, 7.0)
 
-    def test_the_scheme_applies_where_neither_a_named_initializer_nor_a_declaration_exists(self):
-        weight = trainable(np.zeros((4, 4), dtype="float64"), "w")
-        other = trainable(np.zeros((4, 4), dtype="float64"), "other")
-
-        weight_value, other_value = initialize_params(
-            [weight, other], scheme="ones", initializers={weight: unit_constant()}, rng=0
-        )
-
-        np.testing.assert_allclose(weight_value, 7.0)
-        np.testing.assert_allclose(other_value, 1.0)
-
     def test_an_entry_is_keyed_by_the_parameter_not_its_name(self):
         """Two parameters can share a name -- nothing prevents it, and optimizer state collides on it rather
         than parameters -- so an entry keyed by name would reach both. Identity reaches one."""
-        first = trainable(np.zeros((4, 4), dtype="float64"), "w")
-        second = trainable(np.zeros((4, 4), dtype="float64"), "w")
+        declared = ZeroInitializer()
+        first = trainable(np.zeros((4, 4), dtype="float64"), "w", initializer=declared)
+        second = trainable(np.zeros((4, 4), dtype="float64"), "w", initializer=declared)
 
         first_value, second_value = initialize_params(
-            [first, second], scheme="zeros", initializers={first: unit_constant()}, rng=0
+            [first, second], initializers={first: unit_constant()}, rng=0
         )
 
         np.testing.assert_allclose(first_value, 7.0)
@@ -290,11 +288,9 @@ class TestPerParameterInitializers:
     def test_naming_a_parameter_that_is_not_being_initialized_does_nothing(self):
         """The mapping is consulted per parameter rather than iterated, so an entry for something outside
         `params` is inert instead of an error -- one dict can serve several initialize calls."""
-        weight = trainable(np.zeros((4, 4), dtype="float64"), "w")
+        weight = trainable(np.zeros((4, 4), dtype="float64"), "w", initializer=ZeroInitializer())
         elsewhere = trainable(np.zeros((4, 4), dtype="float64"), "elsewhere")
 
-        [value] = initialize_params(
-            [weight], scheme="zeros", initializers={elsewhere: unit_constant()}, rng=0
-        )
+        [value] = initialize_params([weight], initializers={elsewhere: unit_constant()}, rng=0)
 
         np.testing.assert_allclose(value, 0.0)

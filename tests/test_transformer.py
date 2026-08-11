@@ -147,15 +147,15 @@ def test_block_forwards_attention_config(rng):
 def test_a_residual_initializer_reaches_both_projections_into_the_residual_stream():
     """The scaling GPT-2 applies targets the two projections that write back into the residual stream --
     attention's output projection and the feed-forward's second layer -- and must leave the other four weight
-    matrices to the scheme. A keyword that caught a sibling would inflate the very variance it exists to
-    control, and reading the constructors cannot tell you which it reached."""
+    matrices at the layer default. A keyword that caught a sibling would inflate the very variance it exists
+    to control, and reading the constructors cannot tell you which it reached."""
     sentinel = 7.0
     scaled = CustomInitializer(lambda shape, dtype, rng: np.full(shape, sentinel, dtype=dtype))
     block = TransformerBlock("blk", d_model=8, n_head=2, residual_initializer=scaled)
     out = block(pt.tensor("x", shape=(None, 4, 8), dtype=floatX))
 
     params = collect_trainable_params(out)
-    values = dict(zip((p.name for p in params), initialize_params(params, scheme="zeros", rng=0)))
+    values = dict(zip((p.name for p in params), initialize_params(params, rng=0)))
 
     for name in ["blk_attn_out_proj_W", "blk_ff_fc_out_W"]:
         np.testing.assert_allclose(values[name], sentinel, err_msg=f"{name} was not scaled")
@@ -165,30 +165,22 @@ def test_a_residual_initializer_reaches_both_projections_into_the_residual_strea
         "blk_attn_v_proj_W",
         "blk_ff_fc_in_W",
     ]:
-        np.testing.assert_allclose(values[name], 0.0, err_msg=f"{name} should follow the scheme")
+        assert len(np.unique(values[name])) > 1, f"{name} was scaled and should not have been"
 
 
 def test_a_block_built_without_a_residual_initializer_is_unchanged():
-    """Omitting the keyword has to leave every parameter exactly where it was: the weights drawn by the
-    scheme, the biases at zero, the norms at the identity transform. The scheme returns a sentinel rather
-    than ones, so a norm scale that lost its declaration is distinguishable from one that kept it."""
-    sentinel = 7.0
-    reached_by_the_scheme = CustomInitializer(
-        lambda shape, dtype, rng: np.full(shape, sentinel, dtype=dtype)
-    )
+    """Omitting the keyword has to leave every parameter where it was: the weights on a real draw, the biases
+    at zero, the norms at the identity transform. A norm scale that lost its declaration would come back as a
+    draw rather than as ones, which is the failure the constants here catch."""
     block = TransformerBlock("blk", d_model=8, n_head=2)
     out = block(pt.tensor("x", shape=(None, 4, 8), dtype=floatX))
 
     params = collect_trainable_params(out)
-    values = dict(
-        zip(
-            (p.name for p in params), initialize_params(params, scheme=reached_by_the_scheme, rng=0)
-        )
-    )
+    values = dict(zip((p.name for p in params), initialize_params(params, rng=0)))
 
+    for name in ["blk_attn_out_proj_W", "blk_ff_fc_out_W"]:
+        assert len(np.unique(values[name])) > 1, name
     for name, expected in [
-        ("blk_attn_out_proj_W", sentinel),
-        ("blk_ff_fc_out_W", sentinel),
         ("blk_attn_out_proj_b", 0.0),
         ("blk_ff_fc_out_b", 0.0),
         ("blk_norm1_scale", 1.0),
@@ -208,7 +200,7 @@ def test_a_causal_attention_forwards_the_out_projection_initializer():
     out = attention(pt.tensor("x", shape=(None, 4, 8), dtype=floatX))
 
     params = collect_trainable_params(out)
-    values = dict(zip((p.name for p in params), initialize_params(params, scheme="zeros", rng=0)))
+    values = dict(zip((p.name for p in params), initialize_params(params, rng=0)))
 
     np.testing.assert_allclose(values["attn_out_proj_W"], sentinel)
-    np.testing.assert_allclose(values["attn_q_proj_W"], 0.0)
+    assert len(np.unique(values["attn_q_proj_W"])) > 1

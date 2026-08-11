@@ -85,9 +85,9 @@ def _affine_parameters(
     """Build the learned shift and scale. Returns them in the ``(loc, scale)`` order that every norm
     op unpacks its inputs in, so the two cannot drift apart.
 
-    Both declare their initializer, so a network-wide scheme leaves the identity transform in place --
-    normalizing and then rescaling by a random factor defeats the point of the layer. A caller who wants
-    something else says so, and their choice becomes the declaration.
+    Both declare their initializer, so a redraw returns them to the identity transform -- normalizing and
+    then rescaling by a random factor defeats the point of the layer. A caller who wants something else says
+    so, and their choice becomes the declaration.
     """
     resolved_loc = ZeroInitializer() if loc_initializer is None else loc_initializer
     resolved_scale = OneInitializer() if scale_initializer is None else scale_initializer
@@ -167,11 +167,10 @@ class BatchNorm2D(Layer):
         0.1.
     affine : bool, optional
         Apply the learned scale :math:`\gamma` and shift :math:`\beta`, starting from the identity
-        transform :math:`\gamma = 1`, :math:`\beta = 0`, which a network-wide initialization scheme
-        leaves in place. Default is True.
+        transform :math:`\gamma = 1`, :math:`\beta = 0`, which a redraw returns them to. Default is True.
     scale_initializer : Initializer, optional
-        How :math:`\gamma` is drawn. Ones when omitted, which is the identity transform; a scheme that
-        rescaled a normalized activation by a random factor would defeat the layer.
+        How :math:`\gamma` is drawn. Ones when omitted, which is the identity transform; drawing a random
+        factor to rescale a normalized activation by would defeat the layer.
     loc_initializer : Initializer, optional
         How :math:`\beta` is drawn. Zeros when omitted.
     track_running_stats : bool, optional
@@ -316,11 +315,10 @@ class LayerNorm(Layer):
         Constant :math:`\epsilon` added to the variance for numerical stability. Default is 1e-5.
     affine : bool, optional
         Apply the learned scale :math:`\gamma` and shift :math:`\beta`, starting from the identity
-        transform :math:`\gamma = 1`, :math:`\beta = 0`, which a network-wide initialization scheme
-        leaves in place. Default is True.
+        transform :math:`\gamma = 1`, :math:`\beta = 0`, which a redraw returns them to. Default is True.
     scale_initializer : Initializer, optional
-        How :math:`\gamma` is drawn. Ones when omitted, which is the identity transform; a scheme that
-        rescaled a normalized activation by a random factor would defeat the layer.
+        How :math:`\gamma` is drawn. Ones when omitted, which is the identity transform; drawing a random
+        factor to rescale a normalized activation by would defeat the layer.
     loc_initializer : Initializer, optional
         How :math:`\beta` is drawn. Zeros when omitted.
     """

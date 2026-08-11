@@ -11,12 +11,7 @@ from pytensor_ml.layers import BatchNorm2D, LayerNorm, Linear, Sequential
 from pytensor_ml.loss import SquaredError
 from pytensor_ml.model import Model
 from pytensor_ml.optim import sgd
-from pytensor_ml.state import (
-    CustomInitializer,
-    OneInitializer,
-    ZeroInitializer,
-    initialize_params,
-)
+from pytensor_ml.state import CustomInitializer, ZeroInitializer
 
 
 class TestModelPredict:
@@ -88,7 +83,7 @@ class TestModelInitialize:
         norm = norm_layer("norm", n_in=4)
         y = Sequential(Linear("fc1", 8, 4), norm, ReLU(), Linear("fc2", 4, 2))(X)
 
-        Model(X, y).initialize("xavier_normal", seed=0)
+        Model(X, y).initialize(seed=0)
 
         np.testing.assert_array_equal(norm.scale.get_value(), 1)
         np.testing.assert_array_equal(norm.loc.get_value(), 0)
@@ -98,10 +93,27 @@ class TestModelInitialize:
         fc1 = Linear("fc1", 8, 4)
         y = Sequential(fc1, ReLU(), Linear("fc2", 4, 2))(X)
 
-        Model(X, y).initialize("xavier_normal", seed=0)
+        Model(X, y).initialize(seed=0)
 
         assert np.abs(fc1.W.get_value()).min() > 0
         np.testing.assert_array_equal(fc1.b.get_value(), 0)
+
+    def test_the_seed_is_what_a_reproducible_run_rests_on(self):
+        """The whole remaining job of `initialize`: same seed, same network, same values. The differing-seed
+        half is what fails if the seed is dropped on the way to the draw, which same-seed alone would miss --
+        construction draws from fresh entropy, so two networks agree only because the seed made them."""
+
+        def values_for(seed):
+            X = pt.tensor("X", shape=(None, 8))
+            y = Sequential(Linear("fc1", 8, 4), ReLU(), Linear("fc2", 4, 2))(X)
+            model = Model(X, y).initialize(seed=seed)
+            return {p.name: p.get_value() for p in model.weights}
+
+        first, again, other = values_for(0), values_for(0), values_for(1)
+
+        for name, value in first.items():
+            np.testing.assert_array_equal(value, again[name], err_msg=name)
+        assert not np.array_equal(first["fc1_W"], other["fc1_W"])
 
     def test_a_declared_initializer_does_not_freeze_the_parameter(self):
         """Declaring an initializer protects a starting value, not the parameter. Excluding declared
@@ -111,7 +123,7 @@ class TestModelInitialize:
         X = pt.tensor("X", shape=(None, 8))
         norm = BatchNorm2D("norm", n_in=4)
         y = Sequential(Linear("fc1", 8, 4), norm, ReLU(), Linear("fc2", 4, 2))(X)
-        model = Model(X, y).initialize("xavier_normal", seed=0)
+        model = Model(X, y).initialize(seed=0)
 
         target = pt.matrix("target")
         step = model.compile_train(
@@ -157,49 +169,18 @@ def test_compile_train_reduces_loss():
     assert history[-1] < history[0]
 
 
-@pytest.mark.parametrize(
-    "scheme",
-    ["zeros", "ones", ZeroInitializer(), OneInitializer()],
-    ids=["zeros_by_name", "ones_by_name", "zeros_instance", "ones_instance"],
-)
-def test_initialize_refuses_a_constant_scheme(scheme):
-    """A constant is the right initializer for one parameter and never for a network: identical weights leave
-    no gradient to tell two units in a layer apart. Reachable by name and by instance, so both are refused."""
-    X = pt.tensor("X", shape=(None, 8))
-    y = Sequential(Linear("fc1", 8, 4), ReLU(), Linear("fc2", 4, 2))(X)
-
-    with pytest.raises(ValueError, match="same value"):
-        Model(X, y).initialize(scheme, seed=0)
-
-
-def test_the_refusal_is_deliberately_not_symmetric_with_initialize_params():
-    """`initialize_params` takes the parameters it is handed, so "set these to zeros" is a coherent request
-    and several tests rely on a constant scheme as a distinguishable value. `Model.initialize` means the whole
-    network, where a constant is always wrong. Moving the check down to be consistent would break both this
-    contrast and about fifteen tests that use it."""
-    X = pt.tensor("X", shape=(None, 8))
-    y = Sequential(Linear("fc1", 8, 4), ReLU(), Linear("fc2", 4, 2))(X)
-    model = Model(X, y)
-
-    values = initialize_params(model.weights, scheme="zeros")
-
-    assert all(np.all(value == 0) for value in values)
-    with pytest.raises(ValueError, match="same value"):
-        model.initialize("zeros")
-
-
-def test_initialize_still_accepts_a_constant_declared_on_one_parameter():
-    """The escape hatch the refusal points at: a constant on the parameter you mean, rather than on all of
-    them. A zeroed output head is a real technique, and a declaration is how it is said."""
+def test_a_layer_keyword_survives_a_redraw():
+    """A zeroed output head is a real technique, and the constructor keyword is how it is asked for. The
+    redraw has to honor it rather than treat every weight matrix as a fresh Xavier draw."""
     X = pt.tensor("X", shape=(None, 8))
     first = Linear("fc1", 8, 4)
     head = Linear("head", 4, 2, weight_initializer=ZeroInitializer())
     y = Sequential(first, ReLU(), head)(X)
 
-    Model(X, y).initialize("xavier_normal", seed=0)
+    Model(X, y).initialize(seed=0)
 
-    np.testing.assert_array_equal(head.W.get_value(), 0)  # its declaration outranks the scheme
-    assert np.abs(first.W.get_value()).min() > 0  # and the scheme still reached its sibling
+    np.testing.assert_array_equal(head.W.get_value(), 0)  # redrawn from its declaration
+    assert np.abs(first.W.get_value()).min() > 0  # and its sibling from the layer default
 
 
 def test_initialize_takes_per_parameter_initializers():
@@ -211,23 +192,23 @@ def test_initialize_takes_per_parameter_initializers():
     y = Sequential(fc1, norm, ReLU(), Linear("fc2", 4, 2))(X)
     drawn = CustomInitializer(lambda shape, dtype, rng: np.full(shape, 7.0, dtype=dtype))
 
-    Model(X, y).initialize("xavier_normal", seed=0, initializers={fc1.b: drawn, norm.scale: drawn})
+    Model(X, y).initialize(seed=0, initializers={fc1.b: drawn, norm.scale: drawn})
 
     np.testing.assert_allclose(fc1.b.get_value(), 7.0)  # outranks its zero declaration
     np.testing.assert_allclose(norm.scale.get_value(), 7.0)  # and the norm's unit declaration
     np.testing.assert_allclose(norm.loc.get_value(), 0.0)  # unnamed, so still its declaration
-    assert len(np.unique(fc1.W.get_value())) > 1  # the scheme, since nothing named it
+    assert len(np.unique(fc1.W.get_value())) > 1  # its own declaration, since nothing named it
 
 
 def test_a_constant_reaches_one_parameter_through_initializers():
-    """The second escape hatch the constant-scheme refusal names, alongside a declaration. A zeroed output
-    head is the same technique either way; this is the route for a parameter you did not construct."""
+    """The same zeroed head as above, asked for at initialize time rather than at construction -- the route
+    for a parameter whose layer you did not build, such as one inside a loaded network."""
     X = pt.tensor("X", shape=(None, 8))
     first = Linear("fc1", 8, 4)
     head = Linear("head", 4, 2)
     y = Sequential(first, ReLU(), head)(X)
 
-    Model(X, y).initialize("xavier_normal", seed=0, initializers={head.W: ZeroInitializer()})
+    Model(X, y).initialize(seed=0, initializers={head.W: ZeroInitializer()})
 
     np.testing.assert_array_equal(head.W.get_value(), 0)
-    assert np.abs(first.W.get_value()).min() > 0  # the scheme still reached its sibling
+    assert np.abs(first.W.get_value()).min() > 0  # its sibling still drew from its declaration

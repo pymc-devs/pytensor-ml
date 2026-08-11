@@ -347,9 +347,10 @@ def test_batch_norm_variants_agree_on_output_arity():
     assert collect_non_trainable_updates(untracked) == {}
 
 
-# Every parameter a layer owns, and the value a network-wide scheme must leave it at. A scheme reaching a
-# batch-norm scale would rescale a normalized activation by a random factor, defeating the layer; reaching a
-# bias would undo the zero start these layers are documented to have.
+# Every parameter a layer owns, and the value a redraw must give it. A constant is part of the layer's
+# definition -- a batch-norm scale drawn as a random factor would rescale a normalized activation and defeat
+# the layer, and a drawn bias would undo the zero start these layers are documented to have. None means the
+# declaration is a real draw rather than a constant, so the assertion is that the value varies.
 FEATURES = pt.tensor("features", shape=(None, 4), dtype=floatX)
 IDS = pt.tensor("ids", shape=(None, 4), dtype="int32")
 
@@ -366,26 +367,21 @@ DECLARED_BY_LAYERS = {
 
 
 @pytest.mark.parametrize("layer_name", sorted(DECLARED_BY_LAYERS), ids=sorted(DECLARED_BY_LAYERS))
-def test_a_layer_declares_the_initializers_its_parameters_need(layer_name):
-    """A parameter whose starting value is part of the layer's definition declares an initializer, so a
-    network-wide scheme passes it by. The scheme here returns a sentinel, so any parameter it reaches is
-    obvious and any declaration that stopped working shows up as that sentinel."""
+def test_a_layer_declares_an_initializer_for_every_parameter_it_builds(layer_name):
+    """A redraw consults nothing but the declaration, so a parameter declaring none cannot be redrawn at all.
+    Every parameter here has to come back with its layer's definition intact."""
     build, layer_input, expected = DECLARED_BY_LAYERS[layer_name]
     prediction = build()(layer_input)
-
-    sentinel = 7.0
-    reached_by_the_scheme = CustomInitializer(
-        lambda shape, dtype, rng: np.full(shape, sentinel, dtype=dtype)
-    )
     params = collect_trainable_params(prediction)
-    values = initialize_params(params, scheme=reached_by_the_scheme, rng=0)
+
+    values = initialize_params(params, rng=0)
 
     assert {p.name for p in params} == set(expected)
     for param, value in zip(params, values):
         if expected[param.name] is None:
-            np.testing.assert_allclose(value, sentinel)  # no declaration: the scheme applies
+            assert len(np.unique(value)) > 1, f"{param.name} redrew to one repeated value"
         else:
-            np.testing.assert_allclose(value, expected[param.name])
+            np.testing.assert_allclose(value, expected[param.name], err_msg=param.name)
 
 
 # One case per keyword: the layer to build with it, the parameter it must reach, and the parameters it must
@@ -402,9 +398,7 @@ INITIALIZER_KEYWORDS = {
         lambda init: Linear("fc", n_in=4, n_out=4, bias_initializer=init),
         FEATURES,
         "fc_b",
-        {
-            "fc_W": 0.0
-        },  # the scheme's value: a bias initializer reaching the weight would show up here
+        {"fc_W": None},  # a bias initializer reaching the weight would show up as the sentinel here
     ),
     "Embedding.weight": (
         lambda init: Embedding("emb", n_embeddings=6, n_features=4, weight_initializer=init),
@@ -449,21 +443,24 @@ def test_an_initializer_keyword_reaches_only_the_parameter_it_names(case):
     prediction = layer(layer_input)
 
     params = collect_trainable_params(prediction)
-    values = dict(zip((p.name for p in params), initialize_params(params, scheme="zeros", rng=0)))
+    values = dict(zip((p.name for p in params), initialize_params(params, rng=0)))
 
     np.testing.assert_allclose(values[target], sentinel)
     for name, expected in siblings.items():
-        np.testing.assert_allclose(values[name], expected)
+        if expected is None:
+            assert len(np.unique(values[name])) > 1, name
+        else:
+            np.testing.assert_allclose(values[name], expected, err_msg=name)
 
 
 def test_a_bias_initializer_replaces_the_zero_declaration_rather_than_fighting_it():
-    """The keyword becomes the declaration, so it survives a network-wide scheme the same way the zero it
-    replaced did. torch draws biases from a fan-scaled uniform, and this is how you say that here."""
+    """The keyword becomes the declaration, so a redraw uses it rather than the zero it replaced. torch draws
+    biases from a fan-scaled uniform, and this is how you say that here."""
     layer = Linear("fc", n_in=4, n_out=4, bias_initializer=NormalInitializer(0.0, 1.0))
     prediction = layer(pt.tensor("features", shape=(None, 4), dtype=floatX))
 
     params = collect_trainable_params(prediction)
-    values = dict(zip((p.name for p in params), initialize_params(params, scheme="zeros", rng=0)))
+    values = dict(zip((p.name for p in params), initialize_params(params, rng=0)))
 
     assert not np.allclose(values["fc_b"], 0.0)
 
@@ -501,20 +498,6 @@ def test_a_keyword_initializer_reaches_the_value_and_not_only_the_declaration():
     )
 
     np.testing.assert_allclose(layer.b.get_value(), sentinel)
-
-
-def test_a_non_default_scheme_still_reaches_every_weight_matrix():
-    """The trap in drawing at construction: recording the fallback as a declaration would outrank `scheme`
-    and silently disable it library-wide, while every test that initializes with the default still passed."""
-    X = pt.tensor("features", shape=(None, 4), dtype=floatX)
-    prediction = Sequential(Linear("fc1", 4, 4), Linear("fc2", 4, 4))(X)
-    params = collect_trainable_params(prediction)
-
-    values = dict(zip((p.name for p in params), initialize_params(params, scheme="ones", rng=0)))
-
-    np.testing.assert_allclose(values["fc1_W"], 1.0)
-    np.testing.assert_allclose(values["fc2_W"], 1.0)
-    np.testing.assert_allclose(values["fc1_b"], 0.0)  # its declaration still outranks the scheme
 
 
 def test_construction_draws_do_not_leak_into_a_seeded_initialize():

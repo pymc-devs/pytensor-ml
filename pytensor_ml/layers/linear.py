@@ -33,11 +33,9 @@ class Linear(Layer):
     n_out : int
         Size of the output feature axis.
     bias : bool, optional
-        Add the learned shift :math:`b`, which starts at zero and stays there under a network-wide
-        initialization scheme. Default is True.
+        Add the learned shift :math:`b`, which starts at zero and is redrawn there. Default is True.
     weight_initializer : Initializer, optional
-        How :math:`W` is drawn, in place of whatever scheme :meth:`~pytensor_ml.model.Model.initialize` is
-        given. Left to the scheme when omitted, which is what makes a network-wide choice reach the weights.
+        How :math:`W` is drawn, at construction and on every redraw. Xavier normal when omitted.
     bias_initializer : Initializer, optional
         How :math:`b` is drawn. Zeros when omitted, following Keras and flax rather than torch, which draws
         the bias from :math:`\mathcal{U}(\pm 1/\sqrt{\text{fan\_in}})`.
@@ -46,7 +44,7 @@ class Linear(Layer):
     -----
     Both parameters are drawn when the layer is built, so a network trains without any further call.
     :meth:`~pytensor_ml.model.Model.initialize` redraws them from a single seed, which is what makes a run
-    reproducible; :math:`W` follows its ``scheme`` there, since the draw here declares no initializer.
+    reproducible.
     """
 
     def __init__(
@@ -65,16 +63,15 @@ class Linear(Layer):
         self.bias = bias
 
         # Drawn here rather than left at zero: a weight and its value are one thing, and a stack of zero
-        # weights passes no gradient below its last layer. Note what is declared and what is not --
-        # `weight_initializer` is, so it survives a network-wide scheme, while the fallback below must not
-        # be, or a scheme could never reach a weight matrix at all.
+        # weights passes no gradient below its last layer. The initializer is declared as well as used, so
+        # `initialize(seed=...)` redraws from the same law.
         W_initializer = (
             XavierNormalInitializer() if weight_initializer is None else weight_initializer
         )
         self.W = trainable(
             W_initializer.initial_value((n_in, n_out)),
             f"{self.name}_W",
-            initializer=weight_initializer,
+            initializer=W_initializer,
         )
 
         if self.bias:

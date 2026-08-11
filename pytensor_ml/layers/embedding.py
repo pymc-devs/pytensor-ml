@@ -29,10 +29,10 @@ class Embedding(Layer):
     n_features : int
         Size of each embedding row.
     weight_initializer : Initializer, optional
-        How the table is drawn, in place of whatever scheme :meth:`~pytensor_ml.model.Model.initialize` is
-        given. Left to the scheme when omitted. A fan-scaled scheme puts the vocabulary size in the
-        denominator, which is correct Xavier and much tighter than the ``NormalInitializer(0.0, 0.02)`` that
-        reference implementations of GPT-2 use, so this is the keyword to reach for when matching one.
+        How the table is drawn, at construction and on every redraw. Xavier normal when omitted, which puts
+        the vocabulary size in the denominator -- correct Xavier, and much tighter than the
+        ``NormalInitializer(0.0, 0.02)`` that reference implementations of GPT-2 use, so this is the keyword
+        to reach for when matching one.
     """
 
     def __init__(
@@ -47,15 +47,14 @@ class Embedding(Layer):
         self.n_embeddings = n_embeddings
         self.n_features = n_features
 
-        # Drawn here, as in Linear, and for the same reason. The fallback is deliberately not declared, so
-        # a network-wide scheme still reaches the table.
+        # Drawn here, as in Linear, and for the same reason.
         W_initializer = (
             XavierNormalInitializer() if weight_initializer is None else weight_initializer
         )
         self.W = trainable(
             W_initializer.initial_value((n_embeddings, n_features)),
             f"{self.name}_W",
-            initializer=weight_initializer,
+            initializer=W_initializer,
         )
 
     def __call__(self, ids: pt.TensorLike) -> pt.TensorVariable:

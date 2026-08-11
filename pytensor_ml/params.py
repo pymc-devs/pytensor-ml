@@ -17,9 +17,9 @@ class TrainableParameter(TensorSharedVariable):
     Attributes
     ----------
     initializer : Initializer or None
-        The parameter's own initializer, which wins over any scheme passed to
-        :func:`~pytensor_ml.state.initialize_params`. A layer declares one when the starting value is
-        part of its definition, such as batch norm's unit scale. None defers to the caller's scheme.
+        The law this parameter's value is drawn from, which :func:`~pytensor_ml.state.initialize_params`
+        redraws it from. Every layer declares one for each parameter it builds. None means a redraw has
+        nothing to go on and raises.
     """
 
     initializer: "Initializer | None" = None
@@ -59,8 +59,8 @@ def trainable(
     Create a shared variable marked as a trainable parameter.
 
     The marker class lets graph traversal tell parameters apart from other shared state, so that an
-    optimizer updates exactly these. A parameter may also declare its own initializer, which protects a
-    meaningful starting value from being overwritten by a network-wide initialization scheme.
+    optimizer updates exactly these. A parameter also declares the initializer it is drawn from, which is
+    what lets one seed reproduce every value in a network.
 
     Parameters
     ----------
@@ -74,9 +74,8 @@ def trainable(
     strict : bool, optional
         If True, the value must exactly match the dtype.
     initializer : Initializer, optional
-        Initializer that reinitializing this parameter must use, whatever scheme the caller asks for.
-        Declare one when the starting value belongs to the layer's definition, such as a unit scale or a
-        zero bias. Default None, which defers to the caller's scheme.
+        The law to redraw this parameter from, whether that is a unit scale, a zero bias, or a fan-scaled
+        draw. Default None, which leaves the parameter with no law and raises on a redraw.
     **kwargs
         Additional arguments passed to the SharedVariable constructor.
     """
