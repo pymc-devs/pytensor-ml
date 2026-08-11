@@ -11,7 +11,12 @@ from pytensor_ml.layers import BatchNorm2D, LayerNorm, Linear, Sequential
 from pytensor_ml.loss import SquaredError
 from pytensor_ml.model import Model
 from pytensor_ml.optim import sgd
-from pytensor_ml.state import OneInitializer, ZeroInitializer, initialize_params
+from pytensor_ml.state import (
+    CustomInitializer,
+    OneInitializer,
+    ZeroInitializer,
+    initialize_params,
+)
 
 
 class TestModelPredict:
@@ -195,3 +200,34 @@ def test_initialize_still_accepts_a_constant_declared_on_one_parameter():
 
     np.testing.assert_array_equal(head.W.get_value(), 0)  # its declaration outranks the scheme
     assert np.abs(first.W.get_value()).min() > 0  # and the scheme still reached its sibling
+
+
+def test_initialize_takes_per_parameter_initializers():
+    """The model-level entry point a user actually calls. Reaching a parameter through the layer that owns
+    it is what makes a bias inside a composed layer addressable, since no constructor keyword exposes one."""
+    X = pt.tensor("X", shape=(None, 8))
+    fc1 = Linear("fc1", 8, 4)
+    norm = BatchNorm2D("norm", n_in=4)
+    y = Sequential(fc1, norm, ReLU(), Linear("fc2", 4, 2))(X)
+    drawn = CustomInitializer(lambda shape, dtype, rng: np.full(shape, 7.0, dtype=dtype))
+
+    Model(X, y).initialize("xavier_normal", seed=0, initializers={fc1.b: drawn, norm.scale: drawn})
+
+    np.testing.assert_allclose(fc1.b.get_value(), 7.0)  # outranks its zero declaration
+    np.testing.assert_allclose(norm.scale.get_value(), 7.0)  # and the norm's unit declaration
+    np.testing.assert_allclose(norm.loc.get_value(), 0.0)  # unnamed, so still its declaration
+    assert len(np.unique(fc1.W.get_value())) > 1  # the scheme, since nothing named it
+
+
+def test_a_constant_reaches_one_parameter_through_initializers():
+    """The second escape hatch the constant-scheme refusal names, alongside a declaration. A zeroed output
+    head is the same technique either way; this is the route for a parameter you did not construct."""
+    X = pt.tensor("X", shape=(None, 8))
+    first = Linear("fc1", 8, 4)
+    head = Linear("head", 4, 2)
+    y = Sequential(first, ReLU(), head)(X)
+
+    Model(X, y).initialize("xavier_normal", seed=0, initializers={head.W: ZeroInitializer()})
+
+    np.testing.assert_array_equal(head.W.get_value(), 0)
+    assert np.abs(first.W.get_value()).min() > 0  # the scheme still reached its sibling

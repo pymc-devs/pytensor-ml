@@ -1,8 +1,8 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 
-from pytensor.compile import Function
+from pytensor.compile import Function, SharedVariable
 from pytensor.graph.basic import Variable
 from pytensor.printing import debugprint
 from pytensor.tensor.variable import TensorVariable
@@ -13,6 +13,7 @@ from pytensor_ml.params import TrainableParameter
 from pytensor_ml.pytensorf import collect_trainable_params, compile_predict
 from pytensor_ml.state import (
     InitializationSchemeLike,
+    Initializer,
     initialize_params,
     require_varying_scheme,
 )
@@ -41,27 +42,34 @@ class Model:
         self,
         scheme: InitializationSchemeLike = "xavier_normal",
         seed: int | np.random.Generator | None = None,
+        initializers: Mapping[SharedVariable, Initializer] | None = None,
     ) -> "Model":
         """
         Initialize the trainable weights in place and return self.
 
         A parameter that declares its own initializer keeps it, so ``scheme`` reaches the weights whose
         starting value is a free choice and leaves the rest alone: a batch norm layer stays at its
-        identity transform, and biases stay at zero.
+        identity transform, and biases stay at zero. An ``initializers`` entry outranks both.
 
         Parameters
         ----------
         scheme : str or Initializer
-            Initialization scheme for the weights that do not declare one: the name of a built-in
-            scheme, or an :class:`~pytensor_ml.state.Initializer` instance. A constant is refused here,
-            since identical weights leave a layer with no symmetry to break; declare one on the parameter
-            that wants it. Default 'xavier_normal'.
+            Initialization scheme for the weights that ``initializers`` does not name and that declare
+            none of their own: the name of a built-in scheme, or an
+            :class:`~pytensor_ml.state.Initializer` instance. A constant is refused here, since identical
+            weights leave a layer with no symmetry to break; put one on the parameter that wants it.
+            Default 'xavier_normal'.
         seed : int or numpy Generator, optional
             Seed for reproducible initialization.
+        initializers : dict mapping parameter to Initializer, optional
+            How to draw specific parameters, in place of their declaration and of ``scheme``. Keyed by the
+            parameter object, reached through the layer that owns it -- ``{block.ff.fc_in.b: ...}`` -- so a
+            parameter no constructor keyword exposes is still addressable.
         """
         require_varying_scheme(scheme)
         parameters = self.weights
-        for parameter, value in zip(parameters, initialize_params(parameters, scheme, rng=seed)):
+        values = initialize_params(parameters, scheme, rng=seed, initializers=initializers)
+        for parameter, value in zip(parameters, values):
             parameter.set_value(value)
         return self
 
