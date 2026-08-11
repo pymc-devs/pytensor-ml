@@ -91,9 +91,47 @@ def adam_updates(
     Updates
         Mapping from each parameter and its moment buffers to their next values.
     """
+    return _adam_family_updates(
+        loss_or_gradients,
+        parameters,
+        learning_rate,
+        beta1,
+        beta2,
+        epsilon,
+        amsgrad,
+        namespace="adam",
+    )
+
+
+def _adam_family_updates(
+    loss_or_gradients: LossOrGradients,
+    parameters: Sequence[Parameter],
+    learning_rate: Rate,
+    beta1: float,
+    beta2: float,
+    epsilon: float,
+    amsgrad: bool,
+    *,
+    namespace: str,
+    weight_decay: float = 0.0,
+    mask: Callable[[Parameter], bool] | None = None,
+) -> Updates:
+    """
+    Adam's update, shared by :func:`adam_updates` and :func:`adamw_updates`.
+
+    Parameters
+    ----------
+    namespace : str
+        Prefix for every state slot this rule allocates, so two rules in one graph keep separate moments
+        and separate step counts rather than reusing each other's.
+    weight_decay : float
+        Coefficient of the decoupled decay term added to the update. Zero adds no term at all. Default 0.0.
+    mask : callable, optional
+        Predicate selecting which parameters the decay reaches. Every parameter when omitted.
+    """
     gradients = get_gradients(loss_or_gradients, parameters)
 
-    step_count = counter("adam/step_count")
+    step_count = counter(f"{namespace}/step_count")
     new_step_count = step_count + 1
     new_step_count_float = new_step_count.astype(config.floatX)
     first_moment_bias_correction = 1 - beta1**new_step_count_float
@@ -101,8 +139,8 @@ def adam_updates(
 
     updates: Updates = {step_count: new_step_count}
     for parameter, gradient in zip(parameters, gradients):
-        first_moment = state_for(parameter, "adam/first_moment")
-        second_moment = state_for(parameter, "adam/second_moment")
+        first_moment = state_for(parameter, f"{namespace}/first_moment")
+        second_moment = state_for(parameter, f"{namespace}/second_moment")
 
         new_first_moment = beta1 * first_moment + (1 - beta1) * gradient
         new_second_moment = beta2 * second_moment + (1 - beta2) * gradient**2
@@ -111,17 +149,26 @@ def adam_updates(
 
         second_moment_for_denominator = (
             _running_max_second_moment(
-                parameter, new_second_moment, updates, "adam/max_second_moment"
+                parameter, new_second_moment, updates, f"{namespace}/max_second_moment"
             )
             if amsgrad
             else new_second_moment
         )
         corrected_first_moment = new_first_moment / first_moment_bias_correction
         corrected_second_moment = second_moment_for_denominator / second_moment_bias_correction
+        denominator = pt.sqrt(corrected_second_moment) + epsilon
 
-        updates[parameter] = parameter - learning_rate * corrected_first_moment / (
-            pt.sqrt(corrected_second_moment) + epsilon
-        )
+        # Decoupled decay is added inside the rate multiplication -- that is what decouples it from the
+        # moments. Without decay there is nothing to add, and the rate stays where it factors most simply.
+        # The two groupings are equal in exact arithmetic and differ in the last bits, so neither branch is
+        # folded into the other: a third of float32 values move if they are.
+        if weight_decay:
+            decay_term = weight_decay * parameter if (mask is None or mask(parameter)) else 0.0
+            step = learning_rate * (corrected_first_moment / denominator + decay_term)
+        else:
+            step = learning_rate * corrected_first_moment / denominator
+
+        updates[parameter] = parameter - step
 
     return updates
 
@@ -193,38 +240,18 @@ def adamw_updates(
     Updates
         Mapping from each parameter and its moment buffers to their next values.
     """
-    gradients = get_gradients(loss_or_gradients, parameters)
-
-    step_count = counter("adamw/step_count")
-    new_step_count = step_count + 1
-    new_step_count_float = new_step_count.astype(config.floatX)
-    first_moment_bias_correction = 1 - beta1**new_step_count_float
-    second_moment_bias_correction = 1 - beta2**new_step_count_float
-
-    updates: Updates = {step_count: new_step_count}
-    for parameter, gradient in zip(parameters, gradients):
-        first_moment = state_for(parameter, "adamw/first_moment")
-        second_moment = state_for(parameter, "adamw/second_moment")
-
-        new_first_moment = beta1 * first_moment + (1 - beta1) * gradient
-        new_second_moment = beta2 * second_moment + (1 - beta2) * gradient**2
-        updates[first_moment] = new_first_moment
-        updates[second_moment] = new_second_moment
-
-        second_moment_for_denominator = (
-            _running_max_second_moment(
-                parameter, new_second_moment, updates, "adamw/max_second_moment"
-            )
-            if amsgrad
-            else new_second_moment
-        )
-        adam_update = (new_first_moment / first_moment_bias_correction) / (
-            pt.sqrt(second_moment_for_denominator / second_moment_bias_correction) + epsilon
-        )
-        decay_term = weight_decay * parameter if (mask is None or mask(parameter)) else 0.0
-        updates[parameter] = parameter - learning_rate * (adam_update + decay_term)
-
-    return updates
+    return _adam_family_updates(
+        loss_or_gradients,
+        parameters,
+        learning_rate,
+        beta1,
+        beta2,
+        epsilon,
+        amsgrad,
+        namespace="adamw",
+        weight_decay=weight_decay,
+        mask=mask,
+    )
 
 
 def nadam_updates(

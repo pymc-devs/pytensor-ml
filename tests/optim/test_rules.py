@@ -292,6 +292,26 @@ def test_adamw_mask_excludes_parameters_from_decay():
     np.testing.assert_allclose(b.get_value() - 2.0, -lr * 1.0, rtol=RTOL)
 
 
+def test_adamw_without_decay_is_adam():
+    """The decoupled decay term is the *only* difference between the two rules, which is what lets them share
+    an implementation. Run over enough steps that the moments, the bias corrections and the accumulated
+    trajectory all have to agree, and compare exactly: with no decay these are meant to be the same
+    computation, not merely close, so the two drifting apart at all means they stopped sharing it."""
+    start = np.array([1.5, -0.5, 2.0])
+    by_adam = trainable(start.copy(), name="w")
+    by_adamw = trainable(start.copy(), name="w")
+
+    adam_step = function([], [], updates=adam_updates(0.5 * (by_adam**2).sum(), [by_adam]))
+    adamw_step = function(
+        [], [], updates=adamw_updates(0.5 * (by_adamw**2).sum(), [by_adamw], weight_decay=0.0)
+    )
+    for _ in range(20):
+        adam_step()
+        adamw_step()
+
+    np.testing.assert_array_equal(by_adamw.get_value(), by_adam.get_value())
+
+
 def test_adagrad_step_decays_as_inverse_sqrt_t():
     """Under a constant gradient the accumulator grows as ``t * g**2``, so AdaGrad's step magnitude decays as
     ``lr / sqrt(t)`` for every coordinate — independent of the gradient magnitude itself."""
