@@ -11,7 +11,11 @@ from pytensor_ml import optim
 from pytensor_ml.loss import Loss, supervised_loss
 from pytensor_ml.params import TrainableParameter
 from pytensor_ml.pytensorf import collect_trainable_params, compile_predict
-from pytensor_ml.state import InitializationSchemeLike, initialize_params
+from pytensor_ml.state import (
+    InitializationSchemeLike,
+    initialize_params,
+    require_varying_scheme,
+)
 
 
 class Model:
@@ -49,10 +53,13 @@ class Model:
         ----------
         scheme : str or Initializer
             Initialization scheme for the weights that do not declare one: the name of a built-in
-            scheme, or an :class:`~pytensor_ml.state.Initializer` instance. Default 'xavier_normal'.
+            scheme, or an :class:`~pytensor_ml.state.Initializer` instance. A constant is refused here,
+            since identical weights leave a layer with no symmetry to break; declare one on the parameter
+            that wants it. Default 'xavier_normal'.
         seed : int or numpy Generator, optional
             Seed for reproducible initialization.
         """
+        require_varying_scheme(scheme)
         parameters = self.weights
         for parameter, value in zip(parameters, initialize_params(parameters, scheme, rng=seed)):
             parameter.set_value(value)

@@ -11,6 +11,7 @@ from pytensor_ml.layers import BatchNorm2D, LayerNorm, Linear, Sequential
 from pytensor_ml.loss import SquaredError
 from pytensor_ml.model import Model
 from pytensor_ml.optim import sgd
+from pytensor_ml.state import OneInitializer, ZeroInitializer, initialize_params
 
 
 class TestModelPredict:
@@ -149,3 +150,48 @@ def test_compile_train_reduces_loss():
     history = [float(step(X_batch, target)) for _ in range(50)]
 
     assert history[-1] < history[0]
+
+
+@pytest.mark.parametrize(
+    "scheme",
+    ["zeros", "ones", ZeroInitializer(), OneInitializer()],
+    ids=["zeros_by_name", "ones_by_name", "zeros_instance", "ones_instance"],
+)
+def test_initialize_refuses_a_constant_scheme(scheme):
+    """A constant is the right initializer for one parameter and never for a network: identical weights leave
+    no gradient to tell two units in a layer apart. Reachable by name and by instance, so both are refused."""
+    X = pt.tensor("X", shape=(None, 8))
+    y = Sequential(Linear("fc1", 8, 4), ReLU(), Linear("fc2", 4, 2))(X)
+
+    with pytest.raises(ValueError, match="same value"):
+        Model(X, y).initialize(scheme, seed=0)
+
+
+def test_the_refusal_is_deliberately_not_symmetric_with_initialize_params():
+    """`initialize_params` takes the parameters it is handed, so "set these to zeros" is a coherent request
+    and several tests rely on a constant scheme as a distinguishable value. `Model.initialize` means the whole
+    network, where a constant is always wrong. Moving the check down to be consistent would break both this
+    contrast and about fifteen tests that use it."""
+    X = pt.tensor("X", shape=(None, 8))
+    y = Sequential(Linear("fc1", 8, 4), ReLU(), Linear("fc2", 4, 2))(X)
+    model = Model(X, y)
+
+    values = initialize_params(model.weights, scheme="zeros")
+
+    assert all(np.all(value == 0) for value in values)
+    with pytest.raises(ValueError, match="same value"):
+        model.initialize("zeros")
+
+
+def test_initialize_still_accepts_a_constant_declared_on_one_parameter():
+    """The escape hatch the refusal points at: a constant on the parameter you mean, rather than on all of
+    them. A zeroed output head is a real technique, and a declaration is how it is said."""
+    X = pt.tensor("X", shape=(None, 8))
+    first = Linear("fc1", 8, 4)
+    head = Linear("head", 4, 2, weight_initializer=ZeroInitializer())
+    y = Sequential(first, ReLU(), head)(X)
+
+    Model(X, y).initialize("xavier_normal", seed=0)
+
+    np.testing.assert_array_equal(head.W.get_value(), 0)  # its declaration outranks the scheme
+    assert np.abs(first.W.get_value()).min() > 0  # and the scheme still reached its sibling

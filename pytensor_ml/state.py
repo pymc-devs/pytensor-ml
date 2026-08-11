@@ -206,6 +206,34 @@ def _declared_initializer(param: SharedVariable, default: Initializer) -> Initia
     return default if declared is None else declared
 
 
+def _resolve_scheme(scheme: InitializationSchemeLike) -> Initializer:
+    """The initializer a scheme names, or the instance itself when one was passed."""
+    return scheme if isinstance(scheme, Initializer) else _INITIALIZERS[scheme]()
+
+
+def require_varying_scheme(scheme: InitializationSchemeLike) -> None:
+    """
+    Raise if ``scheme`` would give every weight matrix in a network the same value.
+
+    A constant is the right initializer for a bias or a norm scale and never for a whole network: identical
+    weights leave no gradient to distinguish two units in a layer, so there is no symmetry for training to
+    break. Declare it on the parameter that wants it instead.
+
+    Parameters
+    ----------
+    scheme : str or Initializer
+        The scheme about to be applied to every parameter that declares nothing.
+    """
+    if isinstance(_resolve_scheme(scheme), ZeroInitializer | OneInitializer):
+        name = scheme if isinstance(scheme, str) else type(scheme).__name__
+        raise ValueError(
+            f"{name!r} gives every weight matrix the same value, so no gradient distinguishes two units in "
+            "a layer and training cannot break the symmetry. A constant belongs on one parameter rather "
+            "than on a network: declare it where that parameter is built, as in "
+            "`Linear(..., weight_initializer=ZeroInitializer())`."
+        )
+
+
 def initialize_params(
     params: Sequence[SharedVariable],
     scheme: InitializationSchemeLike = "xavier_normal",
@@ -238,7 +266,7 @@ def initialize_params(
     # Resolve once and share: a seed handed to each _sample_like call would repeat draws across parameters.
     rng = np.random.default_rng(rng)
 
-    initializer = scheme if isinstance(scheme, Initializer) else _INITIALIZERS[scheme]()
+    initializer = _resolve_scheme(scheme)
     return [
         _declared_initializer(param, default=initializer)._sample_like(param, rng)
         for param in params
