@@ -21,6 +21,11 @@ from pytensor_ml.state import (
 )
 
 
+def unit_constant(value: float = 7.0) -> CustomInitializer:
+    """An initializer whose draws are unmistakable, so a value says which of the three sources produced it."""
+    return CustomInitializer(lambda shape, dtype, rng: np.full(shape, value, dtype=dtype))
+
+
 def test_scheme_names_match_the_initializer_registry():
     assert set(get_args(InitializationScheme)) == set(_INITIALIZERS)
 
@@ -227,3 +232,69 @@ def test_initial_value_draws_at_floatx_in_the_requested_shape():
     assert value.shape == (6, 4)
     assert str(value.dtype) == pytensor.config.floatX
     assert len(np.unique(value)) > 1  # drawn, not filled
+
+
+class TestPerParameterInitializers:
+    """Naming a parameter is how a caller overrules its declaration, which is otherwise impossible: the
+    declaration always wins, and the only escape was assigning `param.initializer` between construction and
+    initialization."""
+
+    def test_a_named_initializer_beats_a_declaration(self):
+        # A norm scale declares ones precisely so a scheme cannot move it; naming the parameter is the one
+        # thing that should, since the caller picked this parameter rather than every parameter.
+        scale = trainable(np.zeros(4, dtype="float64"), "scale", initializer=OneInitializer())
+
+        [value] = initialize_params(
+            [scale], scheme="zeros", initializers={scale: unit_constant()}, rng=0
+        )
+
+        np.testing.assert_allclose(value, 7.0)
+
+    def test_a_declaration_beats_the_scheme_when_nothing_names_it(self):
+        scale = trainable(np.zeros(4, dtype="float64"), "scale", initializer=OneInitializer())
+        weight = trainable(np.zeros((4, 4), dtype="float64"), "w")
+
+        scale_value, weight_value = initialize_params(
+            [scale, weight], scheme="zeros", initializers={weight: unit_constant()}, rng=0
+        )
+
+        np.testing.assert_allclose(
+            scale_value, 1.0
+        )  # its declaration, untouched by the entry below
+        np.testing.assert_allclose(weight_value, 7.0)
+
+    def test_the_scheme_applies_where_neither_a_named_initializer_nor_a_declaration_exists(self):
+        weight = trainable(np.zeros((4, 4), dtype="float64"), "w")
+        other = trainable(np.zeros((4, 4), dtype="float64"), "other")
+
+        weight_value, other_value = initialize_params(
+            [weight, other], scheme="ones", initializers={weight: unit_constant()}, rng=0
+        )
+
+        np.testing.assert_allclose(weight_value, 7.0)
+        np.testing.assert_allclose(other_value, 1.0)
+
+    def test_an_entry_is_keyed_by_the_parameter_not_its_name(self):
+        """Two parameters can share a name -- nothing prevents it, and optimizer state collides on it rather
+        than parameters -- so an entry keyed by name would reach both. Identity reaches one."""
+        first = trainable(np.zeros((4, 4), dtype="float64"), "w")
+        second = trainable(np.zeros((4, 4), dtype="float64"), "w")
+
+        first_value, second_value = initialize_params(
+            [first, second], scheme="zeros", initializers={first: unit_constant()}, rng=0
+        )
+
+        np.testing.assert_allclose(first_value, 7.0)
+        np.testing.assert_allclose(second_value, 0.0)
+
+    def test_naming_a_parameter_that_is_not_being_initialized_does_nothing(self):
+        """The mapping is consulted per parameter rather than iterated, so an entry for something outside
+        `params` is inert instead of an error -- one dict can serve several initialize calls."""
+        weight = trainable(np.zeros((4, 4), dtype="float64"), "w")
+        elsewhere = trainable(np.zeros((4, 4), dtype="float64"), "elsewhere")
+
+        [value] = initialize_params(
+            [weight], scheme="zeros", initializers={elsewhere: unit_constant()}, rng=0
+        )
+
+        np.testing.assert_allclose(value, 0.0)

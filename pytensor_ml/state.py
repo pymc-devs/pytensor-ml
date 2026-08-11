@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Literal
 
 import numpy as np
@@ -200,8 +200,14 @@ _INITIALIZERS: dict[str, type[Initializer]] = {
 InitializationSchemeLike = InitializationScheme | Initializer
 
 
-def _declared_initializer(param: SharedVariable, default: Initializer) -> Initializer:
-    """The parameter's own initializer, or ``default`` when it does not declare one."""
+def _initializer_for(
+    param: SharedVariable,
+    initializers: Mapping[SharedVariable, Initializer],
+    default: Initializer,
+) -> Initializer:
+    """The initializer to draw ``param`` with: one named for it, else its own, else ``default``."""
+    if param in initializers:
+        return initializers[param]
     declared = param.initializer if isinstance(param, TrainableParameter) else None
     return default if declared is None else declared
 
@@ -230,7 +236,8 @@ def require_varying_scheme(scheme: InitializationSchemeLike) -> None:
             f"{name!r} gives every weight matrix the same value, so no gradient distinguishes two units in "
             "a layer and training cannot break the symmetry. A constant belongs on one parameter rather "
             "than on a network: declare it where that parameter is built, as in "
-            "`Linear(..., weight_initializer=ZeroInitializer())`."
+            "`Linear(..., weight_initializer=ZeroInitializer())`, or name that parameter in "
+            "`initializers={parameter: ZeroInitializer()}`."
         )
 
 
@@ -238,25 +245,31 @@ def initialize_params(
     params: Sequence[SharedVariable],
     scheme: InitializationSchemeLike = "xavier_normal",
     rng: RandomState | None = None,
+    initializers: Mapping[SharedVariable, Initializer] | None = None,
 ) -> list[np.ndarray]:
     """
-    Initialize parameter values using the specified scheme.
+    Initialize parameter values, resolving each parameter's initializer in three steps.
 
-    A :class:`~pytensor_ml.params.TrainableParameter` that declares its own ``initializer`` uses it
-    instead of ``scheme``, leaving batch norm at its unit scale while the weight matrices around it are
-    drawn from the requested scheme. Call an :class:`Initializer` on a parameter directly to overwrite a
-    declared value anyway.
+    An ``initializers`` entry for a parameter wins; failing that, a
+    :class:`~pytensor_ml.params.TrainableParameter` that declares its own ``initializer`` uses it; failing
+    that, ``scheme`` applies. The middle step is what leaves batch norm at its unit scale while the weight
+    matrices around it are drawn from the requested scheme, and the first is how a caller overrules that
+    for a parameter they hold.
 
     Parameters
     ----------
     params
         SharedVariables to initialize values for.
     scheme
-        Initialization scheme for parameters that do not declare one: the name of a built-in scheme, or
-        any :class:`Initializer` instance (including a :class:`CustomInitializer` wrapping your own
-        sampling function).
+        Initialization scheme for the parameters that ``initializers`` does not name and that declare none
+        of their own: the name of a built-in scheme, or any :class:`Initializer` instance (including a
+        :class:`CustomInitializer` wrapping your own sampling function).
     rng
         Random number generator. If None, a new one is created.
+    initializers
+        Mapping from a parameter to the initializer to draw it with, taking precedence over both its own
+        declaration and ``scheme``. Keyed by the parameter itself rather than its name, so nothing here
+        depends on how a layer names what it builds.
 
     Returns
     -------
@@ -267,7 +280,8 @@ def initialize_params(
     rng = np.random.default_rng(rng)
 
     initializer = _resolve_scheme(scheme)
+    named = {} if initializers is None else initializers
     return [
-        _declared_initializer(param, default=initializer)._sample_like(param, rng)
+        _initializer_for(param, named, default=initializer)._sample_like(param, rng)
         for param in params
     ]
