@@ -1,3 +1,5 @@
+import inspect
+
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
 from typing import Literal
@@ -28,8 +30,8 @@ class Initializer(ABC):
     assignment to its caller.
 
     ``__props__`` names the constructor arguments that define the draw, borrowing pytensor's Op convention
-    so the same encoder serves both. A subclass whose spread is an argument must list it, or a saved network
-    restores the default spread instead of the one it was built with.
+    so the same encoder serves both. A subclass taking arguments must list them, or a saved network rebuilds
+    it with the defaults rather than the values it was built with.
     """
 
     __props__: tuple[str, ...] = ()
@@ -175,6 +177,128 @@ class XavierNormalInitializer(Initializer):
         fan_in, fan_out = fans(shape)
         scale = np.sqrt(2.0 / (fan_in + fan_out))
         return rng.normal(0, scale, size=shape).astype(dtype)
+
+
+# Every sampler is handed these two, in this order, before its own parameters.
+_DRAW_ARGUMENTS = ("rng", "shape")
+
+
+def _split_signature(
+    sample_fn: Callable[..., np.ndarray],
+) -> tuple[list[str], dict[str, object]]:
+    """
+    Check that a sampler takes the draw's arguments, and return its own parameters after them.
+
+    Returns
+    -------
+    parameters : list of str
+        Names after the draw's arguments, which become the initializer's ``__props__``.
+    defaults : dict
+        Default value for each parameter that has one.
+    """
+    declared = list(inspect.signature(sample_fn).parameters.values())
+    if tuple(parameter.name for parameter in declared[: len(_DRAW_ARGUMENTS)]) != _DRAW_ARGUMENTS:
+        got = ", ".join(parameter.name for parameter in declared) or "nothing"
+        raise ValueError(
+            f"{sample_fn.__name__} must take {' and '.join(_DRAW_ARGUMENTS)} as its first two parameters, "
+            f"before any of its own; got ({got}). Every draw is handed both, so a sampler that ignores one "
+            "still declares it."
+        )
+
+    parameters: list[str] = []
+    defaults: dict[str, object] = {}
+    for parameter in declared[len(_DRAW_ARGUMENTS) :]:
+        if parameter.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+            stars = "*" if parameter.kind is inspect.Parameter.VAR_POSITIONAL else "**"
+            raise ValueError(
+                f"{sample_fn.__name__} takes {stars}{parameter.name}, which has no name to record. Name "
+                "each parameter explicitly."
+            )
+        parameters.append(parameter.name)
+        if parameter.default is not inspect.Parameter.empty:
+            defaults[parameter.name] = parameter.default
+
+    return parameters, defaults
+
+
+def initializer(sample_fn: Callable[..., np.ndarray]) -> type[Initializer]:
+    """
+    Build an :class:`Initializer` class from a sampling function, with its parameters as the draw's own.
+
+    A sampler takes ``rng`` and ``shape``, in that order, and then whatever parameters it wants, called
+    whatever it likes. Return an array of ``shape``; the dtype is applied for you.
+
+    Those parameters are constants, frozen when you instantiate the initializer and written verbatim into a
+    saved config -- which is the whole point, since a closure over them could not be written to a file. So
+    anything that varies with the parameter being drawn belongs in the body, derived from ``shape``. A
+    fan-scaled draw computes ``fans(shape)`` rather than taking ``fan_in``, which would otherwise be frozen
+    at one layer's value and silently used for every other shape.
+
+    Defining the function at module level is what lets a saved network find it again, because the config
+    records the class by import path.
+
+    Parameters
+    ----------
+    sample_fn : callable
+        Draws one parameter's value, as ``(rng, shape, **parameters)``.
+
+    Returns
+    -------
+    type of Initializer
+        A class to instantiate with the parameters, e.g. ``scaled_normal(std=0.02)``.
+
+    Examples
+    --------
+    .. code-block:: python
+
+        @initializer
+        def he_normal(rng, shape):
+            fan_in, _ = fans(shape)
+            return rng.normal(0.0, np.sqrt(2.0 / fan_in), size=shape)
+
+        Linear("fc", 8, 8, weight_initializer=he_normal())
+    """
+    parameters, defaults = _split_signature(sample_fn)
+
+    class FunctionInitializer(Initializer):
+        __props__ = tuple(parameters)
+
+        def __init__(self, **given: object):
+            unexpected = set(given) - set(parameters)
+            if unexpected:
+                takes = f"takes {parameters}" if parameters else "takes no parameters"
+                raise TypeError(
+                    f"{sample_fn.__name__}() got unexpected parameters {sorted(unexpected)}; it {takes}."
+                )
+            bound = defaults | given
+            missing = [name for name in parameters if name not in bound]
+            if missing:
+                raise TypeError(f"{sample_fn.__name__}() is missing parameters {missing}.")
+            for name, value in bound.items():
+                setattr(self, name, value)
+
+        def sample(
+            self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator
+        ) -> np.ndarray:
+            drawn = np.asarray(
+                sample_fn(rng, shape, **{name: getattr(self, name) for name in parameters}),
+                dtype=dtype,
+            )
+            # Not broadcast: a draw that forgot `size=shape` returns one number, and filling a parameter
+            # with it would give every unit the same weight, silently, with nothing left to break the
+            # symmetry.
+            if drawn.shape != tuple(shape):
+                raise ValueError(
+                    f"{sample_fn.__name__} returned shape {drawn.shape} for a parameter of shape "
+                    f"{tuple(shape)}. Pass the shape on, as in `rng.normal(0.0, 1.0, size=shape)`."
+                )
+            return drawn
+
+    FunctionInitializer.__name__ = sample_fn.__name__
+    FunctionInitializer.__qualname__ = sample_fn.__qualname__
+    FunctionInitializer.__module__ = sample_fn.__module__
+    FunctionInitializer.__doc__ = sample_fn.__doc__
+    return FunctionInitializer
 
 
 class CustomInitializer(Initializer):
