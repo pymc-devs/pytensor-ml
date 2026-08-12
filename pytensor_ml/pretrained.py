@@ -3,7 +3,7 @@ import json
 from collections.abc import Sequence
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import pytensor
@@ -13,7 +13,15 @@ from pytensor.graph.basic import Variable
 from pytensor.tensor.random.type import RandomGeneratorType
 
 from pytensor_ml.checkpoint import load_state, save_state
-from pytensor_ml.json_serialize import deserialize_graph, serialize_graph, type_from_json
+from pytensor_ml.json_serialize import (
+    deserialize_graph,
+    props_from_json,
+    props_to_json,
+    qualname,
+    resolve_class,
+    serialize_graph,
+    type_from_json,
+)
 from pytensor_ml.params import NonTrainableParameter, TrainableParameter, non_trainable, trainable
 from pytensor_ml.pytensorf import (
     as_output_list,
@@ -21,6 +29,7 @@ from pytensor_ml.pytensorf import (
     collect_shared_variables,
     find_rng_nodes,
 )
+from pytensor_ml.state import CustomInitializer, Initializer, UnrecordedInitializer
 
 CONFIG_FILENAME = "config.json"
 WEIGHTS_FILENAME = "model.safetensors"
@@ -28,7 +37,7 @@ WEIGHTS_FILENAME = "model.safetensors"
 # Marks a config as a pytensor_ml graph (vs a HuggingFace config, which shares the config.json filename but
 # is a hyperparameter sheet, not a serialized graph). The version guards future schema changes.
 GRAPH_FORMAT = "pytensor_ml.graph"
-GRAPH_FORMAT_VERSION = 3
+GRAPH_FORMAT_VERSION = 4
 
 Format = Literal["auto", "pytensor", "huggingface"]
 
@@ -78,12 +87,49 @@ def _input_kind(variable: Variable) -> InputKind:
     return InputKind.DATA
 
 
+def _initializer_to_json(initializer: Initializer) -> dict:
+    """
+    Encode the law a parameter is drawn from, as a class path and its ``__props__``.
+
+    A :class:`~pytensor_ml.state.CustomInitializer` holds a Python function, so only the fact that it was
+    one survives. Any future initializer holding a callable needs the same treatment.
+    """
+    if isinstance(initializer, CustomInitializer):
+        initializer = UnrecordedInitializer(type(initializer).__name__)
+    return {"class": qualname(initializer), "props": props_to_json(initializer)}
+
+
+def _initializer_from_json(initializer_dict: dict) -> Initializer:
+    return resolve_class(initializer_dict["class"])(**props_from_json(initializer_dict["props"]))
+
+
 def _input_meta(variable: Variable) -> dict:
-    meta = {"name": variable.name, "kind": _input_kind(variable)}
+    meta: dict[str, Any] = {"name": variable.name, "kind": _input_kind(variable)}
     if isinstance(variable, SharedVariable) and meta["kind"] == InputKind.RNG:
         # Captured for exact reproducibility even though load does not restore it by default.
         meta["rng_state"] = variable.get_value(borrow=True).bit_generator.state
+    if isinstance(variable, TrainableParameter) and variable.initializer is not None:
+        meta["initializer"] = _initializer_to_json(variable.initializer)
     return meta
+
+
+def _rebuild_trainable(graph_type, meta: dict) -> TrainableParameter:
+    """
+    Rebuild one trainable parameter, holding a draw from the initializer the config recorded for it.
+
+    Drawn rather than zero-filled, so a rebuilt parameter holds a value for the same reason a freshly
+    constructed one does. An initializer the config could not record has nothing to draw from, and says so
+    on the redraw that needs it rather than here, where restoring saved values is the point.
+    """
+    initializer_dict = meta.get("initializer")
+    initializer = None if initializer_dict is None else _initializer_from_json(initializer_dict)
+
+    if initializer is None or isinstance(initializer, UnrecordedInitializer):
+        value = np.zeros(graph_type.shape, dtype=graph_type.dtype)
+    else:
+        value = initializer.initial_value(graph_type.shape)
+
+    return trainable(value, meta["name"], initializer=initializer)
 
 
 def _rebuild_input(type_json: dict, meta: dict, restore_rng: bool):
@@ -97,9 +143,10 @@ def _rebuild_input(type_json: dict, meta: dict, restore_rng: bool):
         return pytensor.shared(generator, name=name)
 
     graph_type = type_from_json(type_json)
-    placeholder = np.zeros(graph_type.shape, dtype=graph_type.dtype)
     if kind == InputKind.TRAINABLE:
-        return trainable(placeholder, name)
+        return _rebuild_trainable(graph_type, meta)
+
+    placeholder = np.zeros(graph_type.shape, dtype=graph_type.dtype)
     if kind == InputKind.NON_TRAINABLE:
         return non_trainable(placeholder, name)
     return pytensor.shared(placeholder, name=name)
@@ -145,9 +192,14 @@ def load_network(
     """
     Rebuild a network's graph from a :func:`save_network` config file.
 
-    Shared variables (parameters) come back zero-initialized and keep their original names and kinds, so a
-    subsequent :func:`load_state` (or :func:`from_pretrained`) can fill them by name. This restores the
-    architecture only.
+    Shared variables keep their original names and kinds, so a subsequent :func:`load_state` (or
+    :func:`from_pretrained`) can fill them by name. This restores the architecture only -- the values are
+    not the saved ones.
+
+    A trainable parameter comes back holding a draw from the initializer it was built with, as it would if
+    the layer had constructed it, so a loaded architecture is trainable without further calls and a batch
+    norm layer returns to its identity transform. Other shared state is zero-filled, having no law to
+    redraw from.
 
     Parameters
     ----------

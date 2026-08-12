@@ -6,10 +6,16 @@ import pytensor.tensor as pt
 import pytest
 
 from pytensor_ml.activations import ReLU
-from pytensor_ml.layers import BatchNorm2D, Dropout, Linear, Sequential
+from pytensor_ml.layers import BatchNorm2D, Dropout, Embedding, Linear, Sequential
 from pytensor_ml.params import NonTrainableParameter, TrainableParameter
 from pytensor_ml.pretrained import from_pretrained, load_network, save_network, save_pretrained
 from pytensor_ml.pytensorf import collect_shared_variables, collect_trainable_params
+from pytensor_ml.state import (
+    CustomInitializer,
+    NormalInitializer,
+    UnrecordedInitializer,
+    initialize_params,
+)
 
 floatX = pytensor.config.floatX
 
@@ -49,16 +55,22 @@ def test_save_pretrained_writes_config_and_weights(tmp_path):
     assert (tmp_path / "model.safetensors").exists()
 
 
-def test_load_network_restores_zero_initialized_trainable_params(tmp_path):
+def test_load_network_restores_trainable_params_holding_a_draw(tmp_path):
+    """A rebuilt parameter holds a value for the same reason a freshly constructed one does, and holds it
+    under the same law: a weight drawn, a bias at the zero it declares. The values are not the saved ones --
+    this restores architecture, and `load_state` fills them by name."""
     X, output = build_initialized_network()
     save_network(output, tmp_path / "config.json")
 
     _, restored_output = load_network(tmp_path / "config.json")
-    params = collect_trainable_params(restored_output)
+    params = {p.name: p for p in collect_trainable_params(restored_output)}
 
-    assert len(params) == 4  # two Linear layers, weight + bias each
-    assert all(isinstance(p, TrainableParameter) for p in params)
-    assert all(np.all(p.get_value() == 0) for p in params)  # architecture only, weights unset
+    assert set(params) == {"fc1_W", "fc1_b", "fc2_W", "fc2_b"}
+    assert all(isinstance(p, TrainableParameter) for p in params.values())
+    for name in ("fc1_W", "fc2_W"):
+        assert len(np.unique(params[name].get_value())) > 1, name
+    for name in ("fc1_b", "fc2_b"):
+        np.testing.assert_array_equal(params[name].get_value(), 0)
 
 
 def test_from_pretrained_rejects_huggingface_directory(tmp_path):
@@ -143,3 +155,77 @@ def test_load_network_rejects_an_older_format_version(tmp_path):
 
     with pytest.raises(ValueError, match="graph format version 1"):
         load_network(path)
+
+
+def test_a_loaded_batch_norm_returns_to_its_identity_transform(tmp_path):
+    """The regression the whole exercise is for. A batch norm scale is ones because the layer declares it,
+    and a config that dropped the declaration gave the scale a fan-scaled draw -- and once `fans` started
+    refusing 1-D shapes, an outright error."""
+    X = pt.matrix("X")
+    output = Sequential(Linear("fc", 4, 4), BatchNorm2D("norm", n_in=4))(X)
+    save_network(output, tmp_path / "config.json")
+
+    _, restored = load_network(tmp_path / "config.json")
+    parameters = collect_trainable_params(restored)
+    for parameter, value in zip(parameters, initialize_params(parameters, rng=0)):
+        parameter.set_value(value)
+
+    by_name = {p.name: p for p in parameters}
+    np.testing.assert_array_equal(by_name["norm_scale"].get_value(), 1)
+    np.testing.assert_array_equal(by_name["norm_loc"].get_value(), 0)
+
+
+def test_a_parameterized_initializer_keeps_its_arguments(tmp_path):
+    """Recording the registry name alone would be lossy: 'normal' rebuilds at the default spread, so a table
+    built for GPT-2 at 0.02 would come back at 0.01 and nothing would say so."""
+    X = pt.imatrix("ids")
+    output = Embedding("tok", 32, 8, weight_initializer=NormalInitializer(0.0, 0.02))(X)
+    save_network(output, tmp_path / "config.json")
+
+    _, restored = load_network(tmp_path / "config.json")
+    [table] = collect_trainable_params(restored)
+
+    assert isinstance(table.initializer, NormalInitializer)
+    assert (table.initializer.mean, table.initializer.std) == (0.0, 0.02)
+
+
+def test_a_custom_initializer_survives_as_a_report_of_what_was_lost(tmp_path):
+    """A Python function cannot be written to a config. Loading still works, since restoring saved values is
+    the usual reason to rebuild; only a redraw needs the law back, and that is where it says so."""
+    X = pt.matrix("X")
+    drawn = CustomInitializer(lambda shape, dtype, rng: np.full(shape, 7.0, dtype=dtype))
+    output = Linear("fc", 4, 4, weight_initializer=drawn)(X)
+    save_network(output, tmp_path / "config.json")
+
+    _, restored = load_network(tmp_path / "config.json")
+    weight = next(p for p in collect_trainable_params(restored) if p.name == "fc_W")
+
+    assert isinstance(weight.initializer, UnrecordedInitializer)
+    with pytest.raises(ValueError, match="CustomInitializer, which a saved config cannot record"):
+        initialize_params([weight], rng=0)
+
+
+def test_a_loaded_network_initializes_exactly_like_the_one_it_was_saved_from(tmp_path):
+    """The whole point, stated as one equality. Same seed, same values, parameter for parameter -- which also
+    pins that the rebuilt parameters come back in the saved order, since one generator draws them in
+    sequence and a permutation would hand each the wrong draw."""
+    X = pt.matrix("X")
+    original = Sequential(
+        Linear("fc1", 4, 8),
+        ReLU(),
+        BatchNorm2D("norm", n_in=8),
+        Linear("fc2", 8, 2, weight_initializer=NormalInitializer(0.0, 0.02)),
+    )(X)
+    save_network(original, tmp_path / "config.json")
+    _, restored = load_network(tmp_path / "config.json")
+
+    def seeded(output):
+        parameters = collect_trainable_params(output)
+        values = initialize_params(parameters, rng=1234)
+        return {p.name: value for p, value in zip(parameters, values)}
+
+    from_original, from_loaded = seeded(original), seeded(restored)
+
+    assert list(from_original) == list(from_loaded)  # same order, not merely the same names
+    for name, value in from_original.items():
+        np.testing.assert_array_equal(value, from_loaded[name], err_msg=name)
