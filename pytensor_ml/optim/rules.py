@@ -94,11 +94,11 @@ def adam_updates(
     return _adam_family_updates(
         loss_or_gradients,
         parameters,
-        learning_rate,
-        beta1,
-        beta2,
-        epsilon,
-        amsgrad,
+        learning_rate=learning_rate,
+        beta1=beta1,
+        beta2=beta2,
+        epsilon=epsilon,
+        amsgrad=amsgrad,
         namespace="adam",
     )
 
@@ -106,12 +106,12 @@ def adam_updates(
 def _adam_family_updates(
     loss_or_gradients: LossOrGradients,
     parameters: Sequence[Parameter],
+    *,
     learning_rate: Rate,
     beta1: float,
     beta2: float,
     epsilon: float,
     amsgrad: bool,
-    *,
     namespace: str,
     weight_decay: float = 0.0,
     mask: Callable[[Parameter], bool] | None = None,
@@ -159,9 +159,8 @@ def _adam_family_updates(
         denominator = pt.sqrt(corrected_second_moment) + epsilon
 
         # Decoupled decay is added inside the rate multiplication -- that is what decouples it from the
-        # moments. Without decay there is nothing to add, and the rate stays where it factors most simply.
-        # The two groupings are equal in exact arithmetic and differ in the last bits, so neither branch is
-        # folded into the other: a third of float32 values move if they are.
+        # moments -- and without decay there is nothing to add. The two groupings agree in exact arithmetic
+        # and differ in the last bits, so folding them into one moves a third of float32 adam results.
         if weight_decay:
             decay_term = weight_decay * parameter if (mask is None or mask(parameter)) else 0.0
             step = learning_rate * (corrected_first_moment / denominator + decay_term)
@@ -243,11 +242,11 @@ def adamw_updates(
     return _adam_family_updates(
         loss_or_gradients,
         parameters,
-        learning_rate,
-        beta1,
-        beta2,
-        epsilon,
-        amsgrad,
+        learning_rate=learning_rate,
+        beta1=beta1,
+        beta2=beta2,
+        epsilon=epsilon,
+        amsgrad=amsgrad,
         namespace="adamw",
         weight_decay=weight_decay,
         mask=mask,
