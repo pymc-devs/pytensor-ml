@@ -6,7 +6,8 @@ import numpy as np
 import pytensor
 
 from pytensor.compile.sharedvalue import SharedVariable
-from pytensor.gradient import DisconnectedInputError, DisconnectedType, grad
+from pytensor.gradient import DisconnectedInputError, grad
+from pytensor.graph.op import io_connection_pattern
 from pytensor.tensor import TensorVariable
 from pytensor.tensor.sharedvar import TensorSharedVariable
 
@@ -82,13 +83,11 @@ def _unreachable_parameter_names(
     loss: TensorVariable, parameters: Sequence[Parameter]
 ) -> list[str]:
     """Name the parameters the loss carries no gradient signal to, which pytensor's own error omits."""
-    gradients = grad(
-        loss, list(parameters), disconnected_inputs="ignore", return_disconnected="disconnected"
-    )
+    connection_pattern = io_connection_pattern(list(parameters), [loss])
     return [
         parameter.name or str(parameter)
-        for parameter, gradient in zip(parameters, gradients)  # type: ignore[arg-type]
-        if isinstance(gradient.type, DisconnectedType)
+        for parameter, to_the_loss in zip(parameters, connection_pattern)
+        if not any(to_the_loss)
     ]
 
 
