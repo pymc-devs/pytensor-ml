@@ -164,7 +164,9 @@ def collect_default_updates(
                     next_rng = client.outputs[output_index]
                 else:
                     raise ValueError(
-                        f"No update found for at least one RNG used in Scan Op {client_op}."
+                        f"No update found for at least one RNG used in Scan Op {client_op}. Call "
+                        "`collect_default_updates` inside the scan function and return what it gives you "
+                        "as that step's updates."
                     )
             case OpFromGraph():
                 try:
@@ -173,7 +175,9 @@ def collect_default_updates(
                         return None
                 except ValueError as exc:
                     raise ValueError(
-                        f"No update found for at least one RNG used in OpFromGraph Op {client_op}."
+                        f"No update found for at least one RNG used in OpFromGraph Op {client_op}. Add "
+                        "the advanced generator to the op's outputs, which "
+                        "`pt.random.normal(rng=rng, return_next_rng=True)` gives you alongside the draw."
                     ) from exc
             case _:
                 # Unknown consumer; the caller must provide an update manually.
