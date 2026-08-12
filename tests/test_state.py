@@ -9,7 +9,6 @@ from pytensor_ml.params import trainable
 from pytensor_ml.pytensorf import collect_trainable_params
 from pytensor_ml.state import (
     _INITIALIZERS,
-    CustomInitializer,
     InitializationScheme,
     Initializer,
     NormalInitializer,
@@ -22,11 +21,7 @@ from pytensor_ml.state import (
     initialize_params,
     initializer,
 )
-
-
-def unit_constant() -> CustomInitializer:
-    """An initializer whose draws are unmistakable, so a value says which source produced it."""
-    return CustomInitializer(lambda shape, dtype, rng: np.full(shape, 7.0, dtype=dtype))
+from tests.conftest import constant
 
 
 def test_every_registered_name_maps_to_a_class_that_needs_no_arguments():
@@ -87,14 +82,13 @@ class TestInitializeParams:
 
         assert not np.array_equal(values[0], values[1])
 
-    def test_accepts_a_custom_initializer(self):
+    def test_accepts_an_initializer_built_from_a_function(self):
         params = [
             trainable(np.zeros((4, 4), dtype="float64"), "first"),
             trainable(np.zeros((4, 2), dtype="float64"), "second"),
         ]
-        constant = CustomInitializer(lambda shape, dtype, rng: np.full(shape, 7.0, dtype=dtype))
 
-        values = initialize_params(params, initializers=dict.fromkeys(params, constant))
+        values = initialize_params(params, initializers=dict.fromkeys(params, constant(value=7.0)))
 
         assert len(values) == len(params)
         for val in values:
@@ -121,7 +115,7 @@ class TestDeclaredInitializers:
     def test_naming_a_parameter_that_declares_nothing_is_enough(self):
         weight = trainable(np.zeros((4, 4), dtype="float64"), "weight")
 
-        [value] = initialize_params([weight], rng=0, initializers={weight: unit_constant()})
+        [value] = initialize_params([weight], rng=0, initializers={weight: constant(value=7.0)})
 
         np.testing.assert_array_equal(value, 7.0)
 
@@ -133,7 +127,7 @@ class TestDeclaredInitializers:
         with pytest.raises(ValueError, match="'state' declares no initializer"):
             initialize_params([state], rng=0)
 
-        [value] = initialize_params([state], rng=0, initializers={state: unit_constant()})
+        [value] = initialize_params([state], rng=0, initializers={state: constant(value=7.0)})
         np.testing.assert_array_equal(value, 7.0)
 
     def test_calling_an_initializer_overrides_a_declaration(self):
@@ -255,7 +249,7 @@ class TestPerParameterInitializers:
         # thing that should, since the caller picked this parameter rather than every parameter.
         scale = trainable(np.zeros(4, dtype="float64"), "scale", initializer=OneInitializer())
 
-        [value] = initialize_params([scale], initializers={scale: unit_constant()}, rng=0)
+        [value] = initialize_params([scale], initializers={scale: constant(value=7.0)}, rng=0)
 
         np.testing.assert_allclose(value, 7.0)
 
@@ -264,7 +258,7 @@ class TestPerParameterInitializers:
         weight = trainable(np.zeros((4, 4), dtype="float64"), "w", initializer=ZeroInitializer())
 
         scale_value, weight_value = initialize_params(
-            [scale, weight], initializers={weight: unit_constant()}, rng=0
+            [scale, weight], initializers={weight: constant(value=7.0)}, rng=0
         )
 
         np.testing.assert_allclose(
@@ -280,7 +274,7 @@ class TestPerParameterInitializers:
         second = trainable(np.zeros((4, 4), dtype="float64"), "w", initializer=declared)
 
         first_value, second_value = initialize_params(
-            [first, second], initializers={first: unit_constant()}, rng=0
+            [first, second], initializers={first: constant(value=7.0)}, rng=0
         )
 
         np.testing.assert_allclose(first_value, 7.0)
@@ -292,7 +286,7 @@ class TestPerParameterInitializers:
         weight = trainable(np.zeros((4, 4), dtype="float64"), "w", initializer=ZeroInitializer())
         elsewhere = trainable(np.zeros((4, 4), dtype="float64"), "elsewhere")
 
-        [value] = initialize_params([weight], initializers={elsewhere: unit_constant()}, rng=0)
+        [value] = initialize_params([weight], initializers={elsewhere: constant(value=7.0)}, rng=0)
 
         np.testing.assert_allclose(value, 0.0)
 

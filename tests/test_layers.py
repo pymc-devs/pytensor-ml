@@ -16,7 +16,8 @@ from pytensor_ml.pytensorf import (
     collect_trainable_params,
     rewrite_for_prediction,
 )
-from pytensor_ml.state import CustomInitializer, NormalInitializer, initialize_params
+from pytensor_ml.state import NormalInitializer, initialize_params
+from tests.conftest import constant
 
 floatX = pytensor.config.floatX
 
@@ -437,9 +438,7 @@ INITIALIZER_KEYWORDS = {
 def test_an_initializer_keyword_reaches_only_the_parameter_it_names(case):
     build, layer_input, target, siblings = INITIALIZER_KEYWORDS[case]
     sentinel = 7.0
-    layer = build(
-        CustomInitializer(lambda shape, dtype, rng: np.full(shape, sentinel, dtype=dtype))
-    )
+    layer = build(constant(value=sentinel))
     prediction = layer(layer_input)
 
     params = collect_trainable_params(prediction)
@@ -492,9 +491,7 @@ def test_a_keyword_initializer_reaches_the_value_and_not_only_the_declaration():
         "fc",
         n_in=4,
         n_out=4,
-        bias_initializer=CustomInitializer(
-            lambda shape, dtype, rng: np.full(shape, sentinel, dtype=dtype)
-        ),
+        bias_initializer=constant(value=sentinel),
     )
 
     np.testing.assert_allclose(layer.b.get_value(), sentinel)

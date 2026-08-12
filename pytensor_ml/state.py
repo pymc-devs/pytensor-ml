@@ -18,8 +18,6 @@ InitializationScheme = Literal[
     "zeros", "ones", "xavier_uniform", "xavier_normal", "unit_uniform", "normal"
 ]
 
-SamplingFunction = Callable[[tuple[int, ...], str, np.random.Generator], np.ndarray]
-
 
 class Initializer(ABC):
     """
@@ -301,26 +299,6 @@ def initializer(sample_fn: Callable[..., np.ndarray]) -> type[Initializer]:
     return FunctionInitializer
 
 
-class CustomInitializer(Initializer):
-    """
-    Initializer built from a sampling function.
-
-    A function cannot be written to a config file, so a parameter declaring one comes back from
-    :func:`~pytensor_ml.pretrained.load_network` as an :class:`UnrecordedInitializer`.
-
-    Parameters
-    ----------
-    sample_fn : callable
-        ``(shape, dtype, rng) -> ndarray``, returning the initial value for one parameter.
-    """
-
-    def __init__(self, sample_fn: SamplingFunction):
-        self._sample_fn = sample_fn
-
-    def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
-        return self._sample_fn(shape, dtype, rng)
-
-
 class UnrecordedInitializer(Initializer):
     """
     Stands in for an initializer a saved config could not record, so that a redraw says what was lost.
@@ -342,10 +320,10 @@ class UnrecordedInitializer(Initializer):
 
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
         raise ValueError(
-            f"This parameter was drawn from {self.original}, which a saved config cannot record because it "
-            "holds a Python function. Redrawing needs it back: name the parameter in "
-            "`initialize(initializers={parameter: ...})`, or build it with one of the registered "
-            f"initializers ({', '.join(sorted(_INITIALIZERS))}) before saving."
+            f"This parameter was drawn from {self.original}, which the saved config could not record: its "
+            "parameters were not JSON, or it was defined where an import cannot reach it. Redrawing needs "
+            "it back. Build it with `@initializer` at module level, giving it JSON parameters, or name this "
+            "parameter in `initialize(initializers={parameter: ...})`."
         )
 
 

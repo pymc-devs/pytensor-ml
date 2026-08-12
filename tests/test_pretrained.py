@@ -11,11 +11,12 @@ from pytensor_ml.params import NonTrainableParameter, TrainableParameter
 from pytensor_ml.pretrained import from_pretrained, load_network, save_network, save_pretrained
 from pytensor_ml.pytensorf import collect_shared_variables, collect_trainable_params
 from pytensor_ml.state import (
-    CustomInitializer,
     NormalInitializer,
     UnrecordedInitializer,
     initialize_params,
+    initializer,
 )
+from tests.conftest import constant, he_normal
 
 floatX = pytensor.config.floatX
 
@@ -189,19 +190,39 @@ def test_a_parameterized_initializer_keeps_its_arguments(tmp_path):
     assert (table.initializer.mean, table.initializer.std) == (0.0, 0.02)
 
 
-def test_a_custom_initializer_survives_as_a_report_of_what_was_lost(tmp_path):
-    """A Python function cannot be written to a config. Loading still works, since restoring saved values is
-    the usual reason to rebuild; only a redraw needs the law back, and that is where it says so."""
+def test_a_decorated_initializer_round_trips_with_its_parameters(tmp_path):
+    """The reason `@initializer` exists: the parameters a closure would have captured are declared instead,
+    so they can be written down. `constant` lives in conftest, at module level, which is what lets the
+    config find the class again."""
     X = pt.matrix("X")
-    drawn = CustomInitializer(lambda shape, dtype, rng: np.full(shape, 7.0, dtype=dtype))
-    output = Linear("fc", 4, 4, weight_initializer=drawn)(X)
+    output = Linear("fc", 4, 4, weight_initializer=constant(value=7.0))(X)
+    save_network(output, tmp_path / "config.json")
+
+    _, restored = load_network(tmp_path / "config.json")
+    weight = next(p for p in collect_trainable_params(restored) if p.name == "fc_W")
+
+    assert isinstance(weight.initializer, constant)
+    assert weight.initializer.value == 7.0
+    np.testing.assert_array_equal(weight.get_value(), 7.0)  # and the rebuilt parameter drew from it
+
+
+def test_an_initializer_defined_locally_reports_what_was_lost(tmp_path):
+    """An import cannot reach a class defined inside a function, so the config records only its name. Saving
+    and loading still work, since restoring saved values needs no law; the redraw is what needs it back."""
+
+    @initializer
+    def local_constant(rng, shape, value):
+        return np.full(shape, value)
+
+    X = pt.matrix("X")
+    output = Linear("fc", 4, 4, weight_initializer=local_constant(value=3.0))(X)
     save_network(output, tmp_path / "config.json")
 
     _, restored = load_network(tmp_path / "config.json")
     weight = next(p for p in collect_trainable_params(restored) if p.name == "fc_W")
 
     assert isinstance(weight.initializer, UnrecordedInitializer)
-    with pytest.raises(ValueError, match="CustomInitializer, which a saved config cannot record"):
+    with pytest.raises(ValueError, match="local_constant, which the saved config could not record"):
         initialize_params([weight], rng=0)
 
 
@@ -229,3 +250,54 @@ def test_a_loaded_network_initializes_exactly_like_the_one_it_was_saved_from(tmp
     assert list(from_original) == list(from_loaded)  # same order, not merely the same names
     for name, value in from_original.items():
         np.testing.assert_array_equal(value, from_loaded[name], err_msg=name)
+
+
+@initializer
+def arange_fill(rng, shape, start):
+    """A second decorated initializer, distinguishable from `constant` at a glance."""
+    return np.arange(start, start + int(np.prod(shape))).reshape(shape)
+
+
+def test_several_decorated_initializers_keep_their_own_class_and_parameters(tmp_path):
+    """Props live on the instance and the class is shared, so two instances of one decorated initializer must
+    not collide, and two different ones must not be confused for each other."""
+    X = pt.matrix("X")
+    output = Sequential(
+        Linear("fc1", 4, 4, weight_initializer=constant(value=7.0)),
+        Linear("fc2", 4, 4, weight_initializer=constant(value=-2.0)),
+        Linear("fc3", 4, 4, weight_initializer=arange_fill(start=100.0)),
+    )(X)
+    save_network(output, tmp_path / "config.json")
+
+    _, restored = load_network(tmp_path / "config.json")
+    weights = {p.name: p for p in collect_trainable_params(restored) if p.name.endswith("_W")}
+
+    assert isinstance(weights["fc1_W"].initializer, constant)
+    assert isinstance(weights["fc2_W"].initializer, constant)
+    assert isinstance(weights["fc3_W"].initializer, arange_fill)
+
+    assert weights["fc1_W"].initializer.value == 7.0
+    assert weights["fc2_W"].initializer.value == -2.0
+    assert weights["fc3_W"].initializer.start == 100.0
+
+    np.testing.assert_array_equal(weights["fc1_W"].get_value(), 7.0)
+    np.testing.assert_array_equal(weights["fc2_W"].get_value(), -2.0)
+    assert weights["fc3_W"].get_value().min() == 100.0
+
+
+def test_an_initializer_with_no_parameters_round_trips(tmp_path):
+    """Serializability comes from the recorded parameters, and this has none -- the fans are computed inside
+    the sampler from the shape it is handed, which the config never sees. So a scaled initializer written by
+    hand survives a round trip on the strength of its import path alone."""
+    X = pt.matrix("X")
+    output = Linear("fc", 16, 4, weight_initializer=he_normal())(X)
+    save_network(output, tmp_path / "config.json")
+
+    _, restored = load_network(tmp_path / "config.json")
+    weight = next(p for p in collect_trainable_params(restored) if p.name == "fc_W")
+
+    assert isinstance(weight.initializer, he_normal)
+    assert weight.initializer.__props__ == ()
+    # Redrawn from the restored class, and scaled by the fan-in the layer's shape implies.
+    [value] = initialize_params([weight], rng=0)
+    assert value.std() == pytest.approx(np.sqrt(2.0 / 16), rel=0.25)

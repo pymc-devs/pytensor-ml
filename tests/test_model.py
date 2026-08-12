@@ -11,7 +11,8 @@ from pytensor_ml.layers import BatchNorm2D, LayerNorm, Linear, Sequential
 from pytensor_ml.loss import SquaredError
 from pytensor_ml.model import Model
 from pytensor_ml.optim import sgd
-from pytensor_ml.state import CustomInitializer, ZeroInitializer
+from pytensor_ml.state import ZeroInitializer
+from tests.conftest import constant
 
 
 class TestModelPredict:
@@ -190,7 +191,7 @@ def test_initialize_takes_per_parameter_initializers():
     fc1 = Linear("fc1", 8, 4)
     norm = BatchNorm2D("norm", n_in=4)
     y = Sequential(fc1, norm, ReLU(), Linear("fc2", 4, 2))(X)
-    drawn = CustomInitializer(lambda shape, dtype, rng: np.full(shape, 7.0, dtype=dtype))
+    drawn = constant(value=7.0)
 
     Model(X, y).initialize(seed=0, initializers={fc1.b: drawn, norm.scale: drawn})
 

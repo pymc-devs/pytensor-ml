@@ -11,7 +11,8 @@ from pytensor_ml.activations import ReLU
 from pytensor_ml.layers.attention import CausalSelfAttention
 from pytensor_ml.layers.transformer import FeedForward, TransformerBlock
 from pytensor_ml.pytensorf import collect_trainable_params
-from pytensor_ml.state import CustomInitializer, initialize_params
+from pytensor_ml.state import initialize_params
+from tests.conftest import constant
 
 floatX = pytensor.config.floatX
 # The python linker evaluates the same graph without a slow numba compile of these block-sized graphs.
@@ -150,7 +151,7 @@ def test_a_residual_initializer_reaches_both_projections_into_the_residual_strea
     matrices at the layer default. A keyword that caught a sibling would inflate the very variance it exists
     to control, and reading the constructors cannot tell you which it reached."""
     sentinel = 7.0
-    scaled = CustomInitializer(lambda shape, dtype, rng: np.full(shape, sentinel, dtype=dtype))
+    scaled = constant(value=sentinel)
     block = TransformerBlock("blk", d_model=8, n_head=2, residual_initializer=scaled)
     out = block(pt.tensor("x", shape=(None, 4, 8), dtype=floatX))
 
@@ -195,7 +196,7 @@ def test_a_causal_attention_forwards_the_out_projection_initializer():
     """CausalSelfAttention builds its projections through its base class, so the keyword has to survive the
     super().__init__ call rather than being silently dropped by the subclass."""
     sentinel = 7.0
-    scaled = CustomInitializer(lambda shape, dtype, rng: np.full(shape, sentinel, dtype=dtype))
+    scaled = constant(value=sentinel)
     attention = CausalSelfAttention("attn", n_embd=8, n_head=2, out_proj_initializer=scaled)
     out = attention(pt.tensor("x", shape=(None, 4, 8), dtype=floatX))
 

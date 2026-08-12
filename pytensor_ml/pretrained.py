@@ -29,7 +29,7 @@ from pytensor_ml.pytensorf import (
     collect_shared_variables,
     find_rng_nodes,
 )
-from pytensor_ml.state import CustomInitializer, Initializer, UnrecordedInitializer
+from pytensor_ml.state import Initializer, UnrecordedInitializer
 
 CONFIG_FILENAME = "config.json"
 WEIGHTS_FILENAME = "model.safetensors"
@@ -87,16 +87,37 @@ def _input_kind(variable: Variable) -> InputKind:
     return InputKind.DATA
 
 
+def _recordable(initializer: Initializer) -> dict | None:
+    """Return the encoding of ``initializer``, or None when it cannot be written down and read back."""
+    class_path = qualname(initializer)
+    try:
+        props = props_to_json(initializer)
+    except TypeError:
+        return None  # a parameter that is not JSON, such as an array or a fitted model
+    try:
+        restored_class = resolve_class(class_path)
+    except (ImportError, AttributeError):
+        return None  # defined where an import cannot reach it, such as inside a function
+
+    if restored_class is not type(initializer):
+        return None  # the name at that path now means something else
+    return {"class": class_path, "props": props}
+
+
 def _initializer_to_json(initializer: Initializer) -> dict:
     """
     Encode the law a parameter is drawn from, as a class path and its ``__props__``.
 
-    A :class:`~pytensor_ml.state.CustomInitializer` holds a Python function, so only the fact that it was
-    one survives. Any future initializer holding a callable needs the same treatment.
+    An initializer that cannot be written down is recorded as an :class:`UnrecordedInitializer` naming it.
+    Saving still succeeds, because restoring values is the usual reason to save and that needs no law at
+    all; only a redraw needs one, and that is where the loss is reported.
     """
-    if isinstance(initializer, CustomInitializer):
-        initializer = UnrecordedInitializer(type(initializer).__name__)
-    return {"class": qualname(initializer), "props": props_to_json(initializer)}
+    encoded = _recordable(initializer)
+    if encoded is not None:
+        return encoded
+
+    lost = UnrecordedInitializer(type(initializer).__name__)
+    return {"class": qualname(lost), "props": props_to_json(lost)}
 
 
 def _initializer_from_json(initializer_dict: dict) -> Initializer:
