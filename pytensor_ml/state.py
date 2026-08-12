@@ -26,7 +26,13 @@ class Initializer(ABC):
     Subclasses implement :meth:`sample`. Calling an instance assigns a freshly sampled value to a
     parameter in place, while :func:`initialize_params` calls :meth:`sample` directly and leaves the
     assignment to its caller.
+
+    ``__props__`` names the constructor arguments that define the draw, borrowing pytensor's Op convention
+    so the same encoder serves both. A subclass whose spread is an argument must list it, or a saved network
+    restores the default spread instead of the one it was built with.
     """
+
+    __props__: tuple[str, ...] = ()
 
     def __call__(self, param: SharedVariable, rng: RandomState | None = None) -> SharedVariable:
         param.set_value(self._sample_like(param, rng))
@@ -87,6 +93,8 @@ class NormalInitializer(Initializer):
     std : float
         Standard deviation :math:`\sigma`. Default 0.01.
     """
+
+    __props__ = ("mean", "std")
 
     def __init__(self, mean: float = 0.0, std: float = 0.01):
         self.mean = mean
@@ -173,6 +181,9 @@ class CustomInitializer(Initializer):
     """
     Initializer built from a sampling function.
 
+    A function cannot be written to a config file, so a parameter declaring one comes back from
+    :func:`~pytensor_ml.pretrained.load_network` as an :class:`UnrecordedInitializer`.
+
     Parameters
     ----------
     sample_fn : callable
@@ -184,6 +195,34 @@ class CustomInitializer(Initializer):
 
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
         return self._sample_fn(shape, dtype, rng)
+
+
+class UnrecordedInitializer(Initializer):
+    """
+    Stands in for an initializer a saved config could not record, so that a redraw says what was lost.
+
+    Loading raises nothing: restoring values with :func:`~pytensor_ml.checkpoint.load_state` is the usual
+    reason to rebuild a network, and it needs no initializer at all. Only a redraw needs the law back, and
+    only then is there something to report.
+
+    Parameters
+    ----------
+    original : str
+        Name of the initializer class the parameter was built with.
+    """
+
+    __props__ = ("original",)
+
+    def __init__(self, original: str):
+        self.original = original
+
+    def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
+        raise ValueError(
+            f"This parameter was drawn from {self.original}, which a saved config cannot record because it "
+            "holds a Python function. Redrawing needs it back: name the parameter in "
+            "`initialize(initializers={parameter: ...})`, or build it with one of the registered "
+            f"initializers ({', '.join(sorted(_INITIALIZERS))}) before saving."
+        )
 
 
 # The name of each initializer, for the config a network is serialized to: an initializer crosses that
