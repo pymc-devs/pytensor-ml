@@ -2,9 +2,10 @@ import numpy as np
 import pytensor.tensor as pt
 import pytest
 
-from pytensor.gradient import disconnected_grad, zero_grad
+from pytensor.gradient import DisconnectedType, disconnected_grad, grad, zero_grad
 
-from pytensor_ml.layers import Linear
+from pytensor_ml.activations import Tanh
+from pytensor_ml.layers import Linear, Sequential
 from pytensor_ml.params import NonTrainableParameter, TrainableParameter, step_counter
 from pytensor_ml.pytensorf import (
     collect_clock_updates,
@@ -87,6 +88,30 @@ class TestCollectDifferentiableParams:
         loss = ((prediction - disconnected_grad(prediction)) ** 2).sum() + prediction.sum()
 
         assert names(collect_differentiable_params(loss)) == {"fc_W", "fc_b"}
+
+    def test_excludes_a_parameter_that_differentiates_away_with_no_marker(self):
+        """The physics-informed shape, and the one a graph walk cannot see: an output bias is additive in the
+        network output, so it is an ancestor of the loss as written and gone once the loss differentiates
+        twice with respect to the input. Nothing marks it -- the ops simply propagate nothing to it."""
+        x = pt.tensor("x", shape=(None, 1))
+        u = Sequential(Linear("hidden", 1, 4), Tanh(), Linear("out", 4, 1))(x)
+        loss = (grad(grad(u.sum(), x).sum(), x) ** 2).mean()
+
+        assert names(collect_trainable_params(loss)) == {"hidden_W", "hidden_b", "out_W", "out_b"}
+        assert names(collect_differentiable_params(loss)) == {"hidden_W", "hidden_b", "out_W"}
+
+    def test_a_zero_grad_parameter_is_excluded_though_its_gradient_is_connected(self):
+        """`zero_grad` yields a gradient that is connected and zero, which no connectivity question reports
+        as missing, so the marker walk is what catches it. Replacing that walk with the connection pattern
+        would put these parameters back in the optimizer's set, where weight decay moves them."""
+        X = pt.tensor("X", shape=(None, 4))
+        live_layer, frozen_layer = Linear("live", 4, 2), Linear("frozen", 4, 2)
+        loss = ((live_layer(X) + zero_grad(frozen_layer(X))) ** 2).sum()
+
+        [gradient] = grad(loss, [frozen_layer.W], disconnected_inputs="ignore")
+        assert not isinstance(gradient.type, DisconnectedType)  # connected, just zero
+
+        assert names(collect_differentiable_params(loss)) == {"live_W", "live_b"}
 
 
 class TestCollectNonTrainableParams:

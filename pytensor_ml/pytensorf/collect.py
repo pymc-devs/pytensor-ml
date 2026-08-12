@@ -4,6 +4,7 @@ from pytensor.compile.sharedvalue import SharedVariable
 from pytensor.gradient import DisconnectedGrad, ZeroGrad
 from pytensor.graph import graph_inputs
 from pytensor.graph.basic import Constant, Variable
+from pytensor.graph.op import io_connection_pattern
 from pytensor.graph.traversal import ancestors
 from pytensor.tensor import TensorVariable
 
@@ -57,10 +58,15 @@ def collect_differentiable_params(
     """
     Collect the trainable parameters an optimizer can take gradients of ``outputs`` with respect to.
 
-    These are the parameters :func:`collect_trainable_params` finds, minus any reachable only through a
-    stop-gradient marker -- :func:`pytensor.gradient.disconnected_grad` or
-    :func:`pytensor.gradient.zero_grad` -- which carry no gradient signal by construction. A parameter
-    reached on both a detached and a live path stays in the set, since the live path still carries gradient.
+    Two things disqualify a parameter, and neither subsumes the other. A stop-gradient marker on the only
+    path to it -- :func:`pytensor.gradient.disconnected_grad` or :func:`pytensor.gradient.zero_grad` --
+    though a parameter reached on both a detached and a live path stays, since the live path still carries
+    gradient. Or no connection to the gradient at all, which no marker expresses: an additive constant
+    survives in ``outputs`` as written and vanishes once they differentiate, the shape a physics-informed
+    loss hits when an output bias is gone by the second derivative.
+
+    Both checks are needed because ``zero_grad`` yields a gradient that is connected and zero, which the
+    connection pattern reports as present.
 
     Parameters
     ----------
@@ -72,12 +78,24 @@ def collect_differentiable_params(
     list of TrainableParameter
         The differentiable parameters, in graph-input order.
     """
+    output_list = as_output_list(outputs)
     stop_gradient_outputs = [
         variable
-        for variable in ancestors(as_output_list(outputs))
+        for variable in ancestors(output_list)
         if variable.owner is not None and isinstance(variable.owner.op, DisconnectedGrad | ZeroGrad)
     ]
-    return _collect_inputs_of_type(outputs, TrainableParameter, blockers=stop_gradient_outputs)
+    undetached = _collect_inputs_of_type(
+        outputs, TrainableParameter, blockers=stop_gradient_outputs
+    )
+    if not undetached:
+        return undetached
+
+    connection_pattern = io_connection_pattern(list(undetached), output_list)
+    return [
+        parameter
+        for parameter, to_outputs in zip(undetached, connection_pattern)
+        if any(to_outputs)
+    ]
 
 
 def collect_non_trainable_params(

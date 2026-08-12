@@ -3,11 +3,11 @@ import pytensor.tensor as pt
 import pytest
 
 from pytensor import config, shared
-from pytensor.gradient import disconnected_grad, zero_grad
+from pytensor.gradient import DisconnectedInputError, disconnected_grad, grad, zero_grad
 from sklearn.datasets import load_digits, make_regression
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder, StandardScaler
 
-from pytensor_ml.activations import LeakyReLU
+from pytensor_ml.activations import LeakyReLU, Tanh
 from pytensor_ml.layers import BatchNorm2D, Linear, Sequential
 from pytensor_ml.loss import CrossEntropy, SquaredError, supervised_loss
 from pytensor_ml.optim import adam, adamw, compile_train, cosine_schedule, sgd
@@ -307,6 +307,36 @@ def test_compile_train_leaves_a_zero_grad_parameter_untouched_under_weight_decay
         for parameter, value in before.items()
     }
     assert moved == {"live_W": True, "live_b": True, "frozen_W": False, "frozen_b": False}
+
+
+def test_a_parameter_that_differentiates_away_is_skipped_unless_you_name_it():
+    """Which policy you get is decided by who chose the parameter set. Collected for you, a parameter the
+    loss cannot reach is left out, so a physics-informed loss trains without hand-enumerating the rest.
+    Named explicitly, it raises -- you asserted it should train, and it cannot."""
+    x = pt.tensor("x", shape=(None, 1))
+    u = Sequential(Linear("hidden", 1, 4), Tanh(), Linear("out", 4, 1))(x)
+    loss = (grad(grad(u.sum(), x).sum(), x) ** 2).mean()
+    every_parameter = collect_trainable_params(loss)
+    initialize(every_parameter)
+    before = {p.name: p.get_value().copy() for p in every_parameter}
+
+    # Decoupled decay is what distinguishes skipped from handed-a-zero: it moves a parameter whatever the
+    # gradient is, so out_b staying put means it is out of the optimizer's set rather than in it with a zero.
+    step = compile_train(loss, adamw(learning_rate=1e-2, weight_decay=0.1), inputs=[x])
+    batch = np.linspace(-1.0, 1.0, 32).reshape(32, 1).astype(config.floatX)
+    history = [float(step(batch)) for _ in range(30)]
+
+    assert history[-1] < history[0]  # training happened, so the assertions below are not vacuous
+    after = {p.name: p.get_value() for p in every_parameter}
+
+    # Exact equality, not a tolerance: skipped means no update expression touched it at all.
+    np.testing.assert_array_equal(after["out_b"], before["out_b"])
+    assert not np.array_equal(
+        after["out_W"], before["out_W"]
+    )  # its sibling in the same layer moved
+
+    with pytest.raises(DisconnectedInputError, match=r"\['out_b'\]"):
+        compile_train(loss, adamw(learning_rate=1e-2), parameters=every_parameter, inputs=[x])
 
 
 def test_extra_updates_write_state_no_gradient_produces():
