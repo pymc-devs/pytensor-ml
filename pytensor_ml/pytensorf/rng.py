@@ -50,10 +50,11 @@ def find_generators_drawn_from(
     outputs: Sequence[Variable],
 ) -> list[RandomGeneratorSharedVariable]:
     """
-    Return the shared generators the graph draws from, excluding any it only hands back.
+    Return the shared generators a draw op in this graph consumes.
 
-    A generator returned as an output is read without being consumed, so it needs no update; one an op draws
-    from does, and a graph that draws from a generator nothing advances repeats the same values forever.
+    Being read is not being consumed: a generator handed back as an output needs no update, and neither does
+    one passed into an op carrying an inner graph, which may draw from it or merely accept it. Only that
+    inner graph knows, and reading inner graphs is :func:`collect_default_updates`' job.
 
     Parameters
     ----------
@@ -63,14 +64,14 @@ def find_generators_drawn_from(
     Returns
     -------
     list of RandomGeneratorSharedVariable
-        The generators some node in the graph draws from, in graph-input order.
+        The generators a draw op consumes, in graph-input order.
     """
     fgraph = FunctionGraph(outputs=list(outputs), clone=False)
     return [
         generator
         for generator in fgraph.inputs
         if isinstance(generator, RandomGeneratorSharedVariable)
-        and any(not isinstance(client.op, Output) for client, _ in fgraph.clients[generator])
+        and any(isinstance(client.op, RNGConsumerOp) for client, _ in fgraph.clients[generator])
     ]
 
 

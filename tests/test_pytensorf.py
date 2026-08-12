@@ -3,6 +3,7 @@ import pytensor.tensor as pt
 import pytest
 
 from pytensor import config, shared
+from pytensor.compile.builders import OpFromGraph
 from pytensor.gradient import (
     DisconnectedInputError,
     disconnected_grad,
@@ -222,6 +223,18 @@ def test_a_shared_generator_is_accepted_when_the_caller_advances_it():
     first, second = draw(), draw()
     assert float(first[0]) != float(second[0])  # the draw off the generator advances
     assert float(first[1]) != float(second[1])  # and so does the one off the threaded next state
+
+
+def test_a_generator_an_inner_graph_never_draws_from_is_left_alone():
+    """Receiving a generator is not drawing from one, and only the inner graph knows which happened. Treating
+    every non-output use as a draw rejected this graph with a message saying it draws from a generator that
+    nothing in it touches."""
+    rng = shared(np.random.default_rng(0), name="rng")
+    inner_rng = rng.type()
+    inner_x = pt.vector("x")
+    doubled = OpFromGraph([inner_rng, inner_x], [inner_x * 2.0])(rng, pt.ones(3))
+
+    np.testing.assert_allclose(function([], doubled)(), np.full(3, 2.0))
 
 
 def test_a_draw_shared_between_an_output_and_an_update_is_rejected():

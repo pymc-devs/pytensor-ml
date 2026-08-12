@@ -81,8 +81,8 @@ def function(
     if frozen:
         raise ValueError(
             f"The graph draws from {[str(generator.name or generator) for generator in frozen]}, which "
-            "nothing advances, so every call would repeat the same values. A generator read by two "
-            "different draws has no single next state, which is the usual cause. Give each draw its own "
+            "nothing advances, so every call would repeat the same values. Two draws off one generator is "
+            "the cause: it has no single next state, so none can be derived. Give each draw its own "
             "generator, thread one through with `next_rng, draw = pt.random.normal(rng=rng, "
             "return_next_rng=True)`, or pass an update for it yourself."
         )
