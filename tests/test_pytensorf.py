@@ -12,6 +12,7 @@ from pytensor.gradient import (
     zero_grad,
 )
 from pytensor.graph.traversal import ancestors
+from pytensor.scan import scan
 from pytensor.tensor import random as ptr
 
 from pytensor_ml.layers import Dropout, DropoutLayer, Linear, Sequential
@@ -223,6 +224,70 @@ def test_a_shared_generator_is_accepted_when_the_caller_advances_it():
     first, second = draw(), draw()
     assert float(first[0]) != float(second[0])  # the draw off the generator advances
     assert float(first[1]) != float(second[1])  # and so does the one off the threaded next state
+
+
+def test_a_draw_inside_a_scan_advances_its_generator():
+    """Nothing is passed to `function` as an update: a scan carrying its generator as a recurrent state
+    exposes it as an outer input with a matching outer output, and the collector reads that mapping. This is
+    the whole of the inner-graph handling, inherited from pymc, and the first test to run it."""
+    rng = shared(np.random.default_rng(0), name="rng")
+
+    def one_step(total, generator):
+        next_generator, draw = ptr.normal(size=(), rng=generator, return_next_rng=True)
+        return total + draw, next_generator
+
+    # Two recurrent states out, not a graph and an updates dict -- the generator is carried as state.
+    trace, _generators = scan(
+        one_step, outputs_info=[pt.zeros(()), rng], n_steps=5, return_updates=False
+    )
+    step = function([], trace)
+
+    draws_within_one_call = np.diff(step(), prepend=0.0)
+
+    # Both halves matter: a loop reusing one generator state draws the same number five times while its
+    # outer state still advances between calls, so neither assertion catches that alone.
+    assert len(np.unique(draws_within_one_call)) == 5
+    assert not np.array_equal(step(), step())
+
+
+def test_a_scan_that_draws_without_threading_its_generator_is_rejected():
+    """The loop draws from a generator it captured rather than carried, so there is no outer output holding
+    its final state and no way to advance it -- every call would replay the same five draws."""
+    rng = shared(np.random.default_rng(0), name="rng")
+
+    def one_step(total):
+        _, draw = ptr.normal(size=(), rng=rng, return_next_rng=True)
+        return total + draw
+
+    trace = scan(one_step, outputs_info=[pt.zeros(())], n_steps=5, return_updates=False)
+
+    with pytest.raises(ValueError, match="No update found for at least one RNG used in Scan"):
+        function([], trace[-1])
+
+
+def test_a_draw_inside_an_op_from_graph_advances_its_generator():
+    """Every layer in this library is an OpFromGraph, so a layer that draws inside its own inner graph lands
+    here. Handing the advanced generator back as an output is what makes it reachable from outside."""
+    rng = shared(np.random.default_rng(0), name="rng")
+    inner_rng = rng.type()
+    next_rng, inner_draw = ptr.normal(size=(3,), rng=inner_rng, return_next_rng=True)
+    draw, _ = OpFromGraph([inner_rng], [inner_draw, next_rng])(rng)
+
+    step = function([], draw)
+
+    assert not np.array_equal(step(), step())
+
+
+def test_an_op_from_graph_that_draws_without_threading_is_rejected():
+    rng = shared(np.random.default_rng(0), name="rng")
+    inner_rng = rng.type()
+    _, inner_draw = ptr.normal(size=(3,), rng=inner_rng, return_next_rng=True)
+    draw = OpFromGraph([inner_rng], [inner_draw])(rng)
+
+    with pytest.raises(
+        ValueError, match="No update found for at least one RNG used in OpFromGraph"
+    ):
+        function([], draw)
 
 
 def test_a_generator_an_inner_graph_never_draws_from_is_left_alone():
