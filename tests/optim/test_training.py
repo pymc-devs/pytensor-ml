@@ -374,6 +374,45 @@ def test_extra_updates_write_state_no_gradient_produces():
     )
 
 
+def test_extra_updates_accept_a_write_that_agrees_with_the_rule():
+    """Two components writing one variable is only a problem when they disagree. A rule builds a fresh
+    expression on every invocation, so an extra update carrying a structurally identical one is the same
+    write said twice -- which is how components share a quantity rather than fight over it."""
+    p = trainable(np.array([2.0]), name="w")
+    loss = 0.5 * (p**2).sum()
+    rule = adam(1e-1)
+    first_invocation = rule(loss, [p])
+    moment = next(key for key in first_invocation if key.name == "w/adam/first_moment")
+
+    step = compile_train(loss, rule, extra_updates={moment: first_invocation[moment]}, inputs=[])
+    step()
+
+    assert not np.allclose(
+        moment.get_value(), 0.0
+    )  # the write took effect rather than being dropped
+
+
+def test_a_rule_writing_a_statistic_the_model_owns_is_rejected():
+    """A batch-norm statistic is the model's to write. A rule writing it too has no way to win: the model's
+    write is folded in second, so the rule's would be replaced rather than merged."""
+    X = pt.tensor("X", shape=(None, 4))
+    prediction = Sequential(Linear("fc", n_in=4, n_out=4), BatchNorm2D("bn", n_in=4))(X)
+    parameters = collect_trainable_params(prediction)
+    initialize(parameters)
+    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    running_mean = next(
+        p for p in collect_non_trainable_params(prediction) if "running_mean" in p.name
+    )
+
+    def meddling_rule(loss_or_gradients, rule_parameters):
+        updates = dict(sgd(1e-2)(loss_or_gradients, rule_parameters))
+        updates[running_mean] = running_mean * 0.0
+        return updates
+
+    with pytest.raises(ValueError, match="the model's to update"):
+        compile_train(loss, meddling_rule, parameters=parameters, inputs=[X, target])
+
+
 def test_extra_updates_reject_a_write_the_rule_already_makes():
     # Silently overwriting an optimizer buffer would leave the rule configured but not working, for the whole
     # run, so the collision has to be loud.

@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 
 from pytensor.compile import Function
+from pytensor.compile.sharedvalue import SharedVariable
 from pytensor.graph.basic import Variable, equal_computations
 from pytensor.tensor import TensorVariable
 
@@ -12,6 +13,18 @@ from pytensor_ml.pytensorf import (
     collect_non_trainable_updates,
     function,
 )
+
+
+def _inconsistent_update(updates: Updates, variable: SharedVariable, new_value: Variable) -> bool:
+    """
+    Report whether ``updates`` already writes ``variable`` with an expression other than ``new_value``.
+
+    Two components writing one variable is only a problem when they disagree: a plain merge keeps one write
+    and drops the other, silently, leaving something that looks configured and is inert. Writers that agree
+    structurally are fine, which is how several components share one quantity.
+    """
+    written = updates.get(variable)
+    return written is not None and not equal_computations([written], [new_value])
 
 
 def compile_train(
@@ -96,17 +109,23 @@ def compile_train(
     # Assigned per key rather than merged: SupportsKeysAndGetItem is invariant in its key type, so
     # dict.update rejects the narrower NonTrainableParameter keys.
     for parameter, new_value in collect_non_trainable_updates(loss).items():
+        if _inconsistent_update(updates, parameter, new_value):
+            raise ValueError(
+                f"The model writes {parameter.name!r} from a stateful op, and the rule writes it too, so "
+                "the two writes cannot both take effect. A batch-norm statistic is the model's to update; "
+                "leave it out of the rule."
+            )
         updates[parameter] = new_value
 
     # Folded in after the rule's and the model's, so a collision with either is caught rather than deciding
     # by insertion order which of the two writes survives.
     for variable, new_value in extra_updates.items():
-        if variable in updates:
+        if _inconsistent_update(updates, variable, new_value):
             raise ValueError(
                 f"The extra update for {variable.name!r} writes a variable the training step already "
-                "writes, so the two writes cannot both take effect. Optimizer state and batch-norm "
-                "statistics are written by the step itself; drop this one, or fold what it does into the "
-                "expression that already writes the variable."
+                "writes differently, so the two writes cannot both take effect. Optimizer state and "
+                "batch-norm statistics are written by the step itself; drop this one, or fold what it does "
+                "into the expression that already writes the variable."
             )
         updates[variable] = new_value
 
