@@ -15,6 +15,7 @@ from pytensor_ml.optim.base import (
     counter,
     get_gradients,
     state_for,
+    to_floatx,
 )
 
 
@@ -44,6 +45,7 @@ def sgd_updates(
         Mapping from each parameter to its next value.
     """
     gradients = get_gradients(loss_or_gradients, parameters)
+    learning_rate = to_floatx(learning_rate)
     return {
         parameter: parameter - learning_rate * gradient
         for parameter, gradient in zip(parameters, gradients)
@@ -130,6 +132,7 @@ def _adam_family_updates(
         Predicate selecting which parameters the decay reaches. Every parameter when omitted.
     """
     gradients = get_gradients(loss_or_gradients, parameters)
+    learning_rate = to_floatx(learning_rate)
 
     step_count = counter(f"{namespace}/step_count")
     new_step_count = step_count + 1
@@ -293,6 +296,7 @@ def nadam_updates(
         Mapping from each parameter and its moment buffers to their next values.
     """
     gradients = get_gradients(loss_or_gradients, parameters)
+    learning_rate = to_floatx(learning_rate)
 
     step_count = counter("nadam/step_count")
     new_step_count = step_count + 1
@@ -361,6 +365,7 @@ def adamax_updates(
         Mapping from each parameter and its state buffers to their next values.
     """
     gradients = get_gradients(loss_or_gradients, parameters)
+    learning_rate = to_floatx(learning_rate)
 
     step_count = counter("adamax/step_count")
     new_step_count = step_count + 1
@@ -415,6 +420,7 @@ def adagrad_updates(
         Mapping from each parameter and its accumulator to their next values.
     """
     gradients = get_gradients(loss_or_gradients, parameters)
+    learning_rate = to_floatx(learning_rate)
 
     updates: Updates = {}
     for parameter, gradient in zip(parameters, gradients):
@@ -472,6 +478,7 @@ def rmsprop_updates(
         Mapping from each parameter and its state buffers to their next values.
     """
     gradients = get_gradients(loss_or_gradients, parameters)
+    learning_rate = to_floatx(learning_rate)
 
     updates: Updates = {}
     for parameter, gradient in zip(parameters, gradients):
@@ -535,6 +542,7 @@ def adadelta_updates(
         Mapping from each parameter and its two accumulators to their next values.
     """
     gradients = get_gradients(loss_or_gradients, parameters)
+    learning_rate = to_floatx(learning_rate)
 
     updates: Updates = {}
     for parameter, gradient in zip(parameters, gradients):

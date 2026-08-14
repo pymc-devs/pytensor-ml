@@ -7,6 +7,7 @@ import pytensor
 
 from pytensor.compile.sharedvalue import SharedVariable
 from pytensor.gradient import DisconnectedInputError, grad
+from pytensor.graph.basic import Variable
 from pytensor.graph.op import io_connection_pattern
 from pytensor.tensor import TensorVariable
 from pytensor.tensor.sharedvar import TensorSharedVariable
@@ -38,6 +39,27 @@ type Rate = float | Parameter | TensorVariable
 
 # What an optimizer alias accepts as its rate, adding a schedule that drives it on-graph.
 type LearningRate = Rate | Schedule
+
+
+def to_floatx(value: Rate) -> Rate:
+    """
+    Return ``value`` at the current ``floatX``, casting only a variable stored at something else.
+
+    A shared variable carries whatever dtype it was allocated with, which need not be the ``floatX`` the
+    graph is built under -- restoring a checkpoint into a differently configured session is the ordinary
+    way to get there. A learning rate is where it bites: a float64 rate in a float32 graph makes an update
+    pytensor refuses, and the error names the parameter rather than the rate behind it.
+
+    A plain number is left alone rather than made into an array, which is where this differs from pymc's
+    ``floatX``: a rule given a float literal must build exactly the graph it built before. ``astype``
+    already returns the variable itself when the dtype matches, so a well typed graph is untouched too.
+
+    Parameters
+    ----------
+    value : float or TensorVariable
+        A scalar a rule is about to build into its step.
+    """
+    return value.astype(pytensor.config.floatX) if isinstance(value, Variable) else value
 
 
 def get_gradients(

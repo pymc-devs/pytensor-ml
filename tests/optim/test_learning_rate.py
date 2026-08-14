@@ -1,4 +1,5 @@
 import numpy as np
+import pytensor
 import pytensor.tensor as pt
 import pytest
 
@@ -20,6 +21,7 @@ from pytensor_ml.optim import (
     scalar_state,
     scale,
     sgd,
+    to_floatx,
 )
 from pytensor_ml.params import StepCounter, step_counter, trainable
 from pytensor_ml.pytensorf import collect_step_counters, function
@@ -364,3 +366,36 @@ def test_a_caller_held_clock_keeps_advancing_for_other_readers():
     assert int(clock.get_value()) == 20
     expected = float(exploration_schedule(pt.as_tensor(20, dtype="int64")).eval())
     np.testing.assert_allclose(epsilon(), expected, rtol=RTOL)
+
+
+@pytest.mark.parametrize("rate_dtype", ["float32", "float64"], ids=["float32", "float64"])
+def test_a_shared_rate_is_read_at_the_graphs_floatx(rate_dtype):
+    """A shared rate keeps whatever dtype it was allocated with, which need not match the floatX the graph
+    is built under -- restoring a checkpoint into a differently configured session is the ordinary way to
+    get there. Left alone the mismatch reaches the parameter update, where pytensor refuses it and names
+    the parameter rather than the rate."""
+    p, loss = quadratic_problem()
+    learning_rate = pytensor.shared(np.asarray(0.1, dtype=rate_dtype), name="learning_rate")
+
+    step = compile_train(loss, sgd(learning_rate=learning_rate))
+    step()
+
+    np.testing.assert_allclose(p.get_value(), [1.8], rtol=RTOL)
+
+
+def test_to_floatx_leaves_a_well_typed_rate_untouched():
+    """What keeps every graph that already worked bit-exact: nothing is wrapped that does not need it. A
+    cast node on a matching rate, or an array in place of a float literal, would change the graph a rule
+    builds without changing what it computes -- invisible except as drift."""
+    matching = pytensor.shared(np.asarray(0.1, dtype=config.floatX), name="learning_rate")
+
+    assert to_floatx(matching) is matching
+    assert to_floatx(0.1) == 0.1
+    assert isinstance(to_floatx(0.1), float)  # a number, not a 0-d array as pymc's floatX returns
+
+
+def test_to_floatx_casts_a_rate_stored_at_another_dtype():
+    other_dtype = "float32" if config.floatX == "float64" else "float64"
+    stored = pytensor.shared(np.asarray(0.1, dtype=other_dtype), name="learning_rate")
+
+    assert to_floatx(stored).dtype == config.floatX

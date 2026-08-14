@@ -19,6 +19,7 @@ from pytensor_ml.optim.base import (
     chain,
     get_gradients,
     scalar_state,
+    to_floatx,
 )
 from pytensor_ml.optim.clipping import clip_by_global_norm, clip_by_value
 from pytensor_ml.optim.rules import (
@@ -88,5 +89,6 @@ __all__ = [
     "sgd",
     "sgd_updates",
     "step_decay",
+    "to_floatx",
     "trace",
 ]
