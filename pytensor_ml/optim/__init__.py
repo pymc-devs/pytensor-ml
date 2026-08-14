@@ -22,6 +22,7 @@ from pytensor_ml.optim.base import (
     to_floatx,
 )
 from pytensor_ml.optim.clipping import clip_by_global_norm, clip_by_value
+from pytensor_ml.optim.policy import reduce_on_plateau
 from pytensor_ml.optim.rules import (
     adadelta_updates,
     adagrad_updates,
@@ -80,6 +81,7 @@ __all__ = [
     "nadam",
     "nadam_updates",
     "polynomial_schedule",
+    "reduce_on_plateau",
     "rmsprop",
     "rmsprop_updates",
     "rprop",
