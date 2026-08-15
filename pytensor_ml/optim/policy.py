@@ -23,6 +23,7 @@ def reduce_on_plateau(
     rtol: float = 1e-4,
     atol: float = 0.0,
     min_scale: float = 0.0,
+    accumulation_size: int = 1,
 ) -> UpdateRule:
     r"""
     Cut ``scale`` by ``factor`` once the loss has stopped improving.
@@ -36,8 +37,9 @@ def reduce_on_plateau(
         rule = reduce_on_plateau(adam(learning_rate=scale * 1e-3), scale, patience=5)
 
     Unlike torch's, this runs once per training step rather than once per epoch on a validation metric, so
-    the loss it sees is whatever expression the rule is given -- a per-batch loss is a noisy signal, and
-    ``rtol`` is what keeps that noise from reading as improvement.
+    the loss it sees is whatever expression the rule is given. A per-batch loss is a noisy signal for it;
+    ``accumulation_size`` is the answer, deciding on the mean of a window rather than on one batch. Set it
+    to the number of steps in an epoch to get torch's cadence, on a better estimate than a single batch.
 
     Parameters
     ----------
@@ -59,6 +61,9 @@ def reduce_on_plateau(
     min_scale : float
         Floor the scale cannot go below. Without one a noisy loss cuts repeatedly and underflows to zero.
         Default 0.0.
+    accumulation_size : int
+        Losses to average before deciding anything. Nothing advances mid-window -- not the count, not the
+        cooldown, not the best seen. Default 1, which decides on every step from that step's loss.
 
     Returns
     -------
@@ -75,6 +80,11 @@ def reduce_on_plateau(
         raise ValueError(f"patience is a number of steps and must be at least 1, got {patience}.")
     if cooldown < 0:
         raise ValueError(f"cooldown is a number of steps and must be non-negative, got {cooldown}.")
+    if accumulation_size < 1:
+        raise ValueError(
+            f"accumulation_size is a number of losses to average and must be at least 1, got "
+            f"{accumulation_size}."
+        )
 
     @reuses_state
     def policy(loss_or_gradients: LossOrGradients, parameters: Sequence[Parameter]) -> Updates:
@@ -90,23 +100,34 @@ def reduce_on_plateau(
         best_loss = scalar_state("plateau/best_loss", fill_value=np.inf)
         waited = scalar_state("plateau/wait")
         cooling = scalar_state("plateau/cooldown")
+        observed = scalar_state("plateau/observed")
+        mean_loss = scalar_state("plateau/mean_loss")
 
-        improved = loss < (1 - rtol) * best_loss - atol
-        counted = pt.where(improved, 0.0, waited + 1)
+        # Everything below is gated on `deciding`, so a window that is still filling advances nothing. At the
+        # default size of one the window is a single step and the mean is that step's loss.
+        seen = observed + 1
+        running_mean = (observed * mean_loss + loss) / seen
+        deciding = seen >= accumulation_size
+
+        improved = deciding & (running_mean < (1 - rtol) * best_loss - atol)
+        counted = pt.where(deciding, pt.where(improved, 0.0, waited + 1), waited)
 
         # Cooling down zeroes the count rather than pausing it, so the steps immediately after a cut cannot
         # add up to the next one before the network has had a chance to respond to the rate it just got.
         in_cooldown = cooling > 0
-        cutting = ~in_cooldown & (counted >= patience)
+        cutting = deciding & ~in_cooldown & (counted >= patience)
+        next_cooling = pt.where(in_cooldown, cooling - 1, pt.where(cutting, cooldown, 0.0))
 
         updates[scale] = pt.where(cutting, pt.maximum(scale * factor, min_scale), scale).astype(
             scale.dtype
         )
-        updates[best_loss] = pt.where(improved, loss, best_loss).astype(best_loss.dtype)
-        updates[waited] = pt.where(in_cooldown | cutting, 0.0, counted).astype(waited.dtype)
-        updates[cooling] = pt.where(
-            in_cooldown, cooling - 1, pt.where(cutting, cooldown, 0.0)
-        ).astype(cooling.dtype)
+        updates[best_loss] = pt.where(improved, running_mean, best_loss).astype(best_loss.dtype)
+        updates[waited] = pt.where(deciding & (in_cooldown | cutting), 0.0, counted).astype(
+            waited.dtype
+        )
+        updates[cooling] = pt.where(deciding, next_cooling, cooling).astype(cooling.dtype)
+        updates[observed] = pt.where(deciding, 0.0, seen).astype(observed.dtype)
+        updates[mean_loss] = pt.where(deciding, 0.0, running_mean).astype(mean_loss.dtype)
 
         return updates
 

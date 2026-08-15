@@ -147,6 +147,7 @@ def test_rejects_precomputed_gradients():
         ({"rtol": 2.0}, "at most 1.0"),
         ({"patience": 0}, "at least 1"),
         ({"cooldown": -1}, "non-negative"),
+        ({"accumulation_size": 0}, "at least 1"),
     ],
     ids=[
         "factor_one",
@@ -155,6 +156,7 @@ def test_rejects_precomputed_gradients():
         "rtol_above_one",
         "no_patience",
         "negative_cooldown",
+        "no_window",
     ],
 )
 def test_rejects_settings_that_cannot_work(kwargs, message):
@@ -162,3 +164,63 @@ def test_rejects_settings_that_cannot_work(kwargs, message):
 
     with pytest.raises(ValueError, match=message):
         reduce_on_plateau(sgd(learning_rate=scale), scale, **kwargs)
+
+
+def test_a_window_holds_everything_until_it_fills():
+    """Nothing advances mid-window: with a window of four, a plateaued loss takes four times as many steps
+    to reach a cut, because only every fourth step is a decision."""
+    p, loss = plateaued_problem()
+    scale = scalar_state("plateau/scale", fill_value=1.0)
+    rule = reduce_on_plateau(
+        adam(learning_rate=scale * 0.05), scale, factor=0.5, patience=2, accumulation_size=4
+    )
+
+    scales = run(rule, loss, scale, 12)
+
+    # Two decisions to fill patience, four steps each, and the first decision is the improvement on the
+    # initial infinite best -- so the cut lands on the twelfth step rather than the third.
+    assert scales == [1.0] * 11 + [0.5]
+
+
+def test_deciding_on_a_window_mean_survives_a_noisy_loss():
+    """What the window is for. The same per-batch loss that cuts itself into the ground step by step is
+    judged on an average, so the noise that looked like a plateau every few steps mostly averages out."""
+
+    def noisy_cuts(accumulation_size, n_steps=120):
+        p = trainable(np.zeros(1, dtype=config.floatX), name="w")
+        X = pt.tensor("X", shape=(None,))
+        loss = ((p - X) ** 2).mean()
+        scale = scalar_state("plateau/scale", fill_value=1.0)
+        rule = reduce_on_plateau(
+            adam(learning_rate=scale * 0.05),
+            scale,
+            factor=0.5,
+            patience=3,
+            accumulation_size=accumulation_size,
+        )
+        step = compile_train(loss, rule, inputs=[X])
+        rng = np.random.default_rng(0)
+        scales = []
+        for _ in range(n_steps):
+            step(rng.normal(size=8).astype(config.floatX))
+            scales.append(float(scale.get_value()))
+        return sum(1 for before, after in pairwise(scales) if after < before)
+
+    assert noisy_cuts(accumulation_size=8) < noisy_cuts(accumulation_size=1) / 4
+
+
+def test_the_decision_is_made_on_the_window_mean_not_its_last_loss():
+    """The substance of the window: an average, not a sample. Given no parameters the rule moves nothing, so
+    the loss is exactly what is fed and the policy's own state is all that changes."""
+    loss = pt.scalar("loss")
+    scale = scalar_state("plateau/scale", fill_value=1.0)
+    rule = reduce_on_plateau(adam(learning_rate=scale), scale, accumulation_size=2)
+    best_loss = next(v for v in rule(loss, []) if v.name == "plateau/best_loss")
+    step = compile_train(loss, rule, parameters=[], inputs=[loss])
+
+    step(np.asarray(4.0, dtype=config.floatX))
+    step(np.asarray(0.0, dtype=config.floatX))
+
+    # Deciding on the window's last loss would record 0.0 as the best seen, and every later window would
+    # then have an unreachable target to beat.
+    assert float(best_loss.get_value()) == pytest.approx(2.0, rel=RTOL)
