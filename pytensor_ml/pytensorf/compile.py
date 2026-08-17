@@ -9,7 +9,7 @@ from pytensor.compile import Function, get_mode
 from pytensor.tensor.variable import Variable
 
 from pytensor_ml.pytensorf.collect import collect_graph_inputs
-from pytensor_ml.pytensorf.rewrite import rewrite_for_prediction
+from pytensor_ml.pytensorf.rewrite import hoist_scan_draws, rewrite_for_prediction
 from pytensor_ml.pytensorf.rng import (
     SeedSequenceSeed,
     atleast_list,
@@ -61,6 +61,17 @@ def function(
         *(out.variable if isinstance(out, pytensor.Out) else out for out in atleast_list(outputs)),
         *updates.values(),
     ]
+
+    # Before any generator is accounted for: a draw inside a scan has none the loop can advance, so it
+    # has to come out of the loop first or there is nothing for the collection below to find.
+    given_outputs = atleast_list(outputs)
+    read_variables = hoist_scan_draws(read_variables)
+    rewritten = [
+        pytensor.Out(variable, borrow=given.borrow) if isinstance(given, pytensor.Out) else variable
+        for given, variable in zip(given_outputs, read_variables)
+    ]
+    updates = dict(zip(updates, read_variables[len(given_outputs) :]))
+    outputs = rewritten if isinstance(outputs, list | tuple) else rewritten[0]
 
     if random_seed is not None:
         reseed_rngs(find_rng_nodes(read_variables), random_seed)

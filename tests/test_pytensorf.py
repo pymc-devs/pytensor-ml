@@ -250,9 +250,10 @@ def test_a_draw_inside_a_scan_advances_its_generator():
     assert not np.array_equal(step(), step())
 
 
-def test_a_scan_that_draws_without_threading_its_generator_is_rejected():
-    """The loop draws from a generator it captured rather than carried, so there is no outer output holding
-    its final state and no way to advance it -- every call would replay the same five draws."""
+def test_a_scan_that_draws_without_threading_its_generator_has_the_draw_lifted_out():
+    """The loop draws from a generator it captured rather than carried, so nothing inside can advance it
+    and every step would replay one value. Compiling lifts the draw out into five independent ones, which
+    is what `hoist_draws_out_of_scan` is for; the sum of five distinct draws is what proves it happened."""
     rng = shared(np.random.default_rng(0), name="rng")
 
     def one_step(total):
@@ -260,9 +261,13 @@ def test_a_scan_that_draws_without_threading_its_generator_is_rejected():
         return total + draw
 
     trace = scan(one_step, outputs_info=[pt.zeros(())], n_steps=5, return_updates=False)
+    fn = function([], trace)
 
-    with pytest.raises(ValueError, match="No update found for at least one RNG used in Scan"):
-        function([], trace[-1])
+    steps = fn()
+    per_step = np.diff(np.concatenate([[0.0], steps]))
+
+    assert len(set(per_step.round(12))) == 5
+    assert not np.allclose(steps, fn())
 
 
 def test_a_draw_inside_an_op_from_graph_advances_its_generator():
