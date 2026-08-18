@@ -1228,3 +1228,35 @@ def test_a_mask_may_skip_a_step_in_the_middle(rng):
 
     np.testing.assert_allclose(with_gap[:, :skipped], without[:, :skipped], atol=ATOL)
     np.testing.assert_allclose(with_gap[:, skipped + 1 :], without[:, skipped:], atol=ATOL)
+
+
+class MatrixMemoryCell(RecurrentCell):
+    """A cell whose state carries two feature axes, as a matrix-memory recurrence does. It sums the
+    step's input into every entry, so a step that ran shows up everywhere in the state."""
+
+    def __init__(self, rows, cols):
+        self.rows, self.cols = rows, cols
+
+    def step(self, x_t, *state):
+        (memory,) = state
+        return (memory + x_t.sum(axis=-1)[..., None, None],)
+
+    def initial_state(self, X):
+        return (pt.zeros((*X.shape[:-2], self.rows, self.cols), dtype=X.dtype),)
+
+
+def test_a_state_may_carry_more_than_one_feature_axis(rng):
+    """Nothing here constrains a carried state to a single feature axis, so time has to land directly
+    after the input's batch axes rather than second-to-last -- those differ the moment a cell carries a
+    matrix. The output is the running sum of each step's input, one entry per state cell."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    out = Recurrent(MatrixMemoryCell(2, 3), name="matrix")(X)
+
+    X_np = rng.normal(size=(5, 7, 4)).astype(floatX)
+    evaluated = out.eval({X: X_np})
+
+    assert evaluated.shape == (5, 7, 2, 3)
+    running = np.cumsum(X_np.sum(axis=-1), axis=-1)
+    np.testing.assert_allclose(
+        evaluated, np.broadcast_to(running[:, :, None, None], (5, 7, 2, 3)), atol=ATOL
+    )

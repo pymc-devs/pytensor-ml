@@ -169,7 +169,9 @@ class Recurrent(Layer):
         if reverse:
             output = output[::-1]
 
-        out = pt.moveaxis(output, 0, -2)
+        # Back to where it came from: time sits directly after the input's batch axes, which is the
+        # second-to-last axis only for a state carrying a single feature axis.
+        out = pt.moveaxis(output, 0, X.ndim - 2)
         out.name = f"{self.name}_output"
         return out
 
