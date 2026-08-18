@@ -1047,3 +1047,135 @@ def test_a_call_may_override_the_layers_own_direction(rng):
     np.testing.assert_allclose(layer(X, reverse=False).eval({X: X_np}), read_forward, atol=ATOL)
     np.testing.assert_allclose(layer(X).eval({X: X_np}), read_backward, atol=ATOL)
     assert layer.reverse
+
+
+def pad_to(sequences, padded_length):
+    """Stack ragged sequences into a rectangle, with the mask that says where each one ends."""
+    batch = len(sequences)
+    padded = np.zeros((batch, padded_length, sequences[0].shape[-1]), dtype=floatX)
+    mask = np.zeros((batch, padded_length), dtype=bool)
+    for row, sequence in enumerate(sequences):
+        padded[row, : len(sequence)] = sequence
+        mask[row, : len(sequence)] = True
+    return padded, mask
+
+
+def test_a_mask_makes_padding_leave_a_backward_pass_alone(rng):
+    """The case that needs the mask most. Read backward, the padding is consumed before any real step,
+    so it spoils every output position and no indexing afterwards recovers them."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    mask = pt.tensor("mask", shape=(None, None), dtype=bool)
+    layer = RNN("rnn", n_in=4, n_hidden=3, reverse=True)
+    draw_parameters(layer, rng)
+
+    real = rng.normal(size=(3, 4)).astype(floatX)
+    padded, mask_np = pad_to([real], padded_length=6)
+    alone = layer(X).eval({X: real[None]})
+
+    np.testing.assert_allclose(
+        layer(X, mask=mask).eval({X: padded, mask: mask_np})[:, :3], alone, atol=ATOL
+    )
+    assert not np.allclose(layer(X).eval({X: padded})[:, :3], alone, atol=ATOL)
+
+
+def test_a_mask_lets_one_batch_hold_sequences_of_different_lengths(rng):
+    """The case padding exists for: every row a different length, run as one rectangle. Each row has to
+    match what it would have given on its own."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    mask = pt.tensor("mask", shape=(None, None), dtype=bool)
+    layer = GRU("gru", n_in=4, n_hidden=3, reverse=True)
+    draw_gru_parameters(layer, rng)
+
+    lengths = [2, 5, 3]
+    sequences = [rng.normal(size=(length, 4)).astype(floatX) for length in lengths]
+    padded, mask_np = pad_to(sequences, padded_length=max(lengths))
+    together = layer(X, mask=mask).eval({X: padded, mask: mask_np})
+
+    for row, (sequence, length) in enumerate(zip(sequences, lengths)):
+        alone = layer(X).eval({X: sequence[None]})
+        np.testing.assert_allclose(together[row, :length], alone[0], atol=ATOL)
+
+
+def test_a_mask_holds_every_state_a_cell_carries(rng):
+    """An LSTM's memory is masked alongside its output, or a padded step would go on writing to the
+    memory that the output gate reads at the next real step."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    mask = pt.tensor("mask", shape=(None, None), dtype=bool)
+    layer = LSTM("lstm", n_in=4, n_hidden=3, reverse=True)
+    draw_lstm_parameters(layer, rng)
+
+    real = rng.normal(size=(4, 4)).astype(floatX)
+    padded, mask_np = pad_to([real], padded_length=9)
+
+    np.testing.assert_allclose(
+        layer(X, mask=mask).eval({X: padded, mask: mask_np})[:, :4],
+        layer(X).eval({X: real[None]}),
+        atol=ATOL,
+    )
+
+
+def test_a_mask_freezes_the_final_state_of_a_padded_forward_pass(rng):
+    """A forward pass is causal, so padding leaves the real positions already correct and only the
+    final state drifts on. A masked step emits the state the step before it left, which holds that
+    final state flat across the padding and makes ``out[..., -1, :]`` true without a per-row gather."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    mask = pt.tensor("mask", shape=(None, None), dtype=bool)
+    layer = RNN("rnn", n_in=4, n_hidden=3)
+    draw_parameters(layer, rng)
+
+    real = rng.normal(size=(3, 4)).astype(floatX)
+    padded, mask_np = pad_to([real], padded_length=7)
+    out = layer(X, mask=mask).eval({X: padded, mask: mask_np})
+
+    alone = layer(X).eval({X: real[None]})
+    last_real = alone[0, -1]
+    np.testing.assert_allclose(out[0, -1], last_real, atol=ATOL)
+    np.testing.assert_allclose(out[0, 3:], np.broadcast_to(last_real, (4, 3)), atol=ATOL)
+
+    unmasked = layer(X).eval({X: padded})
+    np.testing.assert_allclose(unmasked[:, :3], alone, atol=ATOL)
+    assert not np.allclose(unmasked[0, -1], last_real, atol=ATOL)
+
+
+def test_bidirectional_reads_the_mask_in_both_directions(rng):
+    """The wrapper's backward half is the one that needs the mask, and it has to reach both halves from
+    the one argument."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    mask = pt.tensor("mask", shape=(None, None), dtype=bool)
+    forward = GRU("fwd", n_in=4, n_hidden=3)
+    backward = GRU("bwd", n_in=4, n_hidden=5)
+    layer = Bidirectional(forward, backward)
+
+    real = rng.normal(size=(3, 4)).astype(floatX)
+    padded, mask_np = pad_to([real], padded_length=8)
+    together = layer(X, mask=mask).eval({X: padded, mask: mask_np})
+
+    alone_forward = forward(X).eval({X: real[None]})
+    alone_backward = backward(X, reverse=True).eval({X: real[None]})
+    np.testing.assert_allclose(together[:, :3, :3], alone_forward, atol=ATOL)
+    np.testing.assert_allclose(together[:, :3, 3:], alone_backward, atol=ATOL)
+
+
+def test_rejects_a_mask_that_does_not_match_the_batch_axes():
+    """A mask shaped like the input, feature axis and all, is the natural mistake; scan would take it
+    as a sequence and fail somewhere inside the loop."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    layer = RNN("rnn", n_in=4, n_hidden=3)
+
+    with pytest.raises(ValueError, match="needs a 2-dimensional mask; got a 3-dimensional one"):
+        layer(X, mask=pt.tensor("mask", shape=(None, None, 4), dtype=bool))
+
+
+def test_rejects_a_mask_whose_time_axis_is_shorter_than_the_input(rng):
+    """Scan takes its step count from the shortest sequence it is handed, so a mask one step short runs
+    the whole recurrence one step short -- leaving ``out[..., -1, :]`` an early state rather than the
+    last one, which is the failure the mask is there to prevent."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    mask = pt.tensor("mask", shape=(None, None), dtype=bool)
+    layer = RNN("rnn", n_in=4, n_hidden=3)
+    out = layer(X, mask=mask)
+    X_np = rng.normal(size=(2, 6, 4)).astype(floatX)
+
+    assert out.eval({X: X_np, mask: np.ones((2, 6), dtype=bool)}).shape[-2] == 6
+    with pytest.raises(AssertionError, match="SpecifyShape"):
+        out.eval({X: X_np, mask: np.ones((2, 5), dtype=bool)})

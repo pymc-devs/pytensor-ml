@@ -1,9 +1,10 @@
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import numpy as np
 import pytensor.tensor as pt
 
+from pytensor.graph.basic import Variable
 from pytensor.scan import scan
 from pytensor.tensor.variable import TensorVariable
 
@@ -92,6 +93,7 @@ class Recurrent(Layer):
         initial_state: pt.TensorLike | Sequence[TensorVariable] | None = None,
         *,
         reverse: bool | None = None,
+        mask: pt.TensorLike | None = None,
     ) -> TensorVariable:
         """
         Run the cell over ``X`` and return its output at every step.
@@ -105,6 +107,11 @@ class Recurrent(Layer):
             when omitted.
         reverse : bool, optional
             Direction for this call, in place of the layer's own. The layer's when omitted.
+        mask : TensorVariable, optional
+            Which steps are real, shape ``(..., time)``, matching ``X``'s batch axes. A false step
+            leaves every carried state as the step before it left it, so padding a batch of ragged
+            sequences out to a rectangle does not disturb the recurrence over the real steps of it.
+            Every step counts when omitted.
 
         Returns
         -------
@@ -131,11 +138,23 @@ class Recurrent(Layer):
             self._check_state_against(state, zero_state, X)
 
         # Scan iterates the leading axis, so time moves to the front and back again on the way out.
+        sequences: list[Variable] = [pt.moveaxis(X, -2, 0)]
+        # A masked step reads one more sequence than a plain one, so the two do not share a signature.
+        step: Callable[..., tuple[TensorVariable, ...]] = self.cell.step
+        if mask is not None:
+            mask = pt.as_tensor(mask)
+            self._check_mask_against(mask, X)
+            steps = pt.moveaxis(mask, -1, 0)
+            # Scan takes its step count from the shortest sequence it is given, so a mask a step short
+            # would quietly run the whole recurrence a step short.
+            sequences.append(pt.specify_shape(steps, (X.shape[-2], *steps.shape[1:])))
+            step = self._masked_step
+
         # Not strict: the step closes over the cell's parameters and scan lifts them in. A generator
         # captured that way has no update, which `collect_default_updates` refuses.
         state_sequence = scan(
-            self.cell.step,
-            sequences=[pt.moveaxis(X, -2, 0)],
+            step,
+            sequences=sequences,
             outputs_info=list(state),
             name=f"{self.name}_recurrence",
             go_backwards=reverse,
@@ -153,6 +172,25 @@ class Recurrent(Layer):
         out = pt.moveaxis(output, 0, -2)
         out.name = f"{self.name}_output"
         return out
+
+    def _masked_step(
+        self, x_t: TensorVariable, mask_t: TensorVariable, *state: TensorVariable
+    ) -> tuple[TensorVariable, ...]:
+        """Take the step, then keep it only where ``mask_t`` says this step is real."""
+        # The step runs either way -- scan's carried states are fixed-shape buffers, so there is no
+        # skipping a subset of the batch, only discarding what it computed for them.
+        stepped = self.cell.step(x_t, *state)
+        keep = mask_t[..., None]
+        return tuple(pt.switch(keep, new, held) for new, held in zip(stepped, state))
+
+    def _check_mask_against(self, mask: TensorVariable, X: TensorVariable) -> None:
+        """Reject a mask that does not name one step per batch element, before scan reports it."""
+        if mask.ndim != X.ndim - 1:
+            raise ValueError(
+                f"{self.name} takes a mask of shape (..., time), matching its input without the "
+                f"feature axis, so a {X.ndim}-dimensional input needs a {X.ndim - 1}-dimensional "
+                f"mask; got a {mask.ndim}-dimensional one."
+            )
 
     def _check_state_against(
         self,
@@ -708,7 +746,7 @@ class Bidirectional(Layer):
         self.backward = backward
         self.name = name if name else "Bidirectional"
 
-    def __call__(self, X: pt.TensorLike) -> TensorVariable:
+    def __call__(self, X: pt.TensorLike, *, mask: pt.TensorLike | None = None) -> TensorVariable:
         """
         Run both directions over ``X`` and concatenate them on the feature axis.
 
@@ -716,6 +754,9 @@ class Bidirectional(Layer):
         ----------
         X : TensorVariable
             Input sequence, shape ``(..., time, n_in)``.
+        mask : TensorVariable, optional
+            Which steps are real, shape ``(..., time)``. Both directions read it, which is what keeps
+            the backward pass from starting on the padding. Every step counts when omitted.
 
         Returns
         -------
@@ -723,7 +764,11 @@ class Bidirectional(Layer):
             Both directions' outputs, shape ``(..., time, n_forward + n_backward)``.
         """
         out = pt.concatenate(
-            [self.forward(X, reverse=False), self.backward(X, reverse=True)], axis=-1
+            [
+                self.forward(X, reverse=False, mask=mask),
+                self.backward(X, reverse=True, mask=mask),
+            ],
+            axis=-1,
         )
         out.name = f"{self.name}_output"
         return out
