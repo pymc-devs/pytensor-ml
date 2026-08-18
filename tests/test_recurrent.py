@@ -1181,5 +1181,5 @@ def test_rejects_a_mask_whose_time_axis_is_shorter_than_the_input(rng):
     X_np = rng.normal(size=(2, 6, 4)).astype(floatX)
 
     assert out.eval({X: X_np, mask: np.ones((2, 6), dtype=bool)}).shape[-2] == 6
-    with pytest.raises(AssertionError, match="SpecifyShape"):
+    with pytest.raises(AssertionError, match="has shape 5, expected 6"):
         out.eval({X: X_np, mask: np.ones((2, 5), dtype=bool)})
