@@ -1260,3 +1260,20 @@ def test_a_state_may_carry_more_than_one_feature_axis(rng):
     np.testing.assert_allclose(
         evaluated, np.broadcast_to(running[:, :, None, None], (5, 7, 2, 3)), atol=ATOL
     )
+
+
+def test_a_mask_holds_a_state_of_any_rank(rng):
+    """The mask names batch elements and the state adds however many feature axes the cell wants, so
+    the two are lined up by the state's rank rather than by assuming exactly one feature axis."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    mask = pt.tensor("mask", shape=(None, None), dtype=bool)
+    layer = Recurrent(MatrixMemoryCell(2, 3), name="matrix")
+
+    real = rng.normal(size=(3, 4)).astype(floatX)
+    padded, mask_np = pad_to([real], padded_length=6)
+
+    np.testing.assert_allclose(
+        layer(X, mask=mask).eval({X: padded, mask: mask_np})[:, :3],
+        layer(X).eval({X: real[None]}),
+        atol=ATOL,
+    )

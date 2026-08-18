@@ -182,8 +182,12 @@ class Recurrent(Layer):
         # The step runs either way -- scan's carried states are fixed-shape buffers, so there is no
         # skipping a subset of the batch, only discarding what it computed for them.
         stepped = self.cell.step(x_t, *state)
-        keep = mask_t[..., None]
-        return tuple(pt.switch(keep, new, held) for new, held in zip(stepped, state))
+        # One trailing axis per feature axis of the state, so the mask lines its batch axes up against
+        # the state's however many feature axes the cell chose to carry.
+        return tuple(
+            pt.switch(pt.shape_padright(mask_t, held.ndim - mask_t.ndim), new, held)
+            for new, held in zip(stepped, state)
+        )
 
     def _check_mask_against(self, mask: TensorVariable, X: TensorVariable) -> None:
         """Reject a mask that does not name one step per batch element, before scan reports it."""
