@@ -8,6 +8,7 @@ from pytensor_ml.layers import (
     GRU,
     LSTM,
     RNN,
+    Bidirectional,
     ElmanCell,
     GRUCell,
     Input,
@@ -888,3 +889,161 @@ def test_the_lstm_memory_carries_gradient_across_a_long_sequence(rng):
     layer.cell.b.set_value(np.repeat([-20.0, -20.0, 0.0, 20.0], 3).astype(floatX))
     forgotten = sensitivity.eval({X: X_np, h0: h0_np, c0: c0_np})
     assert np.abs(forgotten).max() < 1e-6
+
+
+def test_a_reversed_layer_reads_the_sequence_from_the_end(rng):
+    """Running backward has to be exactly running forward over the flipped sequence, step for step.
+    Anything that merely reordered the output would agree with a forward pass on a palindrome and on
+    nothing else, so the input here is drawn."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    forward = RNN("rnn", n_in=4, n_hidden=3)
+    backward = RNN("rnn", n_in=4, n_hidden=3, reverse=True)
+
+    W_ih, b, W_hh = draw_parameters(forward, rng)
+    backward.cell.W_ih.set_value(W_ih)
+    backward.cell.b.set_value(b)
+    backward.cell.W_hh.set_value(W_hh)
+    X_np = rng.normal(size=(5, 7, 4)).astype(floatX)
+
+    read_backward = backward(X).eval({X: X_np})
+
+    # The reference reads the flipped sequence forward, then puts the answers back where they came from.
+    on_flipped = unrolled(X_np[..., ::-1, :], W_ih, b, W_hh, np.tanh)
+    np.testing.assert_allclose(read_backward, on_flipped[..., ::-1, :], atol=ATOL)
+    assert np.abs(read_backward - forward(X).eval({X: X_np})).max() > 0.1
+
+
+def test_a_reversed_layer_stays_aligned_with_the_input(rng):
+    """The output keeps the input's time order, so step t is the step that read X[t] in both
+    directions. Returning the backward pass last step first -- what keras and flax do by default -- is
+    the shape that silently misaligns a bidirectional concatenation."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    backward = RNN("rnn", n_in=4, n_hidden=3, reverse=True)
+    draw_parameters(backward, rng)
+
+    # A backward pass sees only the last step when it starts, so its first output is a function of that
+    # step alone. Aligned, that output sits at the end of the sequence.
+    X_np = rng.normal(size=(1, 6, 4)).astype(floatX)
+    read_backward = backward(X)
+
+    whole = read_backward.eval({X: X_np})
+    last_step_alone = read_backward.eval({X: X_np[:, -1:, :]})
+    np.testing.assert_allclose(whole[:, -1, :], last_step_alone[:, 0, :], atol=ATOL)
+
+
+@pytest.mark.parametrize("layer_type", [RNN, GRU, LSTM], ids=["rnn", "gru", "lstm"])
+def test_every_recurrent_layer_takes_a_direction(layer_type, rng):
+    """``reverse`` lives on the loop, not on the cell, so all three flat constructors have to forward
+    it. One that dropped it would quietly run forward. Both passes come off the one layer, so they are
+    the same recurrence read two ways rather than two draws that happen to agree."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    layer = layer_type("layer", n_in=4, n_hidden=3, reverse=True)
+    assert layer.reverse
+
+    X_np = rng.normal(size=(5, 7, 4)).astype(floatX)
+    backward = layer(X).eval({X: X_np})
+
+    layer.reverse = False
+    on_flipped = layer(X).eval({X: X_np[..., ::-1, :]})
+    np.testing.assert_allclose(backward, on_flipped[..., ::-1, :], atol=ATOL)
+    assert np.abs(backward - layer(X).eval({X: X_np})).max() > 0.1
+
+
+def test_bidirectional_gives_each_step_both_halves_of_the_sequence(rng):
+    """The point of the wrapper: at every step the forward half has read the prefix and the backward
+    half the suffix, of the same step. Both halves are checked against the python loop rather than
+    against another layer, so a concatenation joining mismatched steps cannot agree with a reference
+    carrying the same misalignment."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    forward = GRU("fwd", n_in=4, n_hidden=3)
+    backward = GRU("bwd", n_in=4, n_hidden=5)
+    out = Bidirectional(forward, backward)(X)
+    assert out.type.shape == (None, None, 8)
+
+    X_np = rng.normal(size=(5, 7, 4)).astype(floatX)
+    both = out.eval({X: X_np})
+
+    def parameters(layer):
+        cell = layer.cell
+        return cell.W_ih.get_value(), cell.b.get_value(), cell.W_hh.get_value(), cell.c.get_value()
+
+    np.testing.assert_allclose(
+        both[..., :3], unrolled_gru(X_np, *parameters(forward), np.tanh), atol=ATOL
+    )
+    np.testing.assert_allclose(
+        both[..., 3:],
+        unrolled_gru(X_np[..., ::-1, :], *parameters(backward), np.tanh)[..., ::-1, :],
+        atol=ATOL,
+    )
+
+
+def test_bidirectional_owns_the_direction_of_both_layers(rng):
+    """A caller who builds both halves the same way, or reverses the wrong one, still gets one pass in
+    each direction -- and the layers they handed over keep the direction they were built with, so using
+    one on its own afterwards is unaffected."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    forward = GRU("fwd", n_in=4, n_hidden=3, reverse=True)
+    backward = GRU("bwd", n_in=4, n_hidden=3)
+    both = Bidirectional(forward, backward)(X)
+
+    X_np = rng.normal(size=(5, 7, 4)).astype(floatX)
+    evaluated = both.eval({X: X_np})
+
+    def parameters(layer):
+        cell = layer.cell
+        return cell.W_ih.get_value(), cell.b.get_value(), cell.W_hh.get_value(), cell.c.get_value()
+
+    np.testing.assert_allclose(
+        evaluated[..., :3], unrolled_gru(X_np, *parameters(forward), np.tanh), atol=ATOL
+    )
+    np.testing.assert_allclose(
+        evaluated[..., 3:],
+        unrolled_gru(X_np[..., ::-1, :], *parameters(backward), np.tanh)[..., ::-1, :],
+        atol=ATOL,
+    )
+    assert forward.reverse and not backward.reverse
+
+
+def test_bidirectional_rejects_one_layer_used_twice():
+    """One layer in both slots runs, but with a single set of parameters shared between the directions,
+    which is the one thing the two-layer signature exists to prevent."""
+    layer = GRU("gru", n_in=4, n_hidden=3)
+    with pytest.raises(ValueError, match="its own parameters"):
+        Bidirectional(layer, layer)
+
+
+def test_bidirectional_trains_end_to_end(rng):
+    """Both halves have to reach the optimizer; a wrapper that dropped one would still train, on half
+    the parameters."""
+    X = Input("X", shape=(None, 6, 4))
+    both = Bidirectional(GRU("fwd", n_in=4, n_hidden=5), GRU("bwd", n_in=4, n_hidden=5))(X)
+    y = Linear("head", 10, 1)(both[..., -1, :])
+    model = Model(X, y).initialize(seed=1)
+
+    assert len(collect_trainable_params(y)) == 10
+    step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)
+    X_np = rng.normal(size=(32, 6, 4)).astype(floatX)
+    y_np = X_np.sum(axis=(1, 2))[:, None].astype(floatX)
+
+    losses = [float(step(X_np, y_np)) for _ in range(50)]
+    assert losses[-1] < losses[0] / 5
+
+
+def test_a_call_may_override_the_layers_own_direction(rng):
+    """``Bidirectional`` asks each half for a direction per call rather than reaching in and setting it,
+    so the override has to work both ways round and leave the layer as it found it."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    layer = GRU("gru", n_in=4, n_hidden=3)
+    W_ih, b, W_hh, c = draw_gru_parameters(layer, rng)
+    X_np = rng.normal(size=(5, 7, 4)).astype(floatX)
+
+    read_forward = unrolled_gru(X_np, W_ih, b, W_hh, c, np.tanh)
+    read_backward = unrolled_gru(X_np[..., ::-1, :], W_ih, b, W_hh, c, np.tanh)[..., ::-1, :]
+
+    np.testing.assert_allclose(layer(X, reverse=True).eval({X: X_np}), read_backward, atol=ATOL)
+    assert not layer.reverse
+
+    layer.reverse = True
+    np.testing.assert_allclose(layer(X, reverse=False).eval({X: X_np}), read_forward, atol=ATOL)
+    np.testing.assert_allclose(layer(X).eval({X: X_np}), read_backward, atol=ATOL)
+    assert layer.reverse

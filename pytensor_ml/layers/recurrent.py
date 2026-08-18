@@ -75,16 +75,23 @@ class Recurrent(Layer):
         The step to run at each timestep.
     name : str or None
         Name for the layer's output and its scan. Defaults to "Recurrent" when None.
+    reverse : bool, optional
+        Run the sequence from its last step to its first. The output stays aligned with the input, so
+        ``out[..., t, :]`` is the step that read ``X[..., t, :]`` either way, and a backward layer's
+        output concatenates elementwise with a forward one's. Default is False.
     """
 
-    def __init__(self, cell: RecurrentCell, name: str | None = None):
+    def __init__(self, cell: RecurrentCell, name: str | None = None, reverse: bool = False):
         self.cell = cell
         self.name = name if name else "Recurrent"
+        self.reverse = reverse
 
     def __call__(
         self,
         X: pt.TensorLike,
         initial_state: pt.TensorLike | Sequence[TensorVariable] | None = None,
+        *,
+        reverse: bool | None = None,
     ) -> TensorVariable:
         """
         Run the cell over ``X`` and return its output at every step.
@@ -96,12 +103,16 @@ class Recurrent(Layer):
         initial_state : TensorVariable or sequence of TensorVariable, optional
             The state the recurrence starts from, matching what the cell carries. The cell's zero state
             when omitted.
+        reverse : bool, optional
+            Direction for this call, in place of the layer's own. The layer's when omitted.
 
         Returns
         -------
         TensorVariable
             The cell's output at each step, shape ``(..., time, n_out)``.
         """
+        reverse = self.reverse if reverse is None else reverse
+
         X = pt.as_tensor(X)
         if X.ndim < 2:
             raise ValueError(
@@ -127,12 +138,17 @@ class Recurrent(Layer):
             sequences=[pt.moveaxis(X, -2, 0)],
             outputs_info=list(state),
             name=f"{self.name}_recurrence",
+            go_backwards=reverse,
             return_updates=False,
         )
 
         # Scan hands back a bare variable for a single carried state and a list for several. The cell's
         # output is the first one either way.
         output = state_sequence[0] if isinstance(state_sequence, list) else state_sequence
+
+        # Scan stacks in the order it iterated, so a backward pass comes out last step first.
+        if reverse:
+            output = output[::-1]
 
         out = pt.moveaxis(output, 0, -2)
         out.name = f"{self.name}_output"
@@ -265,6 +281,8 @@ class RNN(Recurrent):
         draw an RNN is most sensitive to.
     bias_initializer : Initializer, optional
         How :math:`b` is drawn. Zeros when omitted.
+    reverse : bool, optional
+        Run the sequence backward, with the output still aligned to the input. Default is False.
     """
 
     def __init__(
@@ -278,6 +296,7 @@ class RNN(Recurrent):
         weight_initializer: Initializer | None = None,
         recurrent_initializer: Initializer | None = None,
         bias_initializer: Initializer | None = None,
+        reverse: bool = False,
     ):
         name = name if name else "RNN"
         super().__init__(
@@ -292,6 +311,7 @@ class RNN(Recurrent):
                 bias_initializer=bias_initializer,
             ),
             name=name,
+            reverse=reverse,
         )
 
 
@@ -438,6 +458,8 @@ class GRU(Recurrent):
         How :math:`W_{hh}` is drawn. Orthogonal when omitted.
     bias_initializer : Initializer, optional
         How the biases are drawn. Zeros when omitted.
+    reverse : bool, optional
+        Run the sequence backward, with the output still aligned to the input. Default is False.
     """
 
     def __init__(
@@ -452,6 +474,7 @@ class GRU(Recurrent):
         weight_initializer: Initializer | None = None,
         recurrent_initializer: Initializer | None = None,
         bias_initializer: Initializer | None = None,
+        reverse: bool = False,
     ):
         name = name if name else "GRU"
         super().__init__(
@@ -467,6 +490,7 @@ class GRU(Recurrent):
                 bias_initializer=bias_initializer,
             ),
             name=name,
+            reverse=reverse,
         )
 
 
@@ -615,6 +639,8 @@ class LSTM(Recurrent):
         How :math:`W_{hh}` is drawn. Orthogonal when omitted.
     bias_initializer : Initializer, optional
         How :math:`b` is drawn. Zeros when omitted.
+    reverse : bool, optional
+        Run the sequence backward, with the output still aligned to the input. Default is False.
     """
 
     def __init__(
@@ -629,6 +655,7 @@ class LSTM(Recurrent):
         weight_initializer: Initializer | None = None,
         recurrent_initializer: Initializer | None = None,
         bias_initializer: Initializer | None = None,
+        reverse: bool = False,
     ):
         name = name if name else "LSTM"
         super().__init__(
@@ -644,7 +671,62 @@ class LSTM(Recurrent):
                 bias_initializer=bias_initializer,
             ),
             name=name,
+            reverse=reverse,
         )
+
+
+class Bidirectional(Layer):
+    """
+    Read a sequence in both directions and concatenate what each pass saw.
+
+    A forward layer's output at step ``t`` summarizes everything up to ``t``, and a backward layer's
+    summarizes everything from ``t`` on, so the two together give each step the whole sequence. Both
+    outputs stay aligned to the input's time axis, so the concatenation joins the two views of the same
+    step; the result is ``(..., time, n_forward + n_backward)``.
+
+    The two layers are separate objects with separate parameters, which is what lets each direction
+    learn its own recurrence. Their direction is this wrapper's to choose: whatever ``reverse`` they
+    carry is ignored here, and neither layer is changed by being wrapped.
+
+    Parameters
+    ----------
+    forward : Recurrent
+        Run over the sequence as given.
+    backward : Recurrent
+        Run over the sequence from its last step to its first.
+    name : str or None
+        Name for the layer's output. Defaults to "Bidirectional" when None.
+    """
+
+    def __init__(self, forward: Recurrent, backward: Recurrent, name: str | None = None):
+        if forward is backward:
+            raise ValueError(
+                "Bidirectional needs two layers so each direction has its own parameters to learn its "
+                "own recurrence. Build a second one, with its own name."
+            )
+        self.forward = forward
+        self.backward = backward
+        self.name = name if name else "Bidirectional"
+
+    def __call__(self, X: pt.TensorLike) -> TensorVariable:
+        """
+        Run both directions over ``X`` and concatenate them on the feature axis.
+
+        Parameters
+        ----------
+        X : TensorVariable
+            Input sequence, shape ``(..., time, n_in)``.
+
+        Returns
+        -------
+        TensorVariable
+            Both directions' outputs, shape ``(..., time, n_forward + n_backward)``.
+        """
+        out = pt.concatenate(
+            [self.forward(X, reverse=False), self.backward(X, reverse=True)], axis=-1
+        )
+        out.name = f"{self.name}_output"
+        return out
 
 
 def _trainable_parameter(
@@ -672,6 +754,7 @@ __all__ = [
     "GRU",
     "LSTM",
     "RNN",
+    "Bidirectional",
     "ElmanCell",
     "GRUCell",
     "LSTMCell",
