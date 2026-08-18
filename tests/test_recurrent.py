@@ -4,7 +4,17 @@ import pytensor.tensor as pt
 import pytest
 
 from pytensor_ml.activations import Activation, ReLU, Tanh
-from pytensor_ml.layers import GRU, RNN, ElmanCell, GRUCell, Input, Linear, Recurrent, RecurrentCell
+from pytensor_ml.layers import (
+    GRU,
+    LSTM,
+    RNN,
+    ElmanCell,
+    GRUCell,
+    Input,
+    Linear,
+    Recurrent,
+    RecurrentCell,
+)
 from pytensor_ml.loss import SquaredError
 from pytensor_ml.model import Model
 from pytensor_ml.optim import adam
@@ -608,3 +618,273 @@ def test_the_gru_state_takes_the_dtype_the_step_produces():
 
         assert out.dtype == "float64"
         assert out.eval({X: np.zeros((2, 5, 4), dtype="float64")}).dtype == np.dtype("float64")
+
+
+def unrolled_lstm(X_np, W_ih, b, W_hh, phi, gate=sigmoid):
+    """The gated recurrence written as a python loop, as the reference to check the scan against."""
+    n_hidden = W_hh.shape[0]
+    h = np.zeros((*X_np.shape[:-2], n_hidden), dtype=floatX)
+    c = np.zeros_like(h)
+    states = []
+    for t in range(X_np.shape[-2]):
+        projected = X_np[..., t, :] @ W_ih + h @ W_hh + b
+        pre_in, pre_forget, pre_candidate, pre_out = (
+            projected[..., i * n_hidden : (i + 1) * n_hidden] for i in range(4)
+        )
+        c = gate(pre_forget) * c + gate(pre_in) * phi(pre_candidate)
+        h = gate(pre_out) * phi(c)
+        states.append(h)
+    return np.stack(states, axis=-2)
+
+
+def draw_lstm_parameters(layer, rng):
+    """Set every parameter to a fresh draw and hand the values back for the reference to use."""
+    n_in, n_hidden = layer.cell.n_in, layer.cell.n_hidden
+    W_ih = rng.normal(size=(n_in, 4 * n_hidden)).astype(floatX)
+    W_hh = rng.normal(size=(n_hidden, 4 * n_hidden)).astype(floatX)
+    b = rng.normal(size=(4 * n_hidden,)).astype(floatX)
+    layer.cell.W_ih.set_value(W_ih)
+    layer.cell.W_hh.set_value(W_hh)
+    layer.cell.b.set_value(b)
+    return W_ih, b, W_hh
+
+
+@pytest.mark.parametrize(
+    "activation, reference",
+    [(Tanh(), np.tanh), (ReLU(), lambda x: np.maximum(x, 0.0))],
+    ids=["tanh", "relu"],
+)
+def test_the_lstm_matches_a_step_by_step_reference(activation, reference, rng):
+    """The relu case is what pins ``activation`` being applied twice: once to the candidate and again
+    to the memory on the way out. At tanh alone, hardcoding either one would still agree."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    layer = LSTM("lstm", n_in=4, n_hidden=3, activation=activation)
+    out = layer(X)
+    assert out.type.shape == (None, None, 3)
+
+    W_ih, b, W_hh = draw_lstm_parameters(layer, rng)
+    X_np = rng.normal(size=(5, 7, 4)).astype(floatX)
+
+    np.testing.assert_allclose(
+        out.eval({X: X_np}), unrolled_lstm(X_np, W_ih, b, W_hh, reference), atol=ATOL
+    )
+
+
+def test_the_lstm_gate_slices_do_not_cross(rng):
+    """Four gates read four slices of one projection, and swapping two still produces a plausible
+    sequence. Driving each to its own extreme pins which slice is which; the reference loop alone would
+    agree with any consistent misordering of the parameter layout."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    layer = LSTM("lstm", n_in=4, n_hidden=3)
+    out = layer(X)
+
+    layer.cell.W_ih.set_value(np.zeros((4, 12), dtype=floatX))
+    layer.cell.W_hh.set_value(np.zeros((3, 12), dtype=floatX))
+    X_np = rng.normal(size=(5, 7, 4)).astype(floatX)
+    shut, opened = -20.0, 20.0
+
+    def biases(gate_in, gate_forget, candidate, gate_out):
+        return np.repeat([gate_in, gate_forget, candidate, gate_out], 3).astype(floatX)
+
+    # The input gate open onto a saturated candidate writes tanh(20) into the memory, and the output
+    # gate open exposes tanh of that. The forget gate is irrelevant while the memory starts at zero.
+    layer.cell.b.set_value(biases(opened, shut, opened, opened))
+    np.testing.assert_allclose(
+        out.eval({X: X_np}), np.full((5, 7, 3), np.tanh(np.tanh(20.0)), dtype=floatX), atol=1e-6
+    )
+
+    # The output gate shut hides that same memory, so nothing reaches h however full the memory is.
+    layer.cell.b.set_value(biases(opened, shut, opened, shut))
+    np.testing.assert_allclose(out.eval({X: X_np}), np.zeros((5, 7, 3)), atol=1e-6)
+
+    # The input gate shut writes nothing, so an open output gate exposes an empty memory.
+    layer.cell.b.set_value(biases(shut, shut, opened, opened))
+    np.testing.assert_allclose(out.eval({X: X_np}), np.zeros((5, 7, 3)), atol=1e-6)
+
+
+def test_the_lstm_forget_gate_decays_the_memory_over_the_sequence(rng):
+    """The memory is the state the layer exists for, and it is the one the output never shows directly.
+    Writing it once and then shutting the input gate leaves the forget gate alone with it: held open the
+    memory survives every later step, held shut it is gone by the next one."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    h0 = pt.tensor("h0", shape=(None, 3))
+    c0 = pt.tensor("c0", shape=(None, 3))
+    layer = LSTM("lstm", n_in=4, n_hidden=3)
+    out = layer(X, [h0, c0])
+
+    layer.cell.W_ih.set_value(np.zeros((4, 12), dtype=floatX))
+    layer.cell.W_hh.set_value(np.zeros((3, 12), dtype=floatX))
+    X_np = rng.normal(size=(5, 7, 4)).astype(floatX)
+    h0_np = np.zeros((5, 3), dtype=floatX)
+    c0_np = rng.normal(size=(5, 3)).astype(floatX)
+    # Input gate shut, output gate open: h is tanh of whatever the memory still holds.
+    remembering = np.repeat([-20.0, 20.0, 0.0, 20.0], 3).astype(floatX)
+
+    layer.cell.b.set_value(remembering)
+    held = out.eval({X: X_np, h0: h0_np, c0: c0_np})
+    np.testing.assert_allclose(
+        held, np.broadcast_to(np.tanh(c0_np)[:, None, :], (5, 7, 3)), atol=1e-5
+    )
+
+    forgetting = remembering.copy()
+    forgetting[3:6] = -20.0
+    layer.cell.b.set_value(forgetting)
+    np.testing.assert_allclose(
+        out.eval({X: X_np, h0: h0_np, c0: c0_np}), np.zeros((5, 7, 3)), atol=1e-6
+    )
+
+
+@pytest.mark.parametrize("bias", [True, False], ids=["bias", "no_bias"])
+def test_the_lstm_bias_is_optional(bias, rng):
+    """Dropping the bias drops the parameter as well as the term; an unused one left behind would hand
+    the optimizer moment state to carry for a weight that never moves."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    layer = LSTM("lstm", n_in=4, n_hidden=3, bias=bias)
+    out = layer(X)
+
+    W_ih = rng.normal(size=(4, 12)).astype(floatX)
+    W_hh = rng.normal(size=(3, 12)).astype(floatX)
+    layer.cell.W_ih.set_value(W_ih)
+    layer.cell.W_hh.set_value(W_hh)
+    b = np.zeros(12, dtype=floatX)
+    if bias:
+        b = rng.normal(size=(12,)).astype(floatX)
+        layer.cell.b.set_value(b)
+    X_np = rng.normal(size=(5, 7, 4)).astype(floatX)
+
+    assert set(collect_trainable_params(out)) == (
+        {layer.cell.W_ih, layer.cell.W_hh, layer.cell.b}
+        if bias
+        else {layer.cell.W_ih, layer.cell.W_hh}
+    )
+    np.testing.assert_allclose(
+        out.eval({X: X_np}), unrolled_lstm(X_np, W_ih, b, W_hh, np.tanh), atol=ATOL
+    )
+
+
+def test_the_lstm_gates_take_their_own_activation(rng):
+    """The gates and the candidate have separate keywords, and setting one must leave the other alone."""
+
+    class HardSigmoid(Activation):
+        def __call__(self, x):
+            return pt.clip(x * 0.2 + 0.5, 0.0, 1.0)
+
+    def hard_sigmoid(x):
+        return np.clip(x * 0.2 + 0.5, 0.0, 1.0)
+
+    X = pt.tensor("X", shape=(None, None, 4))
+    layer = LSTM("lstm", n_in=4, n_hidden=3, gate_activation=HardSigmoid())
+    out = layer(X)
+
+    W_ih, b, W_hh = draw_lstm_parameters(layer, rng)
+    X_np = rng.normal(size=(5, 7, 4)).astype(floatX)
+    hard = out.eval({X: X_np})
+
+    np.testing.assert_allclose(
+        hard, unrolled_lstm(X_np, W_ih, b, W_hh, np.tanh, gate=hard_sigmoid), atol=ATOL
+    )
+    logistic = unrolled_lstm(X_np, W_ih, b, W_hh, np.tanh)
+    assert np.abs(hard - logistic).max() > 0.01
+
+
+def test_the_lstm_forwards_its_initializers_to_the_cell():
+    """Four keyword-only arguments reach the cell through the flat constructor, and one dropped on the
+    floor leaves a parameter silently at its default draw."""
+    layer = LSTM(
+        "lstm",
+        n_in=4,
+        n_hidden=3,
+        recurrent_initializer=ZeroInitializer(),
+        bias_initializer=OneInitializer(),
+    )
+
+    np.testing.assert_array_equal(layer.cell.W_hh.get_value(), np.zeros((3, 12)))
+    np.testing.assert_array_equal(layer.cell.b.get_value(), np.ones(12))
+    assert np.abs(layer.cell.W_ih.get_value()).max() > 0.0
+
+
+def test_the_lstm_recurrent_weight_is_drawn_orthogonal_by_default():
+    """One draw covers all four gates, so the check is on the whole wide matrix rather than per gate."""
+    layer = LSTM("lstm", n_in=16, n_hidden=32)
+
+    W_hh = layer.cell.W_hh.get_value()
+    assert W_hh.shape == (32, 128)
+    np.testing.assert_allclose(W_hh @ W_hh.T, np.eye(32), atol=ATOL)
+
+    W_ih = layer.cell.W_ih.get_value()
+    assert np.abs(W_ih @ W_ih.T - np.eye(16)).max() > 0.1
+    assert W_ih.std() == pytest.approx(np.sqrt(2.0 / (16 + 128)), rel=0.1)
+
+
+def test_the_lstm_trains_end_to_end(rng):
+    """Gradients survive the round trip through both carried states and the training machinery moves
+    them. Nothing else here differentiates a cell whose two states feed each other."""
+    X = Input("X", shape=(None, 6, 4))
+    y = Linear("head", 5, 1)(LSTM("lstm", n_in=4, n_hidden=5)(X)[..., -1, :])
+    model = Model(X, y).initialize(seed=1)
+    step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)
+
+    X_np = rng.normal(size=(32, 6, 4)).astype(floatX)
+    y_np = X_np.sum(axis=(1, 2))[:, None].astype(floatX)
+
+    losses = [float(step(X_np, y_np)) for _ in range(50)]
+    assert losses[-1] < losses[0] / 5
+
+
+@pytest.mark.parametrize(
+    "batch_shape", [(), (5,), (2, 5)], ids=["unbatched", "one_axis", "two_axes"]
+)
+def test_the_lstm_recurs_over_any_number_of_batch_axes(batch_shape, rng):
+    """Both carried states take their batch axes from the input, and the memory has to keep them across
+    the step that combines it with the gates."""
+    X = pt.tensor("X", shape=(*(None for _ in batch_shape), None, 4))
+    layer = LSTM("lstm", n_in=4, n_hidden=3)
+    out = layer(X)
+
+    W_ih, b, W_hh = draw_lstm_parameters(layer, rng)
+    X_np = rng.normal(size=(*batch_shape, 7, 4)).astype(floatX)
+
+    np.testing.assert_allclose(
+        out.eval({X: X_np}), unrolled_lstm(X_np, W_ih, b, W_hh, np.tanh), atol=ATOL
+    )
+
+
+def test_the_lstm_state_takes_the_dtype_the_step_produces():
+    """A float32 cell fed a float64 sequence. Both carried states go through the one builder, so a state
+    pinned to floatX leaves scan comparing float32 against the float64 the step returns."""
+    with pytensor.config.change_flags(floatX="float32"):
+        layer = LSTM("lstm", n_in=4, n_hidden=3)
+        X = pt.tensor("X", shape=(None, None, 4), dtype="float64")
+        out = layer(X)
+
+        assert out.dtype == "float64"
+        assert out.eval({X: np.zeros((2, 5, 4), dtype="float64")}).dtype == np.dtype("float64")
+
+
+def test_the_lstm_memory_carries_gradient_across_a_long_sequence(rng):
+    """What the memory is for. With the forget gate open it reaches the last step untouched by any
+    weight, so the gradient back to the starting memory survives fifty steps; with the gate shut the
+    same path is cut and the gradient is gone. An Elman state, multiplied by a weight every step,
+    has no setting that does the first."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    h0 = pt.tensor("h0", shape=(None, 3))
+    c0 = pt.tensor("c0", shape=(None, 3))
+    layer = LSTM("lstm", n_in=4, n_hidden=3)
+    out = layer(X, [h0, c0])
+    sensitivity = pt.grad(out[..., -1, :].sum(), c0)
+
+    layer.cell.W_ih.set_value(np.zeros((4, 12), dtype=floatX))
+    layer.cell.W_hh.set_value(np.zeros((3, 12), dtype=floatX))
+    X_np = rng.normal(size=(5, 50, 4)).astype(floatX)
+    h0_np = np.zeros((5, 3), dtype=floatX)
+    c0_np = rng.normal(size=(5, 3)).astype(floatX)
+
+    # Input gate shut so nothing is written, output gate open so the memory reaches h.
+    layer.cell.b.set_value(np.repeat([-20.0, 20.0, 0.0, 20.0], 3).astype(floatX))
+    remembered = sensitivity.eval({X: X_np, h0: h0_np, c0: c0_np})
+    # d tanh(c_0) / d c_0, undiminished by the fifty steps in between.
+    np.testing.assert_allclose(remembered, 1.0 - np.tanh(c0_np) ** 2, atol=1e-5)
+
+    layer.cell.b.set_value(np.repeat([-20.0, -20.0, 0.0, 20.0], 3).astype(floatX))
+    forgotten = sensitivity.eval({X: X_np, h0: h0_np, c0: c0_np})
+    assert np.abs(forgotten).max() < 1e-6

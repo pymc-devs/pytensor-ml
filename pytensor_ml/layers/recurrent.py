@@ -343,6 +343,8 @@ class GRUCell(RecurrentCell):
         How :math:`b` and :math:`c` are drawn. Zeros when omitted.
     """
 
+    _n_gates = 3
+
     def __init__(
         self,
         name: str | None,
@@ -364,17 +366,20 @@ class GRUCell(RecurrentCell):
         self.bias = bias
 
         self.W_ih = _trainable_parameter(
-            f"{self.name}_W_ih", (n_in, 3 * n_hidden), weight_initializer, XavierNormalInitializer()
+            f"{self.name}_W_ih",
+            (n_in, self._n_gates * n_hidden),
+            weight_initializer,
+            XavierNormalInitializer(),
         )
         self.W_hh = _trainable_parameter(
             f"{self.name}_W_hh",
-            (n_hidden, 3 * n_hidden),
+            (n_hidden, self._n_gates * n_hidden),
             recurrent_initializer,
             OrthogonalInitializer(),
         )
         if bias:
             self.b = _trainable_parameter(
-                f"{self.name}_b", (3 * n_hidden,), bias_initializer, ZeroInitializer()
+                f"{self.name}_b", (self._n_gates * n_hidden,), bias_initializer, ZeroInitializer()
             )
             self.c = _trainable_parameter(
                 f"{self.name}_c", (n_hidden,), bias_initializer, ZeroInitializer()
@@ -388,8 +393,8 @@ class GRUCell(RecurrentCell):
             from_input = from_input + self.b
         from_state = h_prev @ self.W_hh
 
-        input_r, input_z, input_n = _split_gates(from_input, self.n_hidden)
-        state_r, state_z, state_n = _split_gates(from_state, self.n_hidden)
+        input_r, input_z, input_n = _split_gates(from_input, self.n_hidden, self._n_gates)
+        state_r, state_z, state_n = _split_gates(from_state, self.n_hidden, self._n_gates)
         if self.bias:
             state_n = state_n + self.c
 
@@ -465,6 +470,183 @@ class GRU(Recurrent):
         )
 
 
+class LSTMCell(RecurrentCell):
+    r"""
+    The step of a long short-term memory cell, which carries a memory alongside its output:
+
+    .. math::
+
+        i_t &= \sigma\left(x_t W_{ii} + b_i + h_{t-1} W_{hi}\right) \\
+        f_t &= \sigma\left(x_t W_{if} + b_f + h_{t-1} W_{hf}\right) \\
+        g_t &= \phi\left(x_t W_{ig} + b_g + h_{t-1} W_{hg}\right) \\
+        o_t &= \sigma\left(x_t W_{io} + b_o + h_{t-1} W_{ho}\right) \\
+        c_t &= f_t \odot c_{t-1} + i_t \odot g_t \\
+        h_t &= o_t \odot \phi(c_t),
+
+    where :math:`\phi` is the activation and :math:`\sigma` the gate activation. The memory
+    :math:`c` runs through the sequence touched only by two elementwise gates, so the gradient reaches
+    the start of it without passing through a weight; the forget gate :math:`f` decides what the memory
+    keeps, the input gate :math:`i` what the candidate :math:`g` adds to it, and the output gate
+    :math:`o` how much of it the step exposes as :math:`h`.
+
+    The four gates share one projection of the input and one of the state, so a step is two matmuls
+    rather than eight. Every gate sees the two projections only as a sum, so a single bias covers both,
+    which is the layout flax uses and half of torch's.
+
+    Parameters
+    ----------
+    name : str or None
+        Name prefix for the cell's parameters. Defaults to "LSTMCell" when None.
+    n_in : int
+        Size of the input feature axis.
+    n_hidden : int
+        Size of the hidden state, and of the memory it carries alongside.
+    activation : Activation, optional
+        Applied to the candidate and again to the memory on the way out, as in torch, flax and keras.
+        Default is :class:`~pytensor_ml.activations.Tanh`, which bounds the memory the output gate
+        reads however far the unbounded :math:`c` has drifted.
+    gate_activation : Activation, optional
+        Applied to the input, forget and output gates. Only a squashing function makes them gates; the
+        forget gate ranging outside :math:`[0, 1]` grows or flips the memory it is meant to decay.
+        Default is :class:`~pytensor_ml.activations.Sigmoid`.
+    bias : bool, optional
+        Add the learned shift :math:`b`, one slice per gate. Default is True.
+    weight_initializer : Initializer, optional
+        How :math:`W_{ih}` is drawn. Xavier normal when omitted.
+    recurrent_initializer : Initializer, optional
+        How :math:`W_{hh}` is drawn, across all four gates at once. Orthogonal when omitted; see
+        :class:`ElmanCell` for why the state's own weight is the sensitive draw.
+    bias_initializer : Initializer, optional
+        How :math:`b` is drawn. Zeros when omitted, as in torch and flax. Drawing the forget slice at
+        one instead starts the memory holding rather than decaying, which is keras' default.
+    """
+
+    _n_gates = 4
+
+    def __init__(
+        self,
+        name: str | None,
+        n_in: int,
+        n_hidden: int,
+        activation: Activation | None = None,
+        bias: bool = True,
+        *,
+        gate_activation: Activation | None = None,
+        weight_initializer: Initializer | None = None,
+        recurrent_initializer: Initializer | None = None,
+        bias_initializer: Initializer | None = None,
+    ):
+        self.name = name if name else "LSTMCell"
+        self.n_in = n_in
+        self.n_hidden = n_hidden
+        self.activation = activation if activation is not None else Tanh()
+        self.gate_activation = gate_activation if gate_activation is not None else Sigmoid()
+        self.bias = bias
+
+        self.W_ih = _trainable_parameter(
+            f"{self.name}_W_ih",
+            (n_in, self._n_gates * n_hidden),
+            weight_initializer,
+            XavierNormalInitializer(),
+        )
+        self.W_hh = _trainable_parameter(
+            f"{self.name}_W_hh",
+            (n_hidden, self._n_gates * n_hidden),
+            recurrent_initializer,
+            OrthogonalInitializer(),
+        )
+        if bias:
+            self.b = _trainable_parameter(
+                f"{self.name}_b", (self._n_gates * n_hidden,), bias_initializer, ZeroInitializer()
+            )
+
+    def step(self, x_t: TensorVariable, *state: TensorVariable) -> tuple[TensorVariable, ...]:
+        h_prev, c_prev = state
+
+        projected = x_t @ self.W_ih + h_prev @ self.W_hh
+        if self.bias:
+            projected = projected + self.b
+        pre_in, pre_forget, pre_candidate, pre_out = _split_gates(
+            projected, self.n_hidden, self._n_gates
+        )
+
+        input_gate = self.gate_activation(pre_in)
+        forget_gate = self.gate_activation(pre_forget)
+        output_gate = self.gate_activation(pre_out)
+        candidate = self.activation(pre_candidate)
+
+        memory = forget_gate * c_prev + input_gate * candidate
+        return (output_gate * self.activation(memory), memory)
+
+    def initial_state(self, X: TensorVariable) -> tuple[TensorVariable, ...]:
+        # One variable in both slots: scan gives every carried state its own inner input regardless.
+        zeros = _zero_state(X, self.n_hidden, self.W_ih, self.W_hh)
+        return (zeros, zeros)
+
+
+class LSTM(Recurrent):
+    r"""
+    Long short-term memory layer over a sequence: a :class:`Recurrent` scanning an :class:`LSTMCell`.
+
+    Takes the cell's arguments directly, for the common case where a network wants a plain recurrence
+    and no cell of its own. The parameters live on the cell, as ``lstm.cell.W_ih``. See
+    :class:`LSTMCell` for the recurrence itself and :class:`Recurrent` for the axes. The layer returns
+    :math:`h` at every step; the memory :math:`c` stays inside the loop.
+
+    Parameters
+    ----------
+    name : str or None
+        Name prefix for the layer's parameters. Defaults to "LSTM" when None.
+    n_in : int
+        Size of the input feature axis.
+    n_hidden : int
+        Size of the hidden state, and of the memory it carries alongside.
+    activation : Activation, optional
+        Applied to the candidate and to the memory on the way out. Default is
+        :class:`~pytensor_ml.activations.Tanh`.
+    gate_activation : Activation, optional
+        Applied to the input, forget and output gates. Default is
+        :class:`~pytensor_ml.activations.Sigmoid`.
+    bias : bool, optional
+        Add the learned shift. Default is True.
+    weight_initializer : Initializer, optional
+        How :math:`W_{ih}` is drawn. Xavier normal when omitted.
+    recurrent_initializer : Initializer, optional
+        How :math:`W_{hh}` is drawn. Orthogonal when omitted.
+    bias_initializer : Initializer, optional
+        How :math:`b` is drawn. Zeros when omitted.
+    """
+
+    def __init__(
+        self,
+        name: str | None,
+        n_in: int,
+        n_hidden: int,
+        activation: Activation | None = None,
+        bias: bool = True,
+        *,
+        gate_activation: Activation | None = None,
+        weight_initializer: Initializer | None = None,
+        recurrent_initializer: Initializer | None = None,
+        bias_initializer: Initializer | None = None,
+    ):
+        name = name if name else "LSTM"
+        super().__init__(
+            LSTMCell(
+                name,
+                n_in,
+                n_hidden,
+                activation,
+                bias,
+                gate_activation=gate_activation,
+                weight_initializer=weight_initializer,
+                recurrent_initializer=recurrent_initializer,
+                bias_initializer=bias_initializer,
+            ),
+            name=name,
+        )
+
+
 def _trainable_parameter(
     name: str, shape: tuple[int, ...], initializer: Initializer | None, default: Initializer
 ) -> TensorVariable:
@@ -479,14 +661,20 @@ def _zero_state(X: TensorVariable, n_hidden: int, *parameters: TensorVariable) -
     return pt.zeros((*X.shape[:-2], n_hidden), dtype=state_dtype)
 
 
-def _split_gates(
-    projection: TensorVariable, n_hidden: int
-) -> tuple[TensorVariable, TensorVariable, TensorVariable]:
-    """Cut a stacked projection into its reset, update and candidate parts, in torch's gate order."""
-    # Split rather than three slices: its gradient is one Join, where three slices would each
+def _split_gates(projection: TensorVariable, n_hidden: int, n_gates: int) -> list[TensorVariable]:
+    """Cut a stacked projection into one part per gate, in torch's gate order."""
+    # Split rather than a slice per gate: its gradient is one Join, where the slices would each
     # accumulate into a zero buffer.
-    reset, update, candidate = pt.split(projection, [n_hidden] * 3, n_splits=3, axis=-1)
-    return reset, update, candidate
+    return pt.split(projection, [n_hidden] * n_gates, n_splits=n_gates, axis=-1)
 
 
-__all__ = ["GRU", "RNN", "ElmanCell", "GRUCell", "Recurrent", "RecurrentCell"]
+__all__ = [
+    "GRU",
+    "LSTM",
+    "RNN",
+    "ElmanCell",
+    "GRUCell",
+    "LSTMCell",
+    "Recurrent",
+    "RecurrentCell",
+]
