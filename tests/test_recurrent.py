@@ -1183,3 +1183,48 @@ def test_rejects_a_mask_whose_time_axis_is_shorter_than_the_input(rng):
     assert out.eval({X: X_np, mask: np.ones((2, 6), dtype=bool)}).shape[-2] == 6
     with pytest.raises(AssertionError, match="has shape 5, expected 6"):
         out.eval({X: X_np, mask: np.ones((2, 5), dtype=bool)})
+
+
+def test_a_mask_keeps_padding_out_of_the_gradient(rng):
+    """Training on a padded batch has to move the parameters exactly as training on the sequences alone
+    would. The masked step still computes -- the switch only discards its result -- so a gradient that
+    leaked through the discarded branch would make the padding length a hyperparameter. Read backward,
+    because a forward pass reaches the real steps before any padding and would agree either way."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    mask = pt.tensor("mask", shape=(None, None), dtype=bool)
+    layer = RNN("rnn", n_in=4, n_hidden=3, reverse=True)
+    draw_parameters(layer, rng)
+    parameters = [layer.cell.W_ih, layer.cell.W_hh, layer.cell.b]
+
+    real = rng.normal(size=(3, 4)).astype(floatX)
+    padded, mask_np = pad_to([real], padded_length=7)
+
+    over_padded = pt.grad(layer(X, mask=mask)[:, :3].sum(), parameters)
+    over_real = pt.grad(layer(X).sum(), parameters)
+
+    for padded_gradient, real_gradient in zip(over_padded, over_real):
+        np.testing.assert_allclose(
+            padded_gradient.eval({X: padded, mask: mask_np}),
+            real_gradient.eval({X: real[None]}),
+            atol=ATOL,
+        )
+
+
+def test_a_mask_may_skip_a_step_in_the_middle(rng):
+    """A mask says which steps count, not how many, so it can drop one from the middle -- which a
+    per-example length cannot express. The recurrence carries on as if that step were not there."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    mask = pt.tensor("mask", shape=(None, None), dtype=bool)
+    layer = RNN("rnn", n_in=4, n_hidden=3)
+    draw_parameters(layer, rng)
+
+    full = rng.normal(size=(5, 4)).astype(floatX)
+    skipped = 2
+    mask_np = np.ones((1, 5), dtype=bool)
+    mask_np[0, skipped] = False
+
+    with_gap = layer(X, mask=mask).eval({X: full[None], mask: mask_np})
+    without = layer(X).eval({X: np.delete(full, skipped, axis=0)[None]})
+
+    np.testing.assert_allclose(with_gap[:, :skipped], without[:, :skipped], atol=ATOL)
+    np.testing.assert_allclose(with_gap[:, skipped + 1 :], without[:, skipped:], atol=ATOL)
