@@ -213,30 +213,18 @@ class ElmanCell(RecurrentCell):
 
         # Held directly rather than as a nested Linear: the projection runs inside the recurrence, and a
         # layer op there would bury its matmul in an inner graph where the scan rewrites cannot see it.
-        W_ih_initializer = (
-            XavierNormalInitializer() if weight_initializer is None else weight_initializer
+        self.W_ih = _trainable_parameter(
+            f"{self.name}_W_ih", (n_in, n_hidden), weight_initializer, XavierNormalInitializer()
         )
-        self.W_ih = trainable(
-            W_ih_initializer.initial_value((n_in, n_hidden)),
-            f"{self.name}_W_ih",
-            initializer=W_ih_initializer,
-        )
-
         if bias:
-            b_initializer = ZeroInitializer() if bias_initializer is None else bias_initializer
-            self.b = trainable(
-                b_initializer.initial_value((n_hidden,)),
-                f"{self.name}_b",
-                initializer=b_initializer,
+            self.b = _trainable_parameter(
+                f"{self.name}_b", (n_hidden,), bias_initializer, ZeroInitializer()
             )
-
-        W_hh_initializer = (
-            OrthogonalInitializer() if recurrent_initializer is None else recurrent_initializer
-        )
-        self.W_hh = trainable(
-            W_hh_initializer.initial_value((n_hidden, n_hidden)),
+        self.W_hh = _trainable_parameter(
             f"{self.name}_W_hh",
-            initializer=W_hh_initializer,
+            (n_hidden, n_hidden),
+            recurrent_initializer,
+            OrthogonalInitializer(),
         )
 
     def step(self, x_t: TensorVariable, *state: TensorVariable) -> tuple[TensorVariable, ...]:
@@ -375,35 +363,21 @@ class GRUCell(RecurrentCell):
         self.gate_activation = gate_activation if gate_activation is not None else Sigmoid()
         self.bias = bias
 
-        W_ih_initializer = (
-            XavierNormalInitializer() if weight_initializer is None else weight_initializer
+        self.W_ih = _trainable_parameter(
+            f"{self.name}_W_ih", (n_in, 3 * n_hidden), weight_initializer, XavierNormalInitializer()
         )
-        self.W_ih = trainable(
-            W_ih_initializer.initial_value((n_in, 3 * n_hidden)),
-            f"{self.name}_W_ih",
-            initializer=W_ih_initializer,
-        )
-
-        W_hh_initializer = (
-            OrthogonalInitializer() if recurrent_initializer is None else recurrent_initializer
-        )
-        self.W_hh = trainable(
-            W_hh_initializer.initial_value((n_hidden, 3 * n_hidden)),
+        self.W_hh = _trainable_parameter(
             f"{self.name}_W_hh",
-            initializer=W_hh_initializer,
+            (n_hidden, 3 * n_hidden),
+            recurrent_initializer,
+            OrthogonalInitializer(),
         )
-
         if bias:
-            b_initializer = ZeroInitializer() if bias_initializer is None else bias_initializer
-            self.b = trainable(
-                b_initializer.initial_value((3 * n_hidden,)),
-                f"{self.name}_b",
-                initializer=b_initializer,
+            self.b = _trainable_parameter(
+                f"{self.name}_b", (3 * n_hidden,), bias_initializer, ZeroInitializer()
             )
-            self.c = trainable(
-                b_initializer.initial_value((n_hidden,)),
-                f"{self.name}_c",
-                initializer=b_initializer,
+            self.c = _trainable_parameter(
+                f"{self.name}_c", (n_hidden,), bias_initializer, ZeroInitializer()
             )
 
     def step(self, x_t: TensorVariable, *state: TensorVariable) -> tuple[TensorVariable, ...]:
@@ -489,6 +463,14 @@ class GRU(Recurrent):
             ),
             name=name,
         )
+
+
+def _trainable_parameter(
+    name: str, shape: tuple[int, ...], initializer: Initializer | None, default: Initializer
+) -> TensorVariable:
+    """Build a trainable parameter of ``shape``, drawn by ``initializer``, or by ``default`` if None."""
+    chosen = default if initializer is None else initializer
+    return trainable(chosen.initial_value(shape), name, initializer=chosen)
 
 
 def _zero_state(X: TensorVariable, n_hidden: int, *parameters: TensorVariable) -> TensorVariable:
