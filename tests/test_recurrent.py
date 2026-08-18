@@ -1145,6 +1145,10 @@ def test_bidirectional_reads_the_mask_in_both_directions(rng):
     forward = GRU("fwd", n_in=4, n_hidden=3)
     backward = GRU("bwd", n_in=4, n_hidden=5)
     layer = Bidirectional(forward, backward)
+    # Drawn, not left at their defaults: a zero bias makes the zero state a fixed point, so the
+    # padding would not move the state and the mask would have nothing to undo.
+    draw_gru_parameters(forward, rng)
+    draw_gru_parameters(backward, rng)
 
     real = rng.normal(size=(3, 4)).astype(floatX)
     padded, mask_np = pad_to([real], padded_length=8)
