@@ -9,7 +9,7 @@ from pytensor.graph.op import Op
 from pytensor.tensor.pad import PadMode
 from pytensor.tensor.variable import TensorVariable
 
-from pytensor_ml.base import Layer, UnaryLayerOp
+from pytensor_ml.base import Layer, LayerOp, UnaryLayerOp
 from pytensor_ml.params import trainable_parameter
 from pytensor_ml.state import Initializer, XavierNormalInitializer, ZeroInitializer
 
@@ -219,6 +219,68 @@ class ConvLayer(UnaryLayerOp):
         if bias:
             out = out + bias[0]
         return [out]
+
+    def pullback(self, inputs, outputs, cotangents):
+        """
+        Differentiate through one :class:`ConvLayerGrad` rather than through the inner graph.
+
+        The default would inline the pullback into an anonymous ``OpFromGraph``, which no backend can
+        dispatch against, so the whole backward pass would run as the gather and its scatter whatever
+        kernels were available. ``compute_dX`` starts True and a rewrite lowers it where the input
+        gradient turns out to be unused; see :func:`~pytensor_ml.rewriting.conv.drop_unused_input_grad`.
+        """
+        X, W, *bias = inputs
+        (cotangent,) = cotangents
+
+        dX, dW = ConvLayerGrad(self.kernel_size, self.stride, self.dilation, compute_dX=True)(
+            X, W, cotangent
+        )
+        if not bias:
+            return [dX, dW]
+        # One bias per output channel, so its gradient sums the cotangent over everything else.
+        summed = cotangent.sum(axis=tuple(range(cotangent.ndim - 1)))
+        return [dX, dW, summed]
+
+
+class ConvLayerGrad(LayerOp):
+    """
+    The pullback of :class:`ConvLayer`, as a node a backend can dispatch against.
+
+    Both gradients are convolutions in their own right -- the input's is a full convolution of the
+    cotangent with the flipped kernel, the kernel's a correlation of the input with the cotangent -- so a
+    backend with a convolution kernel has one for each. The dispatches reach them by differentiating
+    that backend's own convolution rather than by spelling either out.
+
+    Parameters
+    ----------
+    kernel_size, stride, dilation : tuple of int
+        The forward convolution being differentiated.
+    compute_dX : bool
+        Return the input gradient alongside the kernel's. False drops it, which is right only where
+        nothing consumes it -- the first convolution of a network, whose input is data.
+    """
+
+    __props__ = ("kernel_size", "stride", "dilation", "compute_dX")
+
+    def __init__(
+        self,
+        kernel_size: tuple[int, ...],
+        stride: tuple[int, ...],
+        dilation: tuple[int, ...],
+        compute_dX: bool = True,
+        **kwargs,
+    ):
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.dilation = dilation
+        self.compute_dX = compute_dX
+        super().__init__(**kwargs)
+
+    def build_inner_graph(self, X, W, cotangent):
+        """Differentiate the forward correlation, which is what every dispatch also does."""
+        out = _correlate(X, W, self.kernel_size, self.stride, self.dilation)
+        wrt = [X, W] if self.compute_dX else [W]
+        return list(pt.grad(cost=None, wrt=wrt, known_grads={out: cotangent}))
 
 
 def _correlate(

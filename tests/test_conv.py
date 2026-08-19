@@ -6,7 +6,7 @@ import pytest
 from scipy.signal import correlate
 
 from pytensor_ml.layers import Conv1D, Input, Linear
-from pytensor_ml.layers.conv import ConvLayer, Im2Col, _extract_patches
+from pytensor_ml.layers.conv import ConvLayer, ConvLayerGrad, Im2Col, _extract_patches
 from pytensor_ml.loss import SquaredError
 from pytensor_ml.model import Model
 from pytensor_ml.optim import adam
@@ -481,3 +481,27 @@ def test_im2col_infers_the_shape_it_produces(rng):
 
     inferred = pytensor.function([X], patches.shape)(X_np)
     np.testing.assert_array_equal(inferred, pytensor.function([X], patches)(X_np).shape)
+
+
+def test_the_input_gradient_is_dropped_when_nothing_reads_it(rng):
+    """`ConvLayer.pullback` always asks for both gradients, because only the graph knows which are
+    wanted. The rewrite lowers `compute_dX` where the input gradient has no clients -- the first
+    convolution of a network -- so the backward computes one gradient rather than two."""
+    X = pt.tensor("X", shape=(4, 24, 3))
+    layer = Conv1D("conv", in_channels=3, out_channels=5, kernel_size=3)
+    cost = layer(X).sum()
+
+    def grad_op(targets):
+        fn = pytensor.function([X], targets)
+        return next(
+            node.op for node in fn.maker.fgraph.apply_nodes if isinstance(node.op, ConvLayerGrad)
+        )
+
+    assert grad_op([pt.grad(cost, layer.W)]).compute_dX is False
+    assert grad_op(pt.grad(cost, [layer.W, X])).compute_dX is True
+
+    # Dropping the output must not change the one that is kept.
+    X_np = rng.normal(size=(4, 24, 3)).astype(floatX)
+    alone = pytensor.function([X], pt.grad(cost, layer.W))(X_np)
+    alongside = pytensor.function([X], pt.grad(cost, [layer.W, X]))(X_np)[0]
+    np.testing.assert_allclose(alone, alongside, atol=ATOL)
