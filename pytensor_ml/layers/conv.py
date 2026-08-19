@@ -204,7 +204,7 @@ class _ConvNd(Layer):
         self.stride = _as_spatial_tuple(stride, self.n_spatial, "stride")
         self.dilation = _as_spatial_tuple(dilation, self.n_spatial, "dilation")
         self.padding = _resolve_padding(padding, self.kernel_size, self.dilation)
-        self.padding_mode = padding_mode
+        self.padding_mode: PadMode = padding_mode
         self.bias = bias
 
         # Receptive field, then input channels, then output: the layout flax and keras use, and the one
