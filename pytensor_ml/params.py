@@ -84,6 +84,30 @@ def trainable(
     return parameter
 
 
+def trainable_parameter(
+    name: str, shape: tuple[int, ...], initializer=None, default=None
+) -> TrainableParameter:
+    """
+    Build a trainable parameter of ``shape``, drawn by ``initializer``, or by ``default`` if None.
+
+    The layers all resolve a constructor keyword against the draw they would otherwise declare, so this
+    is the one place that rule lives.
+
+    Parameters
+    ----------
+    name : str
+        Name for the parameter.
+    shape : tuple of int
+        Shape to draw.
+    initializer : Initializer, optional
+        What the caller asked for. ``default`` is used when omitted.
+    default : Initializer
+        What the layer declares when the caller asks for nothing.
+    """
+    chosen = default if initializer is None else initializer
+    return trainable(chosen.initial_value(shape), name, initializer=chosen)
+
+
 def non_trainable(value, name=None, shape=None, strict=False, **kwargs) -> NonTrainableParameter:
     """
     Create a shared variable marked as non-trainable state, such as batch norm's running statistics.

@@ -10,7 +10,7 @@ from pytensor.tensor.variable import TensorVariable
 
 from pytensor_ml.activations import Activation, Sigmoid, Tanh
 from pytensor_ml.base import Layer
-from pytensor_ml.params import trainable
+from pytensor_ml.params import trainable_parameter
 from pytensor_ml.state import (
     Initializer,
     OrthogonalInitializer,
@@ -273,14 +273,14 @@ class ElmanCell(RecurrentCell):
 
         # Held directly rather than as a nested Linear: the projection runs inside the recurrence, and a
         # layer op there would bury its matmul in an inner graph where the scan rewrites cannot see it.
-        self.W_ih = _trainable_parameter(
+        self.W_ih = trainable_parameter(
             f"{self.name}_W_ih", (n_in, n_hidden), weight_initializer, XavierNormalInitializer()
         )
         if bias:
-            self.b = _trainable_parameter(
+            self.b = trainable_parameter(
                 f"{self.name}_b", (n_hidden,), bias_initializer, ZeroInitializer()
             )
-        self.W_hh = _trainable_parameter(
+        self.W_hh = trainable_parameter(
             f"{self.name}_W_hh",
             (n_hidden, n_hidden),
             recurrent_initializer,
@@ -429,23 +429,23 @@ class GRUCell(RecurrentCell):
         self.gate_activation = gate_activation if gate_activation is not None else Sigmoid()
         self.bias = bias
 
-        self.W_ih = _trainable_parameter(
+        self.W_ih = trainable_parameter(
             f"{self.name}_W_ih",
             (n_in, self._n_gates * n_hidden),
             weight_initializer,
             XavierNormalInitializer(),
         )
-        self.W_hh = _trainable_parameter(
+        self.W_hh = trainable_parameter(
             f"{self.name}_W_hh",
             (n_hidden, self._n_gates * n_hidden),
             recurrent_initializer,
             OrthogonalInitializer(),
         )
         if bias:
-            self.b = _trainable_parameter(
+            self.b = trainable_parameter(
                 f"{self.name}_b", (self._n_gates * n_hidden,), bias_initializer, ZeroInitializer()
             )
-            self.c = _trainable_parameter(
+            self.c = trainable_parameter(
                 f"{self.name}_c", (n_hidden,), bias_initializer, ZeroInitializer()
             )
 
@@ -611,20 +611,20 @@ class LSTMCell(RecurrentCell):
         self.gate_activation = gate_activation if gate_activation is not None else Sigmoid()
         self.bias = bias
 
-        self.W_ih = _trainable_parameter(
+        self.W_ih = trainable_parameter(
             f"{self.name}_W_ih",
             (n_in, self._n_gates * n_hidden),
             weight_initializer,
             XavierNormalInitializer(),
         )
-        self.W_hh = _trainable_parameter(
+        self.W_hh = trainable_parameter(
             f"{self.name}_W_hh",
             (n_hidden, self._n_gates * n_hidden),
             recurrent_initializer,
             OrthogonalInitializer(),
         )
         if bias:
-            self.b = _trainable_parameter(
+            self.b = trainable_parameter(
                 f"{self.name}_b", (self._n_gates * n_hidden,), bias_initializer, ZeroInitializer()
             )
 
@@ -778,14 +778,6 @@ class Bidirectional(Layer):
         )
         out.name = f"{self.name}_output"
         return out
-
-
-def _trainable_parameter(
-    name: str, shape: tuple[int, ...], initializer: Initializer | None, default: Initializer
-) -> TensorVariable:
-    """Build a trainable parameter of ``shape``, drawn by ``initializer``, or by ``default`` if None."""
-    chosen = default if initializer is None else initializer
-    return trainable(chosen.initial_value(shape), name, initializer=chosen)
 
 
 def _zero_state(X: TensorVariable, n_hidden: int, *parameters: TensorVariable) -> TensorVariable:
