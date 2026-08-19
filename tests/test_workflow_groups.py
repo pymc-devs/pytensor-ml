@@ -35,26 +35,36 @@ def collect_test_files(path):
     return sorted(target.rglob("test_*.py")) if target.is_dir() else [target]
 
 
-def test_every_test_file_runs_in_exactly_one_ci_group():
-    """The test job splits `tests/` across matrix groups by path, so a new file that nobody adds to a group
-    is silently never run. Compare the union of the groups against what is actually on disk."""
-    groups_by_file = {}
+def test_every_test_file_is_run_by_some_ci_job():
+    """A new test file that nobody adds to a group is silently never run. Both the core groups and the
+    `include` jobs count here, because a backend's dispatch tests are only reachable from `include` --
+    they need an OS or an extra install the core matrix does not give them."""
+    covered = {
+        file for _, paths in ci_subsets() for path in paths for file in collect_test_files(path)
+    }
+    on_disk = set((REPO_ROOT / "tests").rglob("test_*.py"))
+
+    missing = sorted(relative(file) for file in on_disk - covered)
+    unknown = sorted(relative(file) for file in covered - on_disk)
+
+    assert not missing, f"test files no CI job runs: {missing}"
+    assert not unknown, f"CI groups name files that do not exist: {unknown}"
+
+
+def test_no_test_file_is_in_two_core_groups():
+    """The core groups partition `tests/`, so a file in two of them is run twice and the split stops
+    balancing. The `include` jobs are deliberately allowed to overlap them -- the Windows smoke job
+    re-runs a few files a second time on a second platform."""
+    groups_by_file: dict = {}
     for group, paths in ci_group_paths().items():
         for path in paths:
             for file in collect_test_files(path):
                 groups_by_file.setdefault(file, []).append(group)
 
-    on_disk = sorted((REPO_ROOT / "tests").rglob("test_*.py"))
-
-    missing = sorted(relative(file) for file in set(on_disk) - set(groups_by_file))
     duplicated = {
         relative(file): groups for file, groups in groups_by_file.items() if len(groups) > 1
     }
-    unknown = sorted(relative(file) for file in set(groups_by_file) - set(on_disk))
-
-    assert not missing, f"test files in no CI group: {missing}"
-    assert not duplicated, f"test files in more than one CI group: {duplicated}"
-    assert not unknown, f"CI groups name files that do not exist: {unknown}"
+    assert not duplicated, f"test files in more than one core CI group: {duplicated}"
 
 
 def test_every_ci_group_path_exists():

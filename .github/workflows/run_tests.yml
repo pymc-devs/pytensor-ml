@@ -20,13 +20,17 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         python-version: ["3.12"]
+        # Off by default, flipped to 1 by the per-backend jobs under `include`. A core job installs no
+        # backend at all, which is what proves the library runs without one.
+        install-jax: [0]
+        install-mlx: [0]
+        install-torch: [0]
         # Groups are balanced on measured cold-compile-cache time, which is what a fresh runner pays.
         # tests/test_workflow_groups.py fails if a test file is missing from every group or listed twice.
         test-subset:
           - name: attention
             paths: |
               tests/test_attention.py
-              tests/dispatch/
           - name: layers
             paths: |
               tests/test_transformer.py
@@ -53,7 +57,27 @@ jobs:
               tests/test_workflow_groups.py
         # Windows runners are roughly twice as slow, and almost everything here is platform independent.
         # It runs one job over the parts that are not: file IO, paths, and compiling a graph to train.
+        # One job per backend, each installing only that backend. They live here rather than in
+        # `test-subset` because a matrix entry cannot change `os`, and mlx needs macOS.
         include:
+          - os: ubuntu-latest
+            python-version: "3.12"
+            install-jax: 1
+            test-subset:
+              name: dispatch-jax
+              paths: tests/dispatch/jax/
+          - os: macos-15
+            python-version: "3.12"
+            install-mlx: 1
+            test-subset:
+              name: dispatch-mlx
+              paths: tests/dispatch/mlx/
+          - os: ubuntu-latest
+            python-version: "3.12"
+            install-torch: 1
+            test-subset:
+              name: dispatch-torch
+              paths: tests/dispatch/pytorch/
           - os: windows-latest
             python-version: "3.12"
             test-subset:
@@ -116,6 +140,17 @@ jobs:
 
         # IMPORTANT: This may break caching of conda packages! See https://github.com/conda-incubator/setup-miniconda/issues/267
         use-only-tar-bz2: false
+
+    - name: Install the backend this job tests
+      run: |
+        conda activate pytensor_ml
+        if [[ $INSTALL_JAX == "1" ]]; then pip install "jax>=0.8,<0.9.1" jaxlib; fi
+        if [[ $INSTALL_MLX == "1" ]]; then pip install "mlx>=0.30,<0.32"; fi
+        if [[ $INSTALL_TORCH == "1" ]]; then pip install torch --index-url https://download.pytorch.org/whl/cpu; fi
+      env:
+        INSTALL_JAX: ${{ matrix.install-jax }}
+        INSTALL_MLX: ${{ matrix.install-mlx }}
+        INSTALL_TORCH: ${{ matrix.install-torch }}
 
     - name: Install current branch
       run: |

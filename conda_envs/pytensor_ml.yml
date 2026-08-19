@@ -31,7 +31,6 @@ dependencies:
   - pre-commit
   - mypy
 
-  # JAX backend for dispatch tests; via pip so Windows pulls CPU wheels instead of conda jaxlib
+  # No backend goes here. Each backend's dispatch tests get their own CI job that installs just that
+  # one, so the core jobs stay light and prove the library works with no backend present at all.
   - pip
-  - pip:
-      - jax
