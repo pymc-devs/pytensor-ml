@@ -32,6 +32,7 @@ jobs:
               tests/test_transformer.py
               tests/test_layers.py
               tests/test_recurrent.py
+              tests/test_conv.py
               tests/rewriting/
           - name: optim
             paths: |
