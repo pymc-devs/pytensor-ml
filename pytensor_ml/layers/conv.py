@@ -4,6 +4,8 @@ import pytensor.tensor as pt
 
 from pytensor.tensor.variable import TensorVariable
 
+from pytensor_ml.base import UnaryLayerOp
+
 
 def _extract_patches(
     X: TensorVariable,
@@ -46,3 +48,54 @@ def _extract_patches(
         windows.append(window.dimshuffle(*pattern))
 
     return X[(slice(None), *windows, slice(None))]
+
+
+class ConvLayer(UnaryLayerOp):
+    """
+    Cross-correlate an input with a kernel, over any number of spatial axes.
+
+    Marks the convolution as one node so a backend with a real kernel can be dispatched to it, the way
+    :class:`~pytensor_ml.layers.attention.AttentionLayer` is. The graph inside gathers every window and
+    contracts them against the kernel with a single ``Dot``, whose reduction runs over
+    ``prod(kernel_size) * in_channels`` -- deep enough to reach BLAS, which is what a convolution over
+    single-channel signal ops cannot offer.
+
+    Correlation, not convolution: the kernel is not flipped, matching torch, keras and flax.
+    """
+
+    __props__ = ("kernel_size", "stride", "dilation")
+
+    def __init__(
+        self,
+        kernel_size: tuple[int, ...],
+        stride: tuple[int, ...],
+        dilation: tuple[int, ...],
+        **kwargs,
+    ):
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.dilation = dilation
+        super().__init__(**kwargs)
+
+    def build_inner_graph(self, X, W, *bias):
+        """
+        Correlate ``X`` of shape ``(batch, *spatial, in_channels)`` with ``W`` of shape
+        ``(in_channels, out_channels, *kernel_size)``, optionally adding ``bias``.
+        """
+        patches = _extract_patches(X, self.kernel_size, self.stride, self.dilation)
+
+        # Windows first, then taps, then channels: flattening the trailing taps-and-channels axes into
+        # one is what turns the correlation into a matmul, and it matches how W is flattened below.
+        n_spatial = len(self.kernel_size)
+        taps = patches.shape[1 + n_spatial :]
+        windows = patches.shape[: 1 + n_spatial]
+        flat = patches.reshape((*windows, pt.prod(taps)))
+
+        # The kernel is stored input-dimension-first, which is what `fans` reads to size a draw; the
+        # contraction wants taps-then-input-channel to match how the patches flattened. The transpose is
+        # over the kernel alone, which is negligible beside the matmul it feeds.
+        kernel = W.transpose(*range(2, 2 + n_spatial), 0, 1)
+        out = flat @ kernel.reshape((-1, kernel.shape[-1]))
+        if bias:
+            out = out + bias[0]
+        return [out]
