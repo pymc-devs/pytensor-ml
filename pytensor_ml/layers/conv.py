@@ -87,15 +87,15 @@ class ConvLayer(UnaryLayerOp):
         """
         patches = _extract_patches(X, self.kernel_size, self.stride, self.dilation)
 
-        # Windows first, then taps, then channels: flattening the trailing taps-and-channels axes into
-        # one is what turns the correlation into a matmul, and it matches how W is flattened below.
+        # Patches come out as batch and windows, then taps, then channels. Flattening the trailing taps
+        # and channels into one axis is what turns the correlation into a matmul, and the kernel's own
+        # leading axes are already in that order, so both reshapes are contiguous and nothing is
+        # permuted.
         n_spatial = len(self.kernel_size)
-        taps = patches.shape[1 + n_spatial :]
-        windows = patches.shape[: 1 + n_spatial]
-        flat = patches.reshape((*windows, pt.prod(taps)))
+        kept = patches.shape[: 1 + n_spatial]
+        contracted = patches.shape[1 + n_spatial :]
+        flat = patches.reshape((*kept, pt.prod(contracted)))
 
-        # The kernel's taps-then-input-channel axes are already in the order the patches flattened, so
-        # the reshape is contiguous and nothing has to be permuted first.
         out = flat @ W.reshape((-1, W.shape[-1]))
         if bias:
             out = out + bias[0]
