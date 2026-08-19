@@ -108,11 +108,11 @@ def correlate_reference(X_np, W_np, stride=1, dilation=1):
     so dilation is spelled by zero-stuffing the kernel and stride by subsampling the result -- both
     definitions rather than reimplementations of what the layer does.
     """
-    in_channels, out_channels, *kernel = W_np.shape
+    *kernel, in_channels, out_channels = W_np.shape
     spans = tuple(dilation * (extent - 1) + 1 for extent in kernel)
     if dilation != 1:
-        stuffed = np.zeros((in_channels, out_channels, *spans), dtype=W_np.dtype)
-        stuffed[(slice(None), slice(None), *(slice(None, None, dilation) for _ in kernel))] = W_np
+        stuffed = np.zeros((*spans, in_channels, out_channels), dtype=W_np.dtype)
+        stuffed[(*(slice(None, None, dilation) for _ in kernel), slice(None), slice(None))] = W_np
         W_np = stuffed
     outputs = []
     for image in X_np:
@@ -121,7 +121,7 @@ def correlate_reference(X_np, W_np, stride=1, dilation=1):
             total = None
             for in_channel in range(in_channels):
                 term = correlate(
-                    image[..., in_channel], W_np[in_channel, out_channel], mode="valid"
+                    image[..., in_channel], W_np[..., in_channel, out_channel], mode="valid"
                 )
                 total = term if total is None else total + term
             planes.append(total)
@@ -141,13 +141,13 @@ def test_the_conv_op_correlates_like_scipy(spatial, kernel_size, rng):
     scipy's correlation rather than against another pytensor graph."""
     in_channels, out_channels = 3, 4
     X = pt.tensor("X", shape=(None, *(None for _ in spatial), in_channels))
-    W = pt.tensor("W", shape=(in_channels, out_channels, *kernel_size))
+    W = pt.tensor("W", shape=(*kernel_size, in_channels, out_channels))
     op = ConvLayer(
         kernel_size=kernel_size, stride=(1,) * len(spatial), dilation=(1,) * len(spatial)
     )
 
     X_np = rng.normal(size=(2, *spatial, in_channels)).astype(floatX)
-    W_np = rng.normal(size=(in_channels, out_channels, *kernel_size)).astype(floatX)
+    W_np = rng.normal(size=(*kernel_size, in_channels, out_channels)).astype(floatX)
 
     np.testing.assert_allclose(
         op(X, W).eval({X: X_np, W: W_np}), correlate_reference(X_np, W_np), atol=ATOL
@@ -158,11 +158,11 @@ def test_the_conv_op_does_not_flip_its_kernel(rng):
     """Correlation, not convolution. An asymmetric kernel is the only thing that tells them apart, and
     a flipped implementation would still agree with scipy's ``convolve``, so pin the convention."""
     X = pt.tensor("X", shape=(None, None, 1))
-    W = pt.tensor("W", shape=(1, 1, 2))
+    W = pt.tensor("W", shape=(2, 1, 1))
     op = ConvLayer(kernel_size=(2,), stride=(1,), dilation=(1,))
 
     X_np = np.array([[[1.0], [0.0], [0.0]]], dtype=floatX)
-    W_np = np.array([[[1.0, 10.0]]], dtype=floatX)
+    W_np = np.array([[[1.0]], [[10.0]]], dtype=floatX)
 
     # The kernel's first tap lands on the input's first element; flipped, the 10 would land there.
     np.testing.assert_allclose(op(X, W).eval({X: X_np, W: W_np})[0, :, 0], [1.0, 0.0], atol=ATOL)
@@ -172,12 +172,12 @@ def test_the_conv_op_adds_an_optional_bias(rng):
     """The bias is a third input rather than a separate Elemwise outside the op, so that a backend
     kernel that fuses it has something to fuse."""
     X = pt.tensor("X", shape=(None, None, 2))
-    W = pt.tensor("W", shape=(2, 4, 3))
+    W = pt.tensor("W", shape=(3, 2, 4))
     b = pt.tensor("b", shape=(4,))
     op = ConvLayer(kernel_size=(3,), stride=(1,), dilation=(1,))
 
     X_np = rng.normal(size=(2, 8, 2)).astype(floatX)
-    W_np = rng.normal(size=(2, 4, 3)).astype(floatX)
+    W_np = rng.normal(size=(3, 2, 4)).astype(floatX)
     b_np = rng.normal(size=(4,)).astype(floatX)
 
     without = op(X, W).eval({X: X_np, W: W_np})
@@ -191,11 +191,11 @@ def test_the_conv_op_takes_a_gradient_matching_finite_differences(rng):
     against finite differences in float64, where the step size is meaningful."""
     with pytensor.config.change_flags(floatX="float64"):
         X = pt.tensor("X", shape=(None, None, None, 2), dtype="float64")
-        W = pt.tensor("W", shape=(2, 3, 2, 2), dtype="float64")
+        W = pt.tensor("W", shape=(2, 2, 2, 3), dtype="float64")
         op = ConvLayer(kernel_size=(2, 2), stride=(1, 1), dilation=(1, 1))
 
         X_np = rng.normal(size=(2, 5, 5, 2))
-        W_np = rng.normal(size=(2, 3, 2, 2))
+        W_np = rng.normal(size=(2, 2, 2, 3))
         cost = (op(X, W) ** 2).sum()
 
         for wrt, value in ((X, X_np), (W, W_np)):
@@ -220,7 +220,7 @@ def test_conv1d_correlates_like_scipy_and_adds_its_bias(rng):
     layer = Conv1D("conv", in_channels=3, out_channels=5, kernel_size=4)
     out = layer(X)
 
-    W_np = rng.normal(size=(3, 5, 4)).astype(floatX)
+    W_np = rng.normal(size=(4, 3, 5)).astype(floatX)
     b_np = rng.normal(size=(5,)).astype(floatX)
     layer.W.set_value(W_np)
     layer.b.set_value(b_np)
@@ -252,7 +252,7 @@ def test_conv1d_pads_with_the_mode_it_is_given():
     edge padding does not."""
     X = pt.tensor("X", shape=(None, None, 1))
     X_np = np.ones((1, 6, 1), dtype=floatX)
-    ones = np.ones((1, 1, 3), dtype=floatX)
+    ones = np.ones((3, 1, 1), dtype=floatX)
 
     zero_padded = Conv1D("c", 1, 1, 3, padding="same", bias=False)
     zero_padded.W.set_value(ones)
@@ -275,7 +275,7 @@ def test_conv1d_bias_is_optional(bias, rng):
     layer = Conv1D("conv", in_channels=2, out_channels=3, kernel_size=2, bias=bias)
     out = layer(X)
 
-    W_np = rng.normal(size=(2, 3, 2)).astype(floatX)
+    W_np = rng.normal(size=(2, 2, 3)).astype(floatX)
     layer.W.set_value(W_np)
     shift = np.zeros(3, dtype=floatX)
     if bias:
@@ -295,7 +295,7 @@ def test_conv1d_draws_its_kernel_with_the_receptive_field_in_the_fans():
     for the wrong fans and nothing else here would notice."""
     layer = Conv1D("conv", in_channels=8, out_channels=16, kernel_size=5)
 
-    assert layer.W.get_value().shape == (8, 16, 5)
+    assert layer.W.get_value().shape == (5, 8, 16)
     assert fans(layer.W.get_value().shape) == (8 * 5, 16 * 5)
     assert layer.W.get_value().std() == pytest.approx(np.sqrt(2.0 / (40 + 80)), rel=0.15)
 
@@ -312,7 +312,7 @@ def test_conv1d_forwards_its_initializers_to_its_parameters():
         bias_initializer=OneInitializer(),
     )
 
-    np.testing.assert_array_equal(layer.W.get_value(), np.zeros((2, 3, 2)))
+    np.testing.assert_array_equal(layer.W.get_value(), np.zeros((2, 2, 3)))
     np.testing.assert_array_equal(layer.b.get_value(), np.ones(3))
 
 
@@ -400,7 +400,7 @@ def test_conv1d_strides_and_dilates_like_scipy(stride, dilation, rng):
         "conv", in_channels=3, out_channels=4, kernel_size=3, stride=stride, dilation=dilation
     )
 
-    W_np = rng.normal(size=(3, 4, 3)).astype(floatX)
+    W_np = rng.normal(size=(3, 3, 4)).astype(floatX)
     b_np = rng.normal(size=(4,)).astype(floatX)
     layer.W.set_value(W_np)
     layer.b.set_value(b_np)
@@ -423,3 +423,24 @@ def test_conv1d_rejects_a_per_axis_argument_of_the_wrong_length():
 
     with pytest.raises(ValueError, match="stride must be an int"):
         Conv1D("conv", in_channels=1, out_channels=1, kernel_size=3, stride=(1, 1))
+
+
+def test_a_kernel_of_one_is_a_linear_layer_applied_per_step(rng):
+    """A one-tap convolution is a matrix applied at every position, so it has to agree with `Linear` on
+    the same weights. That pins the two conventions together: the kernel's trailing axes are the same
+    ``(in, out)`` a weight matrix is, so copying one into the other needs a new axis and nothing else."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    linear = Linear("dense", 4, 6)
+    conv = Conv1D("conv", in_channels=4, out_channels=6, kernel_size=1)
+
+    W_np = rng.normal(size=(4, 6)).astype(floatX)
+    b_np = rng.normal(size=(6,)).astype(floatX)
+    linear.W.set_value(W_np)
+    linear.b.set_value(b_np)
+    conv.W.set_value(W_np[None])
+    conv.b.set_value(b_np)
+
+    assert fans(conv.W.get_value().shape) == fans(linear.W.get_value().shape)
+
+    X_np = rng.normal(size=(3, 7, 4)).astype(floatX)
+    np.testing.assert_allclose(conv(X).eval({X: X_np}), linear(X).eval({X: X_np}), atol=ATOL)

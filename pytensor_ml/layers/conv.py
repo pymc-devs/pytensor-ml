@@ -83,7 +83,7 @@ class ConvLayer(UnaryLayerOp):
     def build_inner_graph(self, X, W, *bias):
         """
         Correlate ``X`` of shape ``(batch, *spatial, in_channels)`` with ``W`` of shape
-        ``(in_channels, out_channels, *kernel_size)``, optionally adding ``bias``.
+        ``(*kernel_size, in_channels, out_channels)``, optionally adding ``bias``.
         """
         patches = _extract_patches(X, self.kernel_size, self.stride, self.dilation)
 
@@ -94,11 +94,9 @@ class ConvLayer(UnaryLayerOp):
         windows = patches.shape[: 1 + n_spatial]
         flat = patches.reshape((*windows, pt.prod(taps)))
 
-        # The kernel is stored input-dimension-first, which is what `fans` reads to size a draw; the
-        # contraction wants taps-then-input-channel to match how the patches flattened. The transpose is
-        # over the kernel alone, which is negligible beside the matmul it feeds.
-        kernel = W.transpose(*range(2, 2 + n_spatial), 0, 1)
-        out = flat @ kernel.reshape((-1, kernel.shape[-1]))
+        # The kernel's taps-then-input-channel axes are already in the order the patches flattened, so
+        # the reshape is contiguous and nothing has to be permuted first.
+        out = flat @ W.reshape((-1, W.shape[-1]))
         if bias:
             out = out + bias[0]
         return [out]
@@ -209,12 +207,11 @@ class _ConvNd(Layer):
         self.padding_mode = padding_mode
         self.bias = bias
 
-        # Input dimension first, then output, then the receptive field, which is the layout `fans` reads
-        # to size a fan-scaled draw. A kernel-first layout would have it take two kernel extents as the
-        # fans and silently mis-scale every convolution.
+        # Receptive field, then input channels, then output: the layout flax and keras use, and the one
+        # `fans` reads, since it takes the two trailing dimensions as the features.
         self.W = trainable_parameter(
             f"{self.name}_W",
-            (in_channels, out_channels, *self.kernel_size),
+            (*self.kernel_size, in_channels, out_channels),
             weight_initializer,
             XavierNormalInitializer(),
         )
@@ -284,7 +281,7 @@ class Conv1D(_ConvNd):
 
     .. math::
 
-        y_{t,o} = b_o + \sum_{c} \sum_{j} x_{t s + j d,\,c} \, W_{c,o,j},
+        y_{t,o} = b_o + \sum_{c} \sum_{j} x_{t s + j d,\,c} \, W_{j,c,o},
 
     with :math:`s` the stride and :math:`d` the dilation. The kernel is not flipped, so this is
     correlation in the signal-processing sense and convolution in the sense every ML framework means.

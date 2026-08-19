@@ -108,12 +108,13 @@ def fans(shape: tuple[int, ...]) -> tuple[int, int]:
     r"""
     Return the number of units feeding into and out of one position of a parameter of ``shape``.
 
-    Weights here are laid out input dimension first, as :class:`~pytensor_ml.layers.Linear` builds
-    ``(n_in, n_out)`` for ``X @ W`` and :class:`~pytensor_ml.layers.Embedding` builds
-    ``(vocabulary, features)``, so the leading dimension is the fan-in and the second the fan-out. This is
-    the transpose of torch's convention, where the output dimension leads. Any dimension past the second is
-    a receptive field: every input reaches an output at each of its offsets, so both fans carry a factor of
-    :math:`\prod \text{kernel}`.
+    The two trailing dimensions are the input and output features, in that order, as
+    :class:`~pytensor_ml.layers.Linear` builds ``(n_in, n_out)`` for ``X @ W``,
+    :class:`~pytensor_ml.layers.Embedding` builds ``(vocabulary, features)`` and
+    :class:`~pytensor_ml.layers.Conv1D` builds ``(*kernel_size, in_channels, out_channels)``. This is the
+    layout flax and keras use and the transpose of torch's, where the output dimension leads. Anything
+    ahead of those two is a receptive field: every input reaches an output at each of its offsets, so
+    both fans carry a factor of :math:`\prod \text{kernel}`.
 
     Only the sum of the two matters to a Xavier draw, which is why the orientation is invisible there and
     load-bearing for anything scaling by fan-in alone.
@@ -136,8 +137,8 @@ def fans(shape: tuple[int, ...]) -> tuple[int, int]:
             f"got shape {shape}. A bias or a norm scale has no fans; give it an initializer of its own -- "
             "`trainable(value, name, initializer=ZeroInitializer())`."
         )
-    receptive_field = int(np.prod(shape[2:]))
-    return shape[0] * receptive_field, shape[1] * receptive_field
+    receptive_field = int(np.prod(shape[:-2]))
+    return shape[-2] * receptive_field, shape[-1] * receptive_field
 
 
 class XavierUniformInitializer(Initializer):

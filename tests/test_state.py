@@ -149,10 +149,13 @@ def test_calling_an_initializer_assigns_the_parameter_in_place():
 
 
 def test_a_convolution_kernel_folds_its_receptive_field_into_both_fans():
-    """Summing the shape is the fan computation only for a matrix. For an ``(in, out, kH, kW)`` kernel every
+    """Summing the shape is the fan computation only for a matrix. For a ``(kH, kW, in, out)`` kernel every
     input channel reaches an output at each of the kH*kW offsets, so leaving the receptive field out of the
-    fans overstates the spread: 0.258 where the correct scale for this shape is 0.096."""
-    kernel_shape = (8, 16, 3, 3)  # asymmetric, so the orientation of the two fans is pinned as well
+    fans overstates the spread: 0.258 where the correct scale for this shape is 0.096.
+
+    The features are the two trailing dimensions, which is what makes one rule cover a weight matrix and a
+    kernel alike, and it is the layout flax and keras store a kernel in."""
+    kernel_shape = (3, 3, 8, 16)  # asymmetric, so the orientation of the two fans is pinned as well
     fan_in, fan_out = fans(kernel_shape)
     assert (fan_in, fan_out) == (8 * 9, 16 * 9)
 
