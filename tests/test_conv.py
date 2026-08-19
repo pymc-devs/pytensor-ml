@@ -6,7 +6,7 @@ import pytest
 from scipy.signal import correlate
 
 from pytensor_ml.layers import Conv1D, Input, Linear
-from pytensor_ml.layers.conv import ConvLayer, _extract_patches
+from pytensor_ml.layers.conv import ConvLayer, Im2Col, _extract_patches
 from pytensor_ml.loss import SquaredError
 from pytensor_ml.model import Model
 from pytensor_ml.optim import adam
@@ -444,3 +444,40 @@ def test_a_kernel_of_one_is_a_linear_layer_applied_per_step(rng):
 
     X_np = rng.normal(size=(3, 7, 4)).astype(floatX)
     np.testing.assert_allclose(conv(X).eval({X: X_np}), linear(X).eval({X: X_np}), atol=ATOL)
+
+
+@pytest.mark.parametrize(
+    "spatial, kernel_size, stride, dilation",
+    [
+        ((11,), (3,), (1,), (1,)),
+        ((11,), (3,), (2,), (2,)),
+        ((7, 9), (2, 3), (2, 1), (1, 2)),
+        ((6, 6, 6), (2, 2, 2), (1, 1, 1), (1, 1, 1)),
+    ],
+    ids=["1d", "1d_strided_dilated", "2d_asymmetric", "3d"],
+)
+def test_im2col_matches_the_reference_gather_at_every_rank(
+    spatial, kernel_size, stride, dilation, rng
+):
+    """The op stands in for the advanced-indexing gather, so it has to agree with it exactly, at every
+    rank and not only the ranks a layer happens to build. The 3-D case is the regression: a dispatch
+    that handles some ranks and refuses the rest does not fall back, it fails to compile."""
+    X = pt.tensor("X", shape=(2, *spatial, 3))
+    X_np = rng.normal(size=(2, *spatial, 3)).astype(floatX)
+
+    reference = _extract_patches(X, kernel_size, stride, dilation).eval({X: X_np})
+    got = pytensor.function([X], Im2Col(kernel_size, stride, dilation)(X))(X_np)
+
+    assert got.shape == reference.shape
+    np.testing.assert_array_equal(got, reference)
+
+
+def test_im2col_infers_the_shape_it_produces(rng):
+    """`infer_shape` is what lets the rest of the graph reason about the gather without running it, so
+    a formula that drifts from `perform` would mis-shape everything downstream and only fail later."""
+    X = pt.tensor("X", shape=(None, None, 3))
+    patches = Im2Col((3,), (2,), (2,))(X)
+    X_np = rng.normal(size=(2, 13, 3)).astype(floatX)
+
+    inferred = pytensor.function([X], patches.shape)(X_np)
+    np.testing.assert_array_equal(inferred, pytensor.function([X], patches)(X_np).shape)

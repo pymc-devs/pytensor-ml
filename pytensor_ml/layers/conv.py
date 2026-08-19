@@ -1,13 +1,156 @@
 from collections.abc import Sequence
 
+import numpy as np
 import pytensor.tensor as pt
 
+from numpy.lib.stride_tricks import sliding_window_view
+from pytensor.graph.basic import Apply
+from pytensor.graph.op import Op
 from pytensor.tensor.pad import PadMode
 from pytensor.tensor.variable import TensorVariable
 
 from pytensor_ml.base import Layer, UnaryLayerOp
 from pytensor_ml.params import trainable_parameter
 from pytensor_ml.state import Initializer, XavierNormalInitializer, ZeroInitializer
+
+
+def _window_span(extent: int, spacing: int) -> int:
+    """How far one window reaches along an axis, once dilation has spread its taps."""
+    return spacing * (extent - 1) + 1
+
+
+def _window_indices(
+    X: TensorVariable, kernel_size: Sequence[int], stride: Sequence[int], dilation: Sequence[int]
+) -> list[TensorVariable]:
+    """One advanced index per spatial axis, carrying that axis's windows and its taps.
+
+    Each broadcasts against the others, so indexing with all of them at once gives windows-then-taps in
+    order. Shared by the gather's reference graph and by the scatter that reverses it.
+    """
+    n_spatial = len(kernel_size)
+    indices = []
+    for axis, (extent, step, spacing) in enumerate(zip(kernel_size, stride, dilation)):
+        span = _window_span(extent, spacing)
+        starts = pt.arange(0, X.shape[1 + axis] - span + 1, step)
+        window = starts[:, None] + pt.arange(extent)[None, :] * spacing
+
+        pattern: list[int | str] = ["x"] * (2 * n_spatial)
+        pattern[axis] = 0
+        pattern[n_spatial + axis] = 1
+        indices.append(window.dimshuffle(*pattern))
+    return indices
+
+
+def _scatter_patches(
+    cotangent: TensorVariable,
+    X: TensorVariable,
+    kernel_size: Sequence[int],
+    stride: Sequence[int],
+    dilation: Sequence[int],
+) -> TensorVariable:
+    """Add each window's cotangent back at the position it was gathered from.
+
+    Windows overlap, so a position reached by several of them accumulates all of their contributions --
+    which is why this is a scatter-add rather than an assignment.
+    """
+    indices = _window_indices(X, kernel_size, stride, dilation)
+    zeros = pt.zeros(X.shape, dtype=cotangent.dtype)
+    return pt.inc_subtensor(zeros[(slice(None), *indices, slice(None))], cotangent)
+
+
+class Im2Col(Op):
+    """
+    Gather every window a kernel visits, as one node a backend can put a real copy behind.
+
+    The equivalent advanced-indexing graph does scalar index arithmetic per element; the copy this
+    describes is one contiguous channel-row per ``(batch, window, tap)``, which is the difference between
+    a few GB/s and memory bandwidth. It sits inside :class:`ConvLayer`'s inner graph, so a backend that
+    dispatches the convolution itself never reaches it.
+
+    Parameters
+    ----------
+    kernel_size, stride, dilation : tuple of int
+        One entry per spatial axis.
+    """
+
+    __props__ = ("kernel_size", "stride", "dilation")
+
+    def __init__(
+        self,
+        kernel_size: Sequence[int],
+        stride: Sequence[int],
+        dilation: Sequence[int],
+    ):
+        self.kernel_size = tuple(kernel_size)
+        self.stride = tuple(stride)
+        self.dilation = tuple(dilation)
+
+    def __call__(self, *inputs, **kwargs) -> TensorVariable:
+        """Narrow the single output to a tensor, which ``Op.__call__`` cannot know it is."""
+        out = super().__call__(*inputs, **kwargs)
+        assert isinstance(out, TensorVariable), "Im2Col produces one output"
+        return out
+
+    def make_node(self, X):
+        X = pt.as_tensor(X)
+        n_spatial = len(self.kernel_size)
+        spatial = [
+            None
+            if X.type.shape[1 + axis] is None
+            else (
+                X.type.shape[1 + axis] - _window_span(self.kernel_size[axis], self.dilation[axis])
+            )
+            // self.stride[axis]
+            + 1
+            for axis in range(n_spatial)
+        ]
+        out_type = pt.tensor(
+            dtype=X.type.dtype,
+            shape=(X.type.shape[0], *spatial, *self.kernel_size, X.type.shape[-1]),
+        )
+        return Apply(self, [X], [out_type])
+
+    def perform(self, node, inputs, outputs):
+        (X,) = inputs
+        n_spatial = len(self.kernel_size)
+        spans = tuple(
+            _window_span(self.kernel_size[axis], self.dilation[axis]) for axis in range(n_spatial)
+        )
+
+        # (batch, *windows, channels, *spans), a view over X with nothing copied yet
+        view = sliding_window_view(X, spans, axis=tuple(range(1, 1 + n_spatial)))
+        view = view[
+            (
+                slice(None),
+                *(slice(None, None, step) for step in self.stride),
+                slice(None),
+                *(slice(None, None, spacing) for spacing in self.dilation),
+            )
+        ]
+        # channels trail the taps in our layout, so move that axis past them and make it contiguous
+        order = (
+            0,
+            *range(1, 1 + n_spatial),
+            *range(2 + n_spatial, 2 + 2 * n_spatial),
+            1 + n_spatial,
+        )
+        outputs[0][0] = np.ascontiguousarray(view.transpose(order))
+
+    def infer_shape(self, node, input_shapes):
+        [(batch, *spatial, channels)] = input_shapes
+        windows = [
+            (spatial[axis] - _window_span(self.kernel_size[axis], self.dilation[axis]))
+            // self.stride[axis]
+            + 1
+            for axis in range(len(self.kernel_size))
+        ]
+        return [[batch, *windows, *self.kernel_size, channels]]
+
+    def pullback(self, inputs, outputs, cotangents):
+        """Scatter each window's cotangent back where it was gathered from."""
+        (X,) = inputs
+        (cotangent,) = cotangents
+        return [_scatter_patches(cotangent, X, self.kernel_size, self.stride, self.dilation)]
 
 
 def _extract_patches(
@@ -36,21 +179,8 @@ def _extract_patches(
         Shape ``(batch, *out_spatial, *kernel_size, channels)``, where ``out_spatial`` counts the
         windows that fit.
     """
-    n_spatial = len(kernel_size)
-    windows = []
-    for axis, (extent, step, spacing) in enumerate(zip(kernel_size, stride, dilation)):
-        span = spacing * (extent - 1) + 1
-        starts = pt.arange(0, X.shape[1 + axis] - span + 1, step)
-        window = starts[:, None] + pt.arange(extent)[None, :] * spacing
-
-        # One advanced index per spatial axis, each carrying its own window axis and its own tap axis
-        # and broadcasting against the others, so the gathered result is windows-then-taps in order.
-        pattern: list[int | str] = ["x"] * (2 * n_spatial)
-        pattern[axis] = 0
-        pattern[n_spatial + axis] = 1
-        windows.append(window.dimshuffle(*pattern))
-
-    return X[(slice(None), *windows, slice(None))]
+    indices = _window_indices(X, kernel_size, stride, dilation)
+    return X[(slice(None), *indices, slice(None))]
 
 
 class ConvLayer(UnaryLayerOp):
@@ -85,21 +215,32 @@ class ConvLayer(UnaryLayerOp):
         Correlate ``X`` of shape ``(batch, *spatial, in_channels)`` with ``W`` of shape
         ``(*kernel_size, in_channels, out_channels)``, optionally adding ``bias``.
         """
-        patches = _extract_patches(X, self.kernel_size, self.stride, self.dilation)
-
-        # Patches come out as batch and windows, then taps, then channels. Flattening the trailing taps
-        # and channels into one axis is what turns the correlation into a matmul, and the kernel's own
-        # leading axes are already in that order, so both reshapes are contiguous and nothing is
-        # permuted.
-        n_spatial = len(self.kernel_size)
-        kept = patches.shape[: 1 + n_spatial]
-        contracted = patches.shape[1 + n_spatial :]
-        flat = patches.reshape((*kept, pt.prod(contracted)))
-
-        out = flat @ W.reshape((-1, W.shape[-1]))
+        out = _correlate(X, W, self.kernel_size, self.stride, self.dilation)
         if bias:
             out = out + bias[0]
         return [out]
+
+
+def _correlate(
+    X: TensorVariable,
+    W: TensorVariable,
+    kernel_size: Sequence[int],
+    stride: Sequence[int],
+    dilation: Sequence[int],
+) -> TensorVariable:
+    """
+    Cross-correlate ``(batch, *spatial, in_channels)`` with ``(*kernel_size, in_channels, out_channels)``.
+
+    Patches come out as batch and windows, then taps, then channels. Flattening the trailing taps and
+    channels into one axis is what turns the correlation into a matmul, and the kernel's own leading axes
+    are already in that order, so both reshapes are contiguous and nothing is permuted.
+    """
+    patches = Im2Col(kernel_size, stride, dilation)(X)
+    n_spatial = len(kernel_size)
+    kept = patches.shape[: 1 + n_spatial]
+    contracted = patches.shape[1 + n_spatial :]
+    flat = patches.reshape((*kept, pt.prod(contracted)))
+    return flat @ W.reshape((-1, W.shape[-1]))
 
 
 def _resolve_padding(
@@ -234,7 +375,7 @@ class _ConvNd(Layer):
             length = X.type.shape[1 + axis]
             if length is None:
                 continue
-            span = spacing * (extent - 1) + 1
+            span = _window_span(extent, spacing)
             if length + before + after < span:
                 raise ValueError(
                     f"{self.name} needs at least {span} elements along spatial axis {axis} to place one "
