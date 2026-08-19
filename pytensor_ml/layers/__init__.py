@@ -8,6 +8,7 @@ from pytensor_ml.layers.attention import (
     scaled_dot_product_attention,
 )
 from pytensor_ml.layers.combinators import Concatenate, Input, Sequential, Squeeze
+from pytensor_ml.layers.conv import Conv1D, ConvLayer
 from pytensor_ml.layers.dropout import Dropout, DropoutLayer
 from pytensor_ml.layers.embedding import Embedding, EmbeddingLayer
 from pytensor_ml.layers.linear import Linear, LinearLayer
@@ -40,6 +41,8 @@ __all__ = [
     "Bidirectional",
     "CausalSelfAttention",
     "Concatenate",
+    "Conv1D",
+    "ConvLayer",
     "Dropout",
     "ElmanCell",
     "Embedding",

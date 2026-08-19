@@ -5,7 +5,13 @@ import pytest
 
 from scipy.signal import correlate
 
+from pytensor_ml.layers import Conv1D, Input, Linear
 from pytensor_ml.layers.conv import ConvLayer, _extract_patches
+from pytensor_ml.loss import SquaredError
+from pytensor_ml.model import Model
+from pytensor_ml.optim import adam
+from pytensor_ml.pytensorf import collect_trainable_params
+from pytensor_ml.state import OneInitializer, ZeroInitializer, fans
 
 floatX = pytensor.config.floatX
 
@@ -205,3 +211,215 @@ def test_the_conv_op_takes_a_gradient_matching_finite_differences(rng):
                 down = cost.eval({X: X_np, W: W_np} | {wrt: nudged.reshape(value.shape)})
                 flat[index] = (up - down) / (2 * step)
             np.testing.assert_allclose(analytic, numeric, rtol=1e-5, atol=1e-6)
+
+
+def test_conv1d_correlates_like_scipy_and_adds_its_bias(rng):
+    """The layer is padding, parameters and a call. Checked against the reference rather than against
+    the op, so a layer that padded the wrong axis or transposed its kernel would show up."""
+    X = pt.tensor("X", shape=(None, None, 3))
+    layer = Conv1D("conv", in_channels=3, out_channels=5, kernel_size=4)
+    out = layer(X)
+
+    W_np = rng.normal(size=(3, 5, 4)).astype(floatX)
+    b_np = rng.normal(size=(5,)).astype(floatX)
+    layer.W.set_value(W_np)
+    layer.b.set_value(b_np)
+    X_np = rng.normal(size=(2, 11, 3)).astype(floatX)
+
+    np.testing.assert_allclose(
+        out.eval({X: X_np}), correlate_reference(X_np, W_np) + b_np, atol=ATOL
+    )
+
+
+@pytest.mark.parametrize(
+    "kernel_size, padding, expected",
+    [(3, "valid", 8), (3, "same", 10), (4, "same", 10), (3, 2, 12)],
+    ids=["valid", "same_odd", "same_even", "explicit"],
+)
+def test_conv1d_pads_to_the_length_it_promises(kernel_size, padding, expected, rng):
+    """`same` is the one that has to hold at even kernel sizes, where the padding cannot be symmetric
+    and the output length is the thing the name is a claim about."""
+    X = pt.tensor("X", shape=(None, None, 2))
+    layer = Conv1D("conv", in_channels=2, out_channels=3, kernel_size=kernel_size, padding=padding)
+
+    got = layer(X).eval({X: rng.normal(size=(2, 10, 2)).astype(floatX)})
+    assert got.shape == (2, expected, 3)
+
+
+def test_conv1d_pads_with_the_mode_it_is_given():
+    """A padding mode reaches `pt.pad`, so an edge-padded input repeats its boundary rather than
+    fading to zero. With a summing kernel over a constant input, zero padding shows at the edges and
+    edge padding does not."""
+    X = pt.tensor("X", shape=(None, None, 1))
+    X_np = np.ones((1, 6, 1), dtype=floatX)
+    ones = np.ones((1, 1, 3), dtype=floatX)
+
+    zero_padded = Conv1D("c", 1, 1, 3, padding="same", bias=False)
+    zero_padded.W.set_value(ones)
+    edge_padded = Conv1D("c", 1, 1, 3, padding="same", padding_mode="edge", bias=False)
+    edge_padded.W.set_value(ones)
+
+    np.testing.assert_allclose(
+        zero_padded(X).eval({X: X_np})[0, :, 0], [2, 3, 3, 3, 3, 2], atol=ATOL
+    )
+    np.testing.assert_allclose(
+        edge_padded(X).eval({X: X_np})[0, :, 0], [3, 3, 3, 3, 3, 3], atol=ATOL
+    )
+
+
+@pytest.mark.parametrize("bias", [True, False], ids=["bias", "no_bias"])
+def test_conv1d_bias_is_optional(bias, rng):
+    """Dropping the bias drops the parameter as well as the term; an unused one would hand the
+    optimizer moment state to carry for a weight that never moves."""
+    X = pt.tensor("X", shape=(None, None, 2))
+    layer = Conv1D("conv", in_channels=2, out_channels=3, kernel_size=2, bias=bias)
+    out = layer(X)
+
+    W_np = rng.normal(size=(2, 3, 2)).astype(floatX)
+    layer.W.set_value(W_np)
+    shift = np.zeros(3, dtype=floatX)
+    if bias:
+        shift = rng.normal(size=(3,)).astype(floatX)
+        layer.b.set_value(shift)
+    X_np = rng.normal(size=(2, 7, 2)).astype(floatX)
+
+    assert set(collect_trainable_params(out)) == ({layer.W, layer.b} if bias else {layer.W})
+    np.testing.assert_allclose(
+        out.eval({X: X_np}), correlate_reference(X_np, W_np) + shift, atol=ATOL
+    )
+
+
+def test_conv1d_draws_its_kernel_with_the_receptive_field_in_the_fans():
+    """A conv kernel is stored input-channels-first so `fans` reads it correctly: fan_in is
+    `in_channels * kernel_size`, not two kernel extents. A kernel-first layout would give a draw scaled
+    for the wrong fans and nothing else here would notice."""
+    layer = Conv1D("conv", in_channels=8, out_channels=16, kernel_size=5)
+
+    assert layer.W.get_value().shape == (8, 16, 5)
+    assert fans(layer.W.get_value().shape) == (8 * 5, 16 * 5)
+    assert layer.W.get_value().std() == pytest.approx(np.sqrt(2.0 / (40 + 80)), rel=0.15)
+
+
+def test_conv1d_forwards_its_initializers_to_its_parameters():
+    """Two keyword-only arguments, and one dropped on the floor leaves a parameter silently at its
+    default draw."""
+    layer = Conv1D(
+        "conv",
+        in_channels=2,
+        out_channels=3,
+        kernel_size=2,
+        weight_initializer=ZeroInitializer(),
+        bias_initializer=OneInitializer(),
+    )
+
+    np.testing.assert_array_equal(layer.W.get_value(), np.zeros((2, 3, 2)))
+    np.testing.assert_array_equal(layer.b.get_value(), np.ones(3))
+
+
+def test_conv1d_rejects_an_input_of_the_wrong_rank():
+    """A 1-D convolution takes (batch, time, channels); handing it a bare sequence is the natural
+    mistake and the op would report it from inside the gather."""
+    layer = Conv1D("conv", in_channels=2, out_channels=3, kernel_size=2)
+
+    with pytest.raises(ValueError, match="needs a 3-dimensional input; got a 2-dimensional one"):
+        layer(pt.tensor("X", shape=(None, 2)))
+
+
+def test_conv1d_trains_end_to_end(rng):
+    """Gradients survive the gather, the matmul and the training machinery, and the parameters move.
+
+    The head pools over time rather than taking the last position, because a `valid` convolution's last
+    output sees only the final window -- a target summing the whole sequence would be unlearnable by
+    construction, and the test would be measuring nothing."""
+    X = Input("X", shape=(None, 12, 2))
+    features = Conv1D("conv", in_channels=2, out_channels=4, kernel_size=3, padding="same")(X)
+    y = Linear("head", 4, 1)(features.sum(axis=1))
+    model = Model(X, y).initialize(seed=1)
+    step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)
+
+    X_np = rng.normal(size=(32, 12, 2)).astype(floatX)
+    y_np = X_np.sum(axis=(1, 2))[:, None].astype(floatX)
+
+    losses = [float(step(X_np, y_np)) for _ in range(50)]
+    assert losses[-1] < losses[0] / 5
+
+
+def test_conv1d_rejects_a_kernel_wider_than_the_input():
+    """A window that does not fit yields no windows at all, and every downstream shape then carries a
+    zero axis, so the graph computes an empty answer instead of failing. Caught wherever the input's
+    length is known when the graph is built."""
+    layer = Conv1D("conv", in_channels=1, out_channels=1, kernel_size=10)
+
+    with pytest.raises(ValueError, match="at least 10 elements along spatial axis 0"):
+        layer(pt.tensor("X", shape=(None, 5, 1)))
+
+    # Dilation stretches the span, so a kernel that fits undilated need not fit dilated.
+    dilated = Conv1D("conv", in_channels=1, out_channels=1, kernel_size=3, dilation=4)
+    with pytest.raises(ValueError, match="at least 9 elements"):
+        dilated(pt.tensor("X", shape=(None, 8, 1)))
+
+    # Padding is counted, so the same kernel fits once there is enough of it. Checked by evaluating:
+    # the gather does not propagate a static spatial size, so the built graph's type says None here.
+    padded = Conv1D("conv", in_channels=1, out_channels=1, kernel_size=10, padding=3)
+    X = pt.tensor("X", shape=(None, 5, 1))
+    assert padded(X).eval({X: np.zeros((2, 5, 1), dtype=floatX)}).shape == (2, 2, 1)
+
+
+def test_conv1d_rejects_negative_padding():
+    """Padding adds elements. A negative amount reaches `pt.pad` as nonsense rather than quietly
+    trimming, and the caller almost certainly meant to slice the input."""
+    with pytest.raises(ValueError, match="cannot be negative"):
+        Conv1D("conv", in_channels=1, out_channels=1, kernel_size=3, padding=-1)
+
+
+@pytest.mark.parametrize("stride", [1, 2, 3], ids=["stride1", "stride2", "stride3"])
+@pytest.mark.parametrize("length", [10, 11], ids=["even", "odd"])
+def test_conv1d_same_padding_holds_at_any_stride(stride, length, rng):
+    """`same` is a claim about the output length, and torch and keras both define it as
+    ceil(input / stride) rather than only holding at unit stride."""
+    X = pt.tensor("X", shape=(None, None, 1))
+    layer = Conv1D(
+        "conv", in_channels=1, out_channels=1, kernel_size=3, stride=stride, padding="same"
+    )
+
+    got = layer(X).eval({X: rng.normal(size=(2, length, 1)).astype(floatX)})
+    assert got.shape == (2, -(-length // stride), 1)
+
+
+@pytest.mark.parametrize(
+    "stride, dilation",
+    [(2, 1), (3, 1), (1, 2), (1, 3), (2, 2)],
+    ids=["stride2", "stride3", "dilation2", "dilation3", "both"],
+)
+def test_conv1d_strides_and_dilates_like_scipy(stride, dilation, rng):
+    """Stride and dilation are checked at the helper against hand-written windows, but nothing until
+    here checks that they survive the trip from the layer's constructor through the op to the gather.
+    A layer that swapped the two, or dropped either, would pass every other test in this file."""
+    X = pt.tensor("X", shape=(None, None, 3))
+    layer = Conv1D(
+        "conv", in_channels=3, out_channels=4, kernel_size=3, stride=stride, dilation=dilation
+    )
+
+    W_np = rng.normal(size=(3, 4, 3)).astype(floatX)
+    b_np = rng.normal(size=(4,)).astype(floatX)
+    layer.W.set_value(W_np)
+    layer.b.set_value(b_np)
+    X_np = rng.normal(size=(2, 20, 3)).astype(floatX)
+
+    np.testing.assert_allclose(
+        layer(X).eval({X: X_np}),
+        correlate_reference(X_np, W_np, stride=stride, dilation=dilation) + b_np,
+        atol=ATOL,
+    )
+
+
+def test_conv1d_rejects_a_per_axis_argument_of_the_wrong_length():
+    """`kernel_size`, `stride` and `dilation` each take a scalar or one value per spatial axis, and
+    handing a 1-D convolution a pair is the natural mistake when moving code over from 2-D."""
+    with pytest.raises(
+        ValueError, match="kernel_size must be an int or one value per spatial axis"
+    ):
+        Conv1D("conv", in_channels=1, out_channels=1, kernel_size=(3, 3))
+
+    with pytest.raises(ValueError, match="stride must be an int"):
+        Conv1D("conv", in_channels=1, out_channels=1, kernel_size=3, stride=(1, 1))
