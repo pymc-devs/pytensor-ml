@@ -5,7 +5,7 @@ channels:
 
 dependencies:
   - python>=3.12
-  - pytensor>=3.2.3,<4.0.0
+  - pytensor>=3.3.0,<3.4.0
   - numpy
   - safetensors
   - scikit-learn
@@ -29,7 +29,9 @@ dependencies:
 
   # developer tools
   - pre-commit
-  - mypy
+  # Pinned rather than floated: a local run that disagrees with CI about the version is a local run
+  # that cannot predict CI, and both of these have shipped errors the other version does not report.
+  - mypy>=2.3.1,<2.4.0
 
   # No backend goes here. Each backend's dispatch tests get their own CI job that installs just that
   # one, so the core jobs stay light and prove the library works with no backend present at all.
