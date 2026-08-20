@@ -7,7 +7,13 @@ from pytensor_ml.layers.attention import (
     MultiheadAttention,
     scaled_dot_product_attention,
 )
-from pytensor_ml.layers.combinators import Concatenate, Input, Sequential, Squeeze
+from pytensor_ml.layers.combinators import (
+    Concatenate,
+    Flatten,
+    Input,
+    Sequential,
+    Squeeze,
+)
 from pytensor_ml.layers.conv import (
     AvgPool1D,
     AvgPool2D,
@@ -60,6 +66,7 @@ __all__ = [
     "ElmanCell",
     "Embedding",
     "FeedForward",
+    "Flatten",
     "GRUCell",
     "Input",
     "LSTMCell",

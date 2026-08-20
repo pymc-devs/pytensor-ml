@@ -30,5 +30,22 @@ def Sequential(*layers: Callable) -> Callable:
     return forward
 
 
+def Flatten(X: pt.TensorLike) -> pt.TensorVariable:
+    """
+    Collapse everything after the batch axis into one, so a convolution stack can reach a dense head.
+
+    Parameters
+    ----------
+    X : TensorLike
+        An activation of any rank, whose first axis is the batch.
+
+    Returns
+    -------
+    TensorVariable
+        Shape ``(batch, features)``, with ``features`` the product of every remaining axis.
+    """
+    return pt.join_dims(X, start_axis=1)
+
+
 Squeeze = pt.squeeze
 Concatenate = pt.concatenate

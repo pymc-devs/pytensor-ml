@@ -10,7 +10,18 @@ from pytensor.graph.replace import vectorize_graph
 import pytensor_ml.layers
 
 from pytensor_ml.activations import ReLU
-from pytensor_ml.layers import BatchNorm2D, Dropout, Embedding, Input, LayerNorm, Linear, Sequential
+from pytensor_ml.layers import (
+    BatchNorm2D,
+    Conv2D,
+    Dropout,
+    Embedding,
+    Flatten,
+    Input,
+    LayerNorm,
+    Linear,
+    MaxPool2D,
+    Sequential,
+)
 from pytensor_ml.pytensorf import (
     collect_non_trainable_updates,
     collect_trainable_params,
@@ -512,3 +523,46 @@ def test_construction_draws_do_not_leak_into_a_seeded_initialize():
     assert set(first) == set(second)
     for name in first:
         np.testing.assert_array_equal(first[name], second[name], err_msg=name)
+
+
+@pytest.mark.parametrize(
+    "shape, expected",
+    [
+        ((32, 4, 4, 3), (32, 48)),
+        ((None, 6, 6, 16), (None, 576)),
+        ((None, 5), (None, 5)),
+        ((32, None, 4, 3), (32, None)),
+        ((7,), (7, 1)),
+    ],
+    ids=["static", "dynamic_batch", "already_flat", "dynamic_feature", "rank_one"],
+)
+def test_flatten_keeps_the_feature_count_it_can_work_out(shape, expected):
+    """A dense head is constructed from its input's feature count and has nothing but the static shape
+    to read it from, while the batch axis is unknown in any graph built for variable batches. So the
+    count has to survive an unknown batch, and only the axes that are themselves unknown may be lost."""
+    assert Flatten(pt.tensor("X", shape=shape)).type.shape == expected
+
+
+def test_flatten_collapses_every_axis_after_the_batch(rng):
+    """Ravelling per row is the whole contract, and an implementation that flattened the wrong axes
+    would still return a two-dimensional result of plausible size."""
+    X_np = rng.normal(size=(3, 2, 5, 4)).astype(floatX)
+    X = pt.tensor("X", shape=(None, 2, 5, 4))
+
+    np.testing.assert_allclose(Flatten(X).eval({X: X_np}), X_np.reshape(3, -1))
+
+
+def test_flatten_reaches_a_dense_head_from_a_convolution(rng):
+    """The reason `Flatten` exists: `Linear` is constructed from the feature count, so a stack that
+    loses it cannot be built at all."""
+    X = pt.tensor("X", shape=(None, 8, 8, 3))
+    convolved = Conv2D("conv", in_channels=3, out_channels=4, kernel_size=3)(X)
+    pooled = MaxPool2D("pool", kernel_size=2)(convolved)
+    flattened = Flatten(pooled)
+
+    features = flattened.type.shape[-1]
+    assert features == 3 * 3 * 4
+
+    head = Linear("head", n_in=features, n_out=2)
+    X_np = rng.normal(size=(5, 8, 8, 3)).astype(floatX)
+    assert head(flattened).eval({X: X_np}).shape == (5, 2)

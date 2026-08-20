@@ -25,6 +25,7 @@ from pytensor_ml.layers import (
     Concatenate,
     Dropout,
     Embedding,
+    Flatten,
     LayerNorm,
     Linear,
     Sequential,
@@ -123,6 +124,11 @@ def test_squeeze_roundtrips():
     assert_outputs_roundtrip(
         [X], Squeeze(X[:, :1], axis=1), [np.random.default_rng(0).normal(size=(5, 4))]
     )
+
+
+def test_flatten_roundtrips():
+    X = pt.tensor("X", shape=(None, 3, 4))
+    assert_outputs_roundtrip([X], Flatten(X), [np.random.default_rng(0).normal(size=(5, 3, 4))])
 
 
 def test_concatenate_roundtrips():
