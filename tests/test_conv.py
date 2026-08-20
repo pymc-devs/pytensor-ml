@@ -560,24 +560,26 @@ def test_col2im_keeps_a_spatial_extent_it_is_given_statically():
 
 
 def test_col2im_gathers_the_cotangent_it_scattered(rng):
-    """A scatter-add's pullback is the gather that reversed it, so differentiating the round trip has
-    to give back `Im2Col` rather than something that merely has the right shape."""
-    cotangent = pt.tensor("cotangent", shape=(2, 9, 3, 3))
-    scattered = Col2Im((3,), (1,), (1,))(cotangent, 11)
-    cotangent_np = rng.normal(size=(2, 9, 3, 3)).astype(floatX)
+    """A scatter-add's pullback is the gather that reverses it, so seeding the output with any
+    cotangent has to come back as that cotangent gathered into the windows that reached it."""
+    patches = pt.tensor("patches", shape=(2, 9, 3, 3))
+    scattered = Col2Im((3,), (1,), (1,))(patches, 11)
+    seed = pt.tensor("seed", shape=(2, 11, 3))
+    seed_np = rng.normal(size=(2, 11, 3)).astype(floatX)
 
-    gradient = pytensor.function([cotangent], pt.grad((scattered**2).sum() / 2, cotangent))
-    forward = pytensor.function([cotangent], scattered)(cotangent_np)
-    expected = pytensor.function([], Im2Col((3,), (1,), (1,))(pt.as_tensor(forward)))()
+    pulled_back = pt.grad(cost=None, wrt=patches, known_grads={scattered: seed})
+    gathered = Im2Col((3,), (1,), (1,))(seed)
 
-    np.testing.assert_allclose(gradient(cotangent_np), expected, atol=ATOL)
+    np.testing.assert_allclose(
+        pulled_back.eval({seed: seed_np}), gathered.eval({seed: seed_np}), atol=ATOL
+    )
 
 
-@pytest.mark.parametrize("view", ["transposed", "reversed"], ids=["transposed", "reversed"])
+@pytest.mark.parametrize("view", ["transposed", "reversed"])
 def test_im2col_accepts_an_input_it_cannot_assume_is_contiguous(view, rng):
-    """The kernel flattens the spatial axes to index them, and numba reshapes only what it can prove
-    contiguous. A transposed or reversed view is not, and a kernel that assumes otherwise does not
-    fall back to `perform` -- it fails to compile."""
+    """`TensorType` carries no layout, so a kernel is typed against any layout whatever the data turns
+    out to be. One that quietly needs a contiguous buffer does not fall back to `perform` when it does
+    not get one -- it fails to compile, for every caller."""
     X_np = rng.normal(size=(2, 3, 11)).astype(floatX)
     X = pt.tensor("X", shape=(2, 3, 11))
     source = X.transpose(0, 2, 1) if view == "transposed" else X[:, :, ::-1].transpose(0, 2, 1)
@@ -586,3 +588,30 @@ def test_im2col_accepts_an_input_it_cannot_assume_is_contiguous(view, rng):
     reference = _extract_patches(source, (3,), (1,), (1,)).eval({X: X_np})
 
     np.testing.assert_allclose(got, reference, atol=ATOL)
+
+
+def test_col2im_needs_one_extent_per_spatial_axis():
+    """The extents are positional, so a caller passing the wrong number of them would otherwise build
+    a node whose rank silently disagrees with the kernel's."""
+    patches = pt.tensor("patches", shape=(2, 9, 3, 3))
+
+    with pytest.raises(ValueError, match="needs that many extents"):
+        Col2Im((3, 3), (1, 1), (1, 1))(patches, 11)
+
+
+def test_the_gather_backward_runs_when_the_spatial_extent_is_only_known_at_runtime(rng):
+    """`Im2Col.pullback` hands the input's spatial extents to the scatter as ordinary inputs, so an
+    extent nobody knows until the graph runs has to arrive as a value rather than as a constant folded
+    into the node."""
+    X_np = rng.normal(size=(2, 11, 3)).astype(floatX)
+    seed_np = rng.normal(size=(2, 9, 3, 3)).astype(floatX)
+    seed = pt.tensor("seed", shape=(2, 9, 3, 3))
+
+    gradients = []
+    for spatial in (None, 11):
+        X = pt.tensor("X", shape=(2, spatial, 3))
+        patches = Im2Col((3,), (1,), (1,))(X)
+        pulled_back = pt.grad(cost=None, wrt=X, known_grads={patches: seed})
+        gradients.append(pytensor.function([X, seed], pulled_back)(X_np, seed_np))
+
+    np.testing.assert_allclose(*gradients, atol=ATOL)
