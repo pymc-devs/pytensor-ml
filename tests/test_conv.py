@@ -505,3 +505,18 @@ def test_the_input_gradient_is_dropped_when_nothing_reads_it(rng):
     alone = pytensor.function([X], pt.grad(cost, layer.W))(X_np)
     alongside = pytensor.function([X], pt.grad(cost, [layer.W, X]))(X_np)[0]
     np.testing.assert_allclose(alone, alongside, atol=ATOL)
+
+
+@pytest.mark.parametrize("view", ["transposed", "reversed"], ids=["transposed", "reversed"])
+def test_im2col_accepts_an_input_it_cannot_assume_is_contiguous(view, rng):
+    """The kernel flattens the spatial axes to index them, and numba reshapes only what it can prove
+    contiguous. A transposed or reversed view is not, and a kernel that assumes otherwise does not
+    fall back to `perform` -- it fails to compile."""
+    X_np = rng.normal(size=(2, 3, 11)).astype(floatX)
+    X = pt.tensor("X", shape=(2, 3, 11))
+    source = X.transpose(0, 2, 1) if view == "transposed" else X[:, :, ::-1].transpose(0, 2, 1)
+
+    got = pytensor.function([X], Im2Col((3,), (1,), (1,))(source))(X_np)
+    reference = _extract_patches(source, (3,), (1,), (1,)).eval({X: X_np})
+
+    np.testing.assert_allclose(got, reference, atol=ATOL)
