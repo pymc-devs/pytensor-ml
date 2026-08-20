@@ -160,9 +160,9 @@ class Col2Im(Op):
     """
     Add every window's contribution back at the position it was gathered from.
 
-    The pullback of :class:`Im2Col`, and one node a backend can put a real scatter behind for the same
-    reason. Windows overlap, so a position several of them reached accumulates all of their
-    contributions, which is what makes this a scatter-add rather than an assignment.
+    The pullback of :class:`Im2Col`, and like it one node a backend can put a real kernel behind rather
+    than an indexing graph. Windows overlap, so a position several of them reached accumulates all of
+    their contributions, which is what makes this a scatter-add rather than an assignment.
 
     Parameters
     ----------
@@ -216,7 +216,7 @@ class Col2Im(Op):
         spatial = tuple(int(length) for length in lengths)
         n_spatial = len(self.kernel_size)
 
-        # One index array per spatial axis, broadcasting to windows-then-taps, as the gather's do
+        # One index array per spatial axis, broadcasting to windows-then-taps as the gather's do
         indices = []
         for axis in range(n_spatial):
             span = _window_span(self.kernel_size[axis], self.dilation[axis])

@@ -56,16 +56,11 @@ def _window_counts(op, extents: list[str]) -> tuple[_Source, list[str]]:
 @register_funcify_default_op_cache_key(Im2Col)
 def numba_funcify_Im2Col(op, node=None, **kwargs):
     """
-    Copy one contiguous channel row per window and tap, rather than gathering element by element.
+    Gather every window a kernel visits, one channel at a time.
 
-    The loop nest is generated rather than walked, because the spatial rank is a property of the op:
-    every window count, stride and dilation reaches the compiler as a constant it can fold into the
-    index arithmetic, instead of an offset table rebuilt on every call.
-
-    Channels are copied one at a time rather than a row at a time. Copying the row instead would need a
-    memcpy over ``in_channels`` elements, which is short enough at realistic channel counts that the
-    call costs more than the loop it replaces, and it measures 1.3-1.7x slower even once the array is
-    typed contiguous.
+    The loop nest is generated rather than walked: the spatial rank is a property of the op, so every
+    window count, stride and dilation reaches the compiler as a constant it can fold into the index
+    arithmetic.
     """
     n_spatial = len(op.kernel_size)
     extents = [f"X.shape[{1 + axis}]" for axis in range(n_spatial)]
@@ -85,6 +80,7 @@ def numba_funcify_Im2Col(op, node=None, **kwargs):
     )
     source.append(f"out = np.empty({out_shape}, dtype=X.dtype)")
     source += _loop_nest(op, counts)
+    # One channel at a time: a row copy would memcpy `in_channels` elements, too few to pay for itself
     source += ["for c in range(channels):", CODE_TOKEN.INDENT]
     read = ", ".join(_window_position(op, axis) for axis in range(n_spatial))
     source.append(f"out[b, {', '.join(windows)}, {', '.join(taps)}, c] = X[b, {read}, c]")
@@ -96,8 +92,7 @@ def numba_funcify_Im2Col(op, node=None, **kwargs):
             build_source_code(source), function_name="im2col", global_env=_KERNEL_GLOBALS
         )
     )
-    # The default cache key covers the op's type and props but not this source, so a change here has
-    # to be signalled or numba loads the previous kernel for an unchanged op.
+    # Bump whenever the generated source changes: the default key covers the op's props, not this
     cache_version = 1
     return kernel, cache_version
 
@@ -105,10 +100,9 @@ def numba_funcify_Im2Col(op, node=None, **kwargs):
 @register_funcify_default_op_cache_key(Col2Im)
 def numba_funcify_Col2Im(op, node=None, **kwargs):
     """
-    Accumulate one channel row per window and tap, mirroring the gather.
+    Scatter every window's contribution back where it was gathered from, one channel at a time.
 
-    Written as a scalar loop over channels rather than a slice ``+=``, which would allocate a temporary
-    per visit. Windows overlap, so a position several of them reach is accumulated in loop order.
+    Windows overlap, so a position several of them reach accumulates in loop order.
     """
     n_spatial = len(op.kernel_size)
     arguments = [f"extent_{axis}" for axis in range(n_spatial)]
@@ -129,6 +123,7 @@ def numba_funcify_Col2Im(op, node=None, **kwargs):
     out_shape = create_tuple_string(["batch", *extents, "channels"])
     source.append(f"out = np.zeros({out_shape}, dtype=patches.dtype)")
     source += _loop_nest(op, counts)
+    # Scalar accumulation rather than a slice `+=`, which allocates a temporary per window visit
     source += ["for c in range(channels):", CODE_TOKEN.INDENT]
     write = ", ".join(_window_position(op, axis) for axis in range(n_spatial))
     source.append(f"out[b, {write}, c] += patches[b, {', '.join(windows)}, {', '.join(taps)}, c]")
@@ -140,7 +135,6 @@ def numba_funcify_Col2Im(op, node=None, **kwargs):
             build_source_code(source), function_name="col2im", global_env=_KERNEL_GLOBALS
         )
     )
-    # The default cache key covers the op's type and props but not this source, so a change here has
-    # to be signalled or numba loads the previous kernel for an unchanged op.
+    # Bump whenever the generated source changes: the default key covers the op's props, not this
     cache_version = 1
     return kernel, cache_version
