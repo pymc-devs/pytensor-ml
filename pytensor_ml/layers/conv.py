@@ -18,6 +18,38 @@ from pytensor_ml.params import trainable_parameter
 from pytensor_ml.state import Initializer, XavierNormalInitializer, ZeroInitializer
 
 
+def _max_over_taps(patches: TensorVariable, axis: int) -> TensorVariable:
+    """
+    Take each window's largest tap, routing the whole gradient to the one tap that won it.
+
+    Reducing with :func:`pytensor.tensor.max` would instead give the full cotangent to *every* tap tied
+    for the maximum, which returns more gradient than the window received -- and a window of ties is
+    routine rather than exotic, since max pooling usually follows a rectifier that clamps whole windows
+    to zero. Selecting through an ``argmax`` picks one tap, and conserves the gradient the way every
+    backend's own pooling does.
+    """
+    winner = pt.argmax(patches, axis=axis)
+    pattern: list[int | str] = ["x"] * patches.ndim
+    pattern[axis] = 0
+    taps = pt.arange(patches.shape[axis]).dimshuffle(*pattern)
+    # Selected with `switch` rather than multiplied by the mask: an unselected tap may be the -inf a
+    # padded position carries, and -inf times zero is nan rather than nothing.
+    chosen = pt.switch(pt.eq(pt.expand_dims(winner, axis), taps), patches, 0)
+    return chosen.sum(axis=axis)
+
+
+# Each reduction and the value that pads without changing it: -inf loses every comparison to a real
+# element, and zero is what an average counts padded positions as, matching torch's count_include_pad.
+_REDUCTIONS = {"max": _max_over_taps, "mean": pt.mean}
+_PADDING_IDENTITY = {"max": -np.inf, "mean": 0.0}
+
+
+def _check_reduction(reduction: str) -> None:
+    """Reject a reduction neither pooling op knows, where a lookup would otherwise raise a KeyError."""
+    if reduction not in _REDUCTIONS:
+        raise ValueError(f"reduction must be one of {sorted(_REDUCTIONS)}, but got {reduction!r}.")
+
+
 def _window_span(extent: int, spacing: int) -> int:
     """How far one window reaches along an axis, once dilation has spread its taps."""
     return spacing * (extent - 1) + 1
@@ -401,6 +433,59 @@ def _correlate(
     return out.reshape((*kept, W.shape[-1]))
 
 
+class PoolLayer(UnaryLayerOp):
+    """
+    Reduce each window a kernel would visit, instead of contracting it against one.
+
+    The same windows :class:`ConvLayer` correlates over, with ``max`` or ``mean`` in place of the matmul,
+    so a backend that gathers windows well serves both.
+
+    Parameters
+    ----------
+    kernel_size, stride, dilation : tuple of int
+        One entry per spatial axis.
+    reduction : {"max", "mean"}
+        Which reduction each window collapses to.
+    """
+
+    __props__ = ("kernel_size", "stride", "dilation", "reduction")
+
+    def __init__(
+        self,
+        kernel_size: tuple[int, ...],
+        stride: tuple[int, ...],
+        dilation: tuple[int, ...],
+        reduction: str,
+        **kwargs,
+    ):
+        _check_reduction(reduction)
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.dilation = dilation
+        self.reduction = reduction
+        super().__init__(**kwargs)
+
+    def build_inner_graph(self, X):
+        """Collapse the tap axes of ``(batch, *out_spatial, *kernel_size, channels)``."""
+        return [_pool(X, self.kernel_size, self.stride, self.dilation, self.reduction)]
+
+
+def _pool(
+    X: TensorVariable,
+    kernel_size: Sequence[int],
+    stride: Sequence[int],
+    dilation: Sequence[int],
+    reduction: str,
+) -> TensorVariable:
+    """Reduce every window of ``(batch, *spatial, channels)`` to one value per channel."""
+    patches = Im2Col(kernel_size, stride, dilation)(X)
+    n_spatial = len(kernel_size)
+    kept = [patches.shape[axis] for axis in range(1 + n_spatial)]
+    # One tap axis rather than one per spatial dimension, so a single reduction covers the window.
+    merged = patches.reshape((*kept, -1, patches.shape[-1]))
+    return _REDUCTIONS[reduction](merged, axis=1 + n_spatial)
+
+
 def _resolve_padding(
     padding: str | int | Sequence[int],
     kernel_size: Sequence[int],
@@ -451,12 +536,16 @@ def _resolve_padding(
 
 
 def _pad_spatial(
-    X: TensorVariable, padding: tuple[tuple[int, int], ...], mode: PadMode
+    X: TensorVariable,
+    padding: tuple[tuple[int, int], ...],
+    mode: PadMode,
+    constant_value: float = 0.0,
 ) -> TensorVariable:
     """Pad the spatial axes of ``(batch, *spatial, channels)``, leaving batch and channels alone."""
     if not any(before or after for before, after in padding):
         return X
-    return pt.pad(X, [(0, 0), *padding, (0, 0)], mode=mode)
+    fill = {"constant_values": constant_value} if mode == "constant" else {}
+    return pt.pad(X, [(0, 0), *padding, (0, 0)], mode=mode, **fill)
 
 
 def _as_spatial_tuple(value: int | Sequence[int], n_spatial: int, name: str) -> tuple[int, ...]:
@@ -671,3 +760,108 @@ class Conv2D(_ConvNd):
     """
 
     n_spatial = 2
+
+
+class _PoolNd(Layer):
+    """
+    Everything pooling does that does not depend on how many spatial axes it has.
+
+    Subclasses set :attr:`n_spatial` and :attr:`reduction`; see :class:`MaxPool2D` for the arguments,
+    which are shared.
+    """
+
+    n_spatial: int
+    reduction: str
+
+    def __init__(
+        self,
+        name: str | None = None,
+        kernel_size: int | Sequence[int] = 2,
+        stride: int | Sequence[int] | None = None,
+        dilation: int | Sequence[int] = 1,
+        padding: str | int | Sequence[int] = "valid",
+    ):
+        self.name = name if name else type(self).__name__
+        self.kernel_size = _as_spatial_tuple(kernel_size, self.n_spatial, "kernel_size")
+        self.stride = (
+            self.kernel_size
+            if stride is None
+            else _as_spatial_tuple(stride, self.n_spatial, "stride")
+        )
+        self.dilation = _as_spatial_tuple(dilation, self.n_spatial, "dilation")
+        self.padding = _resolve_padding(padding, self.kernel_size, self.dilation)
+
+    def __call__(self, X: pt.TensorLike) -> TensorVariable:
+        """
+        Reduce each window of ``X``, of shape ``(batch, *spatial, channels)``.
+
+        Returns
+        -------
+        TensorVariable
+            Shape ``(batch, *out_spatial, channels)``, with the channel axis untouched.
+        """
+        X = pt.as_tensor(X)
+        _check_input_rank(X, self.name, self.n_spatial)
+        _check_input_covers_a_window(X, self.name, self.kernel_size, self.dilation, self.padding)
+
+        padded = _pad_spatial(X, self.padding, "constant", _PADDING_IDENTITY[self.reduction])
+        out = PoolLayer(self.kernel_size, self.stride, self.dilation, self.reduction)(padded)
+        out.name = f"{self.name}_output"
+        return out
+
+
+class MaxPool2D(_PoolNd):
+    """
+    Downsample by taking the largest activation in each window, over two spatial axes.
+
+    Takes ``(batch, height, width, channels)`` and returns ``(batch, out_height, out_width, channels)``.
+    Padding fills with :math:`-\\infty` so a padded position never wins a window, which zero-filling
+    would do wherever every real activation is negative. Where a window ties, the whole gradient goes
+    to the earliest tap; a backend that pools with its own kernel may instead split the gradient
+    between the tied taps, but every backend returns exactly the gradient the window received.
+
+    Parameters
+    ----------
+    name : str or None
+        Name prefix for the layer. Defaults to the class name when None.
+    kernel_size : int or tuple of int, optional
+        Window extent, shared by both axes or given as ``(height, width)``. Default is 2.
+    stride : int or tuple of int, optional
+        Step between windows. Defaults to ``kernel_size``, so windows tile without overlapping --
+        the opposite of the convolution layers, which step by one.
+    dilation : int or tuple of int, optional
+        Spacing between the positions a window covers. Default is 1.
+    padding : {"valid", "same"}, int, or tuple of int, optional
+        No padding, enough to leave each output extent at :math:`\\lceil \text{extent} / s \rceil`, or
+        an explicit number of elements on each side. Default is "valid".
+    """
+
+    n_spatial = 2
+    reduction = "max"
+
+
+class MaxPool1D(_PoolNd):
+    """Downsample a sequence by taking the largest activation in each window; see :class:`MaxPool2D`."""
+
+    n_spatial = 1
+    reduction = "max"
+
+
+class AvgPool2D(_PoolNd):
+    """
+    Downsample by averaging each window, over two spatial axes.
+
+    Takes ``(batch, height, width, channels)`` and returns ``(batch, out_height, out_width, channels)``.
+    Padded positions count toward the average as zeros, matching torch's ``count_include_pad``. See
+    :class:`MaxPool2D` for the arguments, which are shared.
+    """
+
+    n_spatial = 2
+    reduction = "mean"
+
+
+class AvgPool1D(_PoolNd):
+    """Downsample a sequence by averaging each window; see :class:`AvgPool2D`."""
+
+    n_spatial = 1
+    reduction = "mean"
