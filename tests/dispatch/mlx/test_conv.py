@@ -98,3 +98,16 @@ def test_the_input_gradient_is_dropped_when_nothing_reads_it(rng):
 
     assert grad_op([pt.grad(cost, layer.W)]).compute_dX is False
     assert grad_op(pt.grad(cost, [layer.W, X])).compute_dX is True
+
+
+def test_the_conv_op_matches_the_graph_over_two_spatial_axes(rng):
+    """Rank 2 is where a backend's layout convention can disagree with ours about which spatial axis is
+    which, and a square kernel at unit stride hides it. Rectangular, with a different stride and
+    dilation per axis, is the shape that does not."""
+    X_np = rng.normal(size=(2, 12, 14, 3)).astype(floatX)
+    W_np = rng.normal(size=(2, 3, 3, 5)).astype(floatX)
+    X = pt.tensor("X", shape=X_np.shape)
+    W = pt.tensor("W", shape=W_np.shape)
+
+    out = ConvLayer((2, 3), (2, 1), (1, 2))(X, W)
+    compare_mlx_and_py([X, W], out, [X_np, W_np], assert_fn=assert_close)
