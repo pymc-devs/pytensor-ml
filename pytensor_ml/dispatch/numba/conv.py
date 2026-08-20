@@ -9,7 +9,7 @@ from pytensor.link.numba.dispatch.string_codegen import (
     create_tuple_string,
 )
 
-from pytensor_ml.layers.conv import Im2Col
+from pytensor_ml.layers.conv import Col2Im, Im2Col
 
 # The generated kernels are compiled against this namespace rather than the module's, so the only
 # name they can reach is spelled out rather than being whatever the module happens to import.
@@ -81,6 +81,49 @@ def numba_funcify_Im2Col(op, node=None, **kwargs):
     kernel = numba_basic.numba_njit(
         compile_numba_function_src(
             build_source_code(source), function_name="im2col", global_env=_KERNEL_GLOBALS
+        )
+    )
+    # The default cache key covers the op's type and props but not this source, so a change here has
+    # to be signalled or numba loads the previous kernel for an unchanged op.
+    cache_version = 1
+    return kernel, cache_version
+
+
+@register_funcify_default_op_cache_key(Col2Im)
+def numba_funcify_Col2Im(op, node=None, **kwargs):
+    """
+    Accumulate one channel row per window and tap, mirroring the gather.
+
+    Written as a scalar loop over channels rather than a slice ``+=``, which would allocate a temporary
+    per visit. Windows overlap, so a position several of them reach is accumulated in loop order.
+    """
+    n_spatial = len(op.kernel_size)
+    arguments = [f"extent_{axis}" for axis in range(n_spatial)]
+    extents = [f"{name}_item" for name in arguments]
+    windows = [f"w{axis}" for axis in range(n_spatial)]
+    taps = [f"t{axis}" for axis in range(n_spatial)]
+
+    source: list = [
+        f"def col2im(patches, {', '.join(arguments)}):",
+        CODE_TOKEN.INDENT,
+        "batch = patches.shape[0]",
+        f"channels = patches.shape[{1 + 2 * n_spatial}]",
+        # Shape inputs arrive as zero-dimensional arrays, as they do everywhere else in numba-land
+        *(f"{item} = {name}.item()" for item, name in zip(extents, arguments)),
+    ]
+    counts = _window_counts(op, source, extents)
+    out_shape = create_tuple_string(["batch", *extents, "channels"])
+    source.append(f"out = np.zeros({out_shape}, dtype=patches.dtype)")
+    source += _loop_nest(op, counts)
+    source += ["for c in range(channels):", CODE_TOKEN.INDENT]
+    write = ", ".join(_window_position(op, axis) for axis in range(n_spatial))
+    source.append(f"out[b, {write}, c] += patches[b, {', '.join(windows)}, {', '.join(taps)}, c]")
+    source += [CODE_TOKEN.DEDENT] * (2 * n_spatial + 2)
+    source.append("return out")
+
+    kernel = numba_basic.numba_njit(
+        compile_numba_function_src(
+            build_source_code(source), function_name="col2im", global_env=_KERNEL_GLOBALS
         )
     )
     # The default cache key covers the op's type and props but not this source, so a change here has

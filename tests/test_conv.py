@@ -6,7 +6,14 @@ import pytest
 from scipy.signal import correlate
 
 from pytensor_ml.layers import Conv1D, Input, Linear
-from pytensor_ml.layers.conv import ConvLayer, ConvLayerGrad, Im2Col, _extract_patches
+from pytensor_ml.layers.conv import (
+    Col2Im,
+    ConvLayer,
+    ConvLayerGrad,
+    Im2Col,
+    _extract_patches,
+    _scatter_patches,
+)
 from pytensor_ml.loss import SquaredError
 from pytensor_ml.model import Model
 from pytensor_ml.optim import adam
@@ -505,6 +512,65 @@ def test_the_input_gradient_is_dropped_when_nothing_reads_it(rng):
     alone = pytensor.function([X], pt.grad(cost, layer.W))(X_np)
     alongside = pytensor.function([X], pt.grad(cost, [layer.W, X]))(X_np)[0]
     np.testing.assert_allclose(alone, alongside, atol=ATOL)
+
+
+@pytest.mark.parametrize(
+    "spatial, kernel_size, stride, dilation",
+    [
+        ((11,), (3,), (1,), (1,)),
+        ((11,), (3,), (2,), (2,)),
+        ((12,), (3,), (5,), (1,)),
+        ((7, 9), (2, 3), (2, 1), (1, 2)),
+        ((6, 6, 6), (2, 2, 2), (1, 1, 1), (1, 1, 1)),
+    ],
+    ids=["1d", "1d_strided_dilated", "1d_untouched_tail", "2d_asymmetric", "3d"],
+)
+def test_col2im_matches_the_reference_scatter_at_every_rank(
+    spatial, kernel_size, stride, dilation, rng
+):
+    """The op stands in for the `inc_subtensor` scatter, so it has to agree with it exactly. The
+    untouched-tail case is the one a scatter can get wrong on its own terms: a stride that overshoots
+    leaves positions no window reaches, and those have to stay zero rather than pick up a neighbor."""
+    X = pt.tensor("X", shape=(2, *spatial, 3))
+    X_np = rng.normal(size=(2, *spatial, 3)).astype(floatX)
+    patches_np = pytensor.function([X], Im2Col(kernel_size, stride, dilation)(X))(X_np)
+
+    cotangent = pt.tensor("cotangent", shape=patches_np.shape)
+    reference = pytensor.function(
+        [cotangent, X],
+        _scatter_patches(cotangent, X, kernel_size, stride, dilation),
+        on_unused_input="ignore",
+    )(patches_np, X_np)
+    got = pytensor.function(
+        [cotangent], Col2Im(kernel_size, stride, dilation)(cotangent, *spatial)
+    )(patches_np)
+
+    assert got.shape == reference.shape
+    np.testing.assert_allclose(got, reference, atol=ATOL)
+
+
+def test_col2im_keeps_a_spatial_extent_it_is_given_statically():
+    """The extents arrive as inputs rather than as props, so a known one has to survive as a static
+    shape -- otherwise every backward pass loses the shape its forward had."""
+    cotangent = pt.tensor("cotangent", shape=(2, 9, 3, 3))
+    length = pt.scalar("length", dtype="int64")
+
+    assert Col2Im((3,), (1,), (1,))(cotangent, 11).type.shape == (2, 11, 3)
+    assert Col2Im((3,), (1,), (1,))(cotangent, length).type.shape == (2, None, 3)
+
+
+def test_col2im_gathers_the_cotangent_it_scattered(rng):
+    """A scatter-add's pullback is the gather that reversed it, so differentiating the round trip has
+    to give back `Im2Col` rather than something that merely has the right shape."""
+    cotangent = pt.tensor("cotangent", shape=(2, 9, 3, 3))
+    scattered = Col2Im((3,), (1,), (1,))(cotangent, 11)
+    cotangent_np = rng.normal(size=(2, 9, 3, 3)).astype(floatX)
+
+    gradient = pytensor.function([cotangent], pt.grad((scattered**2).sum() / 2, cotangent))
+    forward = pytensor.function([cotangent], scattered)(cotangent_np)
+    expected = pytensor.function([], Im2Col((3,), (1,), (1,))(pt.as_tensor(forward)))()
+
+    np.testing.assert_allclose(gradient(cotangent_np), expected, atol=ATOL)
 
 
 @pytest.mark.parametrize("view", ["transposed", "reversed"], ids=["transposed", "reversed"])

@@ -4,8 +4,10 @@ import numpy as np
 import pytensor.tensor as pt
 
 from numpy.lib.stride_tricks import sliding_window_view
-from pytensor.graph.basic import Apply
+from pytensor.gradient import disconnected_type
+from pytensor.graph.basic import Apply, Variable
 from pytensor.graph.op import Op
+from pytensor.tensor.basic import get_scalar_constant_value
 from pytensor.tensor.pad import PadMode
 from pytensor.tensor.variable import TensorVariable
 
@@ -150,7 +152,97 @@ class Im2Col(Op):
         """Scatter each window's cotangent back where it was gathered from."""
         (X,) = inputs
         (cotangent,) = cotangents
-        return [_scatter_patches(cotangent, X, self.kernel_size, self.stride, self.dilation)]
+        spatial = [X.shape[1 + axis] for axis in range(len(self.kernel_size))]
+        return [Col2Im(self.kernel_size, self.stride, self.dilation)(cotangent, *spatial)]
+
+
+class Col2Im(Op):
+    """
+    Add every window's contribution back at the position it was gathered from.
+
+    The pullback of :class:`Im2Col`, and one node a backend can put a real scatter behind for the same
+    reason. Windows overlap, so a position several of them reached accumulates all of their
+    contributions, which is what makes this a scatter-add rather than an assignment.
+
+    Parameters
+    ----------
+    kernel_size, stride, dilation : tuple of int
+        One entry per spatial axis, describing the gather being reversed.
+    """
+
+    __props__ = ("kernel_size", "stride", "dilation")
+
+    def __init__(
+        self,
+        kernel_size: Sequence[int],
+        stride: Sequence[int],
+        dilation: Sequence[int],
+    ):
+        self.kernel_size = tuple(kernel_size)
+        self.stride = tuple(stride)
+        self.dilation = tuple(dilation)
+
+    def __call__(self, *inputs, **kwargs) -> TensorVariable:
+        """Narrow the single output to a tensor, which ``Op.__call__`` cannot know it is."""
+        out = super().__call__(*inputs, **kwargs)
+        assert isinstance(out, TensorVariable), "Col2Im produces one output"
+        return out
+
+    def make_node(self, patches, *spatial):
+        """Take the spatial extents one scalar at a time, so a known one stays known statically."""
+        if len(spatial) != len(self.kernel_size):
+            raise ValueError(
+                f"Col2Im over {len(self.kernel_size)} spatial axes needs that many extents, got "
+                f"{len(spatial)}"
+            )
+        patches = pt.as_tensor(patches)
+        spatial = [pt.as_tensor(length, dtype="int64") for length in spatial]
+
+        lengths = [
+            get_scalar_constant_value(length, raise_not_constant=False) for length in spatial
+        ]
+        out_type = pt.tensor(
+            dtype=patches.type.dtype,
+            shape=(
+                patches.type.shape[0],
+                *(None if isinstance(length, Variable) else int(length) for length in lengths),
+                patches.type.shape[-1],
+            ),
+        )
+        return Apply(self, [patches, *spatial], [out_type])
+
+    def perform(self, node, inputs, outputs):
+        patches, *lengths = inputs
+        spatial = tuple(int(length) for length in lengths)
+        n_spatial = len(self.kernel_size)
+
+        # One index array per spatial axis, broadcasting to windows-then-taps, as the gather's do
+        indices = []
+        for axis in range(n_spatial):
+            span = _window_span(self.kernel_size[axis], self.dilation[axis])
+            starts = np.arange(0, spatial[axis] - span + 1, self.stride[axis])
+            window = starts[:, None] + np.arange(self.kernel_size[axis]) * self.dilation[axis]
+            pattern = [1] * (2 * n_spatial)
+            pattern[axis], pattern[n_spatial + axis] = window.shape
+            indices.append(window.reshape(pattern))
+
+        out = np.zeros((patches.shape[0], *spatial, patches.shape[-1]), dtype=patches.dtype)
+        np.add.at(out, (slice(None), *indices, slice(None)), patches)
+        outputs[0][0] = out
+
+    def infer_shape(self, node, input_shapes):
+        [(batch, *_, channels)] = input_shapes
+        return [[batch, *node.inputs[1:], channels]]
+
+    def connection_pattern(self, node):
+        """Only the patches reach the output; the spatial extents give it its shape."""
+        return [[True], *([False] for _ in self.kernel_size)]
+
+    def pullback(self, inputs, outputs, cotangents):
+        """Gather each position's cotangent into every window that reached it."""
+        (cotangent,) = cotangents
+        gathered = Im2Col(self.kernel_size, self.stride, self.dilation)(cotangent)
+        return [gathered, *(disconnected_type() for _ in self.kernel_size)]
 
 
 def _extract_patches(
