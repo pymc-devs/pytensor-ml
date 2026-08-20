@@ -15,30 +15,42 @@ from pytensor_ml.layers.conv import Col2Im, Im2Col
 # name they can reach is spelled out rather than being whatever the module happens to import.
 _KERNEL_GLOBALS = {"np": np}
 
+_Source = list[str | CODE_TOKEN]
+
 
 def _window_position(op, axis: int) -> str:
     """Where tap ``t{axis}`` of window ``w{axis}`` sits along one spatial axis."""
     return f"w{axis} * {op.stride[axis]} + t{axis} * {op.dilation[axis]}"
 
 
-def _loop_nest(op, extent_names: list[str]) -> list:
-    """Open the batch, window and tap loops, with every extent written in as a literal."""
-    lines: list = ["for b in range(batch):", CODE_TOKEN.INDENT]
-    for axis, extent in enumerate(extent_names):
-        lines += [f"for w{axis} in range({extent}):", CODE_TOKEN.INDENT]
+def _loop_nest(op, window_counts: list[str]) -> _Source:
+    """Open the batch, window and tap loops, with every tap count written in as a literal."""
+    lines: _Source = ["for b in range(batch):", CODE_TOKEN.INDENT]
+    for axis, count in enumerate(window_counts):
+        lines += [f"for w{axis} in range({count}):", CODE_TOKEN.INDENT]
     for axis, taps in enumerate(op.kernel_size):
         lines += [f"for t{axis} in range({taps}):", CODE_TOKEN.INDENT]
     return lines
 
 
-def _window_counts(op, source: list, extents: list[str]) -> list[str]:
-    """Emit the window count per spatial axis, and name each one."""
+def _window_counts(op, extents: list[str]) -> tuple[_Source, list[str]]:
+    """
+    Count the windows that fit along each spatial axis.
+
+    Returns
+    -------
+    lines : list of str
+        One assignment per spatial axis.
+    names : list of str
+        The variable each assignment binds.
+    """
+    lines: _Source = []
     names = []
     for axis, (taps, spacing) in enumerate(zip(op.kernel_size, op.dilation)):
         span = spacing * (taps - 1) + 1
-        source.append(f"windows_{axis} = ({extents[axis]} - {span}) // {op.stride[axis]} + 1")
+        lines.append(f"windows_{axis} = ({extents[axis]} - {span}) // {op.stride[axis]} + 1")
         names.append(f"windows_{axis}")
-    return names
+    return lines, names
 
 
 @register_funcify_default_op_cache_key(Im2Col)
@@ -60,13 +72,14 @@ def numba_funcify_Im2Col(op, node=None, **kwargs):
     windows = [f"w{axis}" for axis in range(n_spatial)]
     taps = [f"t{axis}" for axis in range(n_spatial)]
 
-    source: list = [
+    source: _Source = [
         "def im2col(X):",
         CODE_TOKEN.INDENT,
         "batch = X.shape[0]",
         f"channels = X.shape[{1 + n_spatial}]",
     ]
-    counts = _window_counts(op, source, extents)
+    count_lines, counts = _window_counts(op, extents)
+    source += count_lines
     out_shape = create_tuple_string(
         ["batch", *counts, *(str(extent) for extent in op.kernel_size), "channels"]
     )
@@ -103,7 +116,7 @@ def numba_funcify_Col2Im(op, node=None, **kwargs):
     windows = [f"w{axis}" for axis in range(n_spatial)]
     taps = [f"t{axis}" for axis in range(n_spatial)]
 
-    source: list = [
+    source: _Source = [
         f"def col2im(patches, {', '.join(arguments)}):",
         CODE_TOKEN.INDENT,
         "batch = patches.shape[0]",
@@ -111,7 +124,8 @@ def numba_funcify_Col2Im(op, node=None, **kwargs):
         # Shape inputs arrive as zero-dimensional arrays, as they do everywhere else in numba-land
         *(f"{item} = {name}.item()" for item, name in zip(extents, arguments)),
     ]
-    counts = _window_counts(op, source, extents)
+    count_lines, counts = _window_counts(op, extents)
+    source += count_lines
     out_shape = create_tuple_string(["batch", *extents, "channels"])
     source.append(f"out = np.zeros({out_shape}, dtype=patches.dtype)")
     source += _loop_nest(op, counts)
