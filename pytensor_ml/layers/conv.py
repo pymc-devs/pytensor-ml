@@ -1,4 +1,6 @@
 from collections.abc import Sequence
+from functools import reduce
+from operator import mul
 
 import numpy as np
 import pytensor.tensor as pt
@@ -385,13 +387,16 @@ def _correlate(
     """Cross-correlate ``(batch, *spatial, in_channels)`` with ``(*kernel_size, in_channels, out_channels)``."""
     patches = Im2Col(kernel_size, stride, dilation)(X)
     n_spatial = len(kernel_size)
-    kept = patches.shape[: 1 + n_spatial]
-    contracted = patches.shape[1 + n_spatial :]
+    # Both reshape targets are taken an axis at a time rather than from a slice of the shape vector.
+    # `Shape_i` folds to a constant wherever the extent is known statically, a sliced `Subtensor` does
+    # not, and `Reshape` keeps a static output shape only for the entries it can fold.
+    kept = [patches.shape[axis] for axis in range(1 + n_spatial)]
+    contracted = reduce(mul, (patches.shape[axis] for axis in range(1 + n_spatial, patches.ndim)))
 
     # Collapsed to a 2-D matmul rather than contracting the 4-D patch tensor directly, because `pt.grad`
     # reads this graph as written: leaving the batch and window axes in place makes the kernel's gradient
     # a batched contraction, one matmul per window row over an intermediate larger than the patch buffer.
-    flat = patches.reshape((-1, pt.prod(contracted)))
+    flat = patches.reshape((-1, contracted))
     out = flat @ W.reshape((-1, W.shape[-1]))
     return out.reshape((*kept, W.shape[-1]))
 

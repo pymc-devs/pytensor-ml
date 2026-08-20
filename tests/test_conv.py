@@ -742,3 +742,19 @@ def test_conv2d_same_padding_puts_the_odd_element_after_on_each_axis():
         [[4, 6, 6, 4], [4, 6, 6, 4], [4, 6, 6, 4], [2, 3, 3, 2]],
         atol=ATOL,
     )
+
+
+@pytest.mark.parametrize(
+    "spatial, expected",
+    [((28, 28), (32, 24, 24, 16)), ((None, 28), (32, None, 24, 16))],
+    ids=["static", "one_axis_dynamic"],
+)
+def test_a_conv_stack_keeps_the_output_shape_it_can_work_out(spatial, expected):
+    """A layer downstream of a convolution has to size itself from the graph, so the extents the input
+    does know have to survive the op. They reach the output only through reshapes that can fold their
+    targets, which a product over a shape slice cannot."""
+    X = pt.tensor("X", shape=(32, *spatial, 3))
+    first = Conv2D("c1", in_channels=3, out_channels=8, kernel_size=3)(X)
+    second = Conv2D("c2", in_channels=8, out_channels=16, kernel_size=3)(first)
+
+    assert second.type.shape == expected
