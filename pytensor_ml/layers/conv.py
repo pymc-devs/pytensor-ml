@@ -382,19 +382,18 @@ def _correlate(
     stride: Sequence[int],
     dilation: Sequence[int],
 ) -> TensorVariable:
-    """
-    Cross-correlate ``(batch, *spatial, in_channels)`` with ``(*kernel_size, in_channels, out_channels)``.
-
-    Patches come out as batch and windows, then taps, then channels. Flattening the trailing taps and
-    channels into one axis is what turns the correlation into a matmul, and the kernel's own leading axes
-    are already in that order, so both reshapes are contiguous and nothing is permuted.
-    """
+    """Cross-correlate ``(batch, *spatial, in_channels)`` with ``(*kernel_size, in_channels, out_channels)``."""
     patches = Im2Col(kernel_size, stride, dilation)(X)
     n_spatial = len(kernel_size)
     kept = patches.shape[: 1 + n_spatial]
     contracted = patches.shape[1 + n_spatial :]
-    flat = patches.reshape((*kept, pt.prod(contracted)))
-    return flat @ W.reshape((-1, W.shape[-1]))
+
+    # Collapsed to a 2-D matmul rather than contracting the 4-D patch tensor directly, because `pt.grad`
+    # reads this graph as written: leaving the batch and window axes in place makes the kernel's gradient
+    # a batched contraction, one matmul per window row over an intermediate larger than the patch buffer.
+    flat = patches.reshape((-1, pt.prod(contracted)))
+    out = flat @ W.reshape((-1, W.shape[-1]))
+    return out.reshape((*kept, W.shape[-1]))
 
 
 def _resolve_padding(
