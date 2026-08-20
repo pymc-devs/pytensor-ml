@@ -472,6 +472,42 @@ def _as_spatial_tuple(value: int | Sequence[int], n_spatial: int, name: str) -> 
     return given
 
 
+def _check_input_rank(X: TensorVariable, name: str, n_spatial: int) -> None:
+    """Reject an input whose rank is not batch, one axis per spatial dimension, then channels."""
+    if X.ndim != n_spatial + 2:
+        raise ValueError(
+            f"{name} takes an input of shape (batch, {', '.join(['spatial'] * n_spatial)}, channels), "
+            f"so it needs a {n_spatial + 2}-dimensional input; got a {X.ndim}-dimensional one."
+        )
+
+
+def _check_input_covers_a_window(
+    X: TensorVariable,
+    name: str,
+    kernel_size: Sequence[int],
+    dilation: Sequence[int],
+    padding: Sequence[tuple[int, int]],
+) -> None:
+    """
+    Reject a padded input too short for one window, where its length is known at build time.
+
+    Such an input yields no windows at all, so every downstream shape has a zero axis and the graph
+    computes an empty answer rather than failing. Only a statically known spatial size can be checked; a
+    symbolic one still reaches the loop and comes back empty.
+    """
+    for axis, (extent, spacing, (before, after)) in enumerate(zip(kernel_size, dilation, padding)):
+        length = X.type.shape[1 + axis]
+        if length is None:
+            continue
+        span = _window_span(extent, spacing)
+        if length + before + after < span:
+            raise ValueError(
+                f"{name} needs at least {span} elements along spatial axis {axis} to place one window, "
+                f"but the input has {length} there and the padding adds {before + after}. Shorten the "
+                "kernel, lower the dilation, or pad more."
+            )
+
+
 class _ConvNd(Layer):
     """
     Everything a convolution does that does not depend on how many spatial axes it has.
@@ -519,28 +555,6 @@ class _ConvNd(Layer):
                 f"{self.name}_b", (out_channels,), bias_initializer, ZeroInitializer()
             )
 
-    def _check_input_covers_a_window(self, X: TensorVariable) -> None:
-        """
-        Reject a padded input too short for one window, where its length is known at build time.
-
-        Such an input yields no windows at all, so every downstream shape has a zero axis and the graph
-        computes an empty answer rather than failing. Only a statically known spatial size can be
-        checked; a symbolic one still reaches the loop and comes back empty.
-        """
-        for axis, (extent, spacing, (before, after)) in enumerate(
-            zip(self.kernel_size, self.dilation, self.padding)
-        ):
-            length = X.type.shape[1 + axis]
-            if length is None:
-                continue
-            span = _window_span(extent, spacing)
-            if length + before + after < span:
-                raise ValueError(
-                    f"{self.name} needs at least {span} elements along spatial axis {axis} to place one "
-                    f"window, but the input has {length} there and the padding adds {before + after}. "
-                    "Shorten the kernel, lower the dilation, or pad more."
-                )
-
     def __call__(self, X: pt.TensorLike) -> TensorVariable:
         """
         Correlate ``X`` of shape ``(batch, *spatial, in_channels)`` with the layer's kernel.
@@ -551,15 +565,8 @@ class _ConvNd(Layer):
             Shape ``(batch, *out_spatial, out_channels)``.
         """
         X = pt.as_tensor(X)
-        if X.ndim != self.n_spatial + 2:
-            raise ValueError(
-                f"{self.name} takes an input of shape (batch, "
-                f"{', '.join(['spatial'] * self.n_spatial)}, channels), so a {self.n_spatial}-spatial "
-                f"convolution needs a {self.n_spatial + 2}-dimensional input; got a "
-                f"{X.ndim}-dimensional one."
-            )
-
-        self._check_input_covers_a_window(X)
+        _check_input_rank(X, self.name, self.n_spatial)
+        _check_input_covers_a_window(X, self.name, self.kernel_size, self.dilation, self.padding)
 
         padded = _pad_spatial(X, self.padding, self.padding_mode)
         op = ConvLayer(self.kernel_size, self.stride, self.dilation)

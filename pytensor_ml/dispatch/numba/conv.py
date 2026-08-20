@@ -23,11 +23,17 @@ def _window_position(op, axis: int) -> str:
     return f"w{axis} * {op.stride[axis]} + t{axis} * {op.dilation[axis]}"
 
 
-def _loop_nest(op, window_counts: list[str]) -> _Source:
-    """Open the batch, window and tap loops, with every tap count written in as a literal."""
+def _window_loops(window_counts: list[str]) -> _Source:
+    """Open the batch loop and one loop per spatial axis over the windows that fit along it."""
     lines: _Source = ["for b in range(batch):", CODE_TOKEN.INDENT]
     for axis, count in enumerate(window_counts):
         lines += [f"for w{axis} in range({count}):", CODE_TOKEN.INDENT]
+    return lines
+
+
+def _tap_loops(op) -> _Source:
+    """Open one loop per spatial axis over the taps of a window, each extent written in as a literal."""
+    lines: _Source = []
     for axis, taps in enumerate(op.kernel_size):
         lines += [f"for t{axis} in range({taps}):", CODE_TOKEN.INDENT]
     return lines
@@ -79,7 +85,7 @@ def numba_funcify_Im2Col(op, node=None, **kwargs):
         ["batch", *counts, *(str(extent) for extent in op.kernel_size), "channels"]
     )
     source.append(f"out = np.empty({out_shape}, dtype=X.dtype)")
-    source += _loop_nest(op, counts)
+    source += _window_loops(counts) + _tap_loops(op)
     # One channel at a time: a row copy would memcpy `in_channels` elements, too few to pay for itself
     source += ["for c in range(channels):", CODE_TOKEN.INDENT]
     read = ", ".join(_window_position(op, axis) for axis in range(n_spatial))
@@ -122,7 +128,7 @@ def numba_funcify_Col2Im(op, node=None, **kwargs):
     source += count_lines
     out_shape = create_tuple_string(["batch", *extents, "channels"])
     source.append(f"out = np.zeros({out_shape}, dtype=patches.dtype)")
-    source += _loop_nest(op, counts)
+    source += _window_loops(counts) + _tap_loops(op)
     # Scalar accumulation rather than a slice `+=`, which allocates a temporary per window visit
     source += ["for c in range(channels):", CODE_TOKEN.INDENT]
     write = ", ".join(_window_position(op, axis) for axis in range(n_spatial))
