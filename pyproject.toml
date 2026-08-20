@@ -76,6 +76,13 @@ filterwarnings = [
     # warnings filter per-test and undoes it. Numba emits it from the numba
     # linker, which is pytensor 3's default.
     "ignore::numba.core.errors.NumbaPerformanceWarning",
+    # torch.compile pulls in inductor, which imports torch.utils.mkldnn, whose class bodies still call
+    # the deprecated torch.jit.script_method. Raising here aborts the import half-done, so every later
+    # torch-mode test retries it and fails the same way. The message past this prefix depends on the
+    # Python version.
+    "ignore:`torch.jit.script_method` is:DeprecationWarning",
+    # pytensor hands torch its constants as the read-only numpy arrays it stores them in.
+    "ignore:The given NumPy array is not writable:UserWarning",
 ]
 
 [tool.ruff]
