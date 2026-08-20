@@ -3,6 +3,8 @@ import pytensor
 import pytensor.tensor as pt
 import pytest
 
+from pytensor.compile.mode import Mode
+
 from pytensor_ml.layers import AvgPool1D, AvgPool2D, MaxPool1D, MaxPool2D
 from pytensor_ml.layers.conv import PoolLayer, PoolLayerGrad
 
@@ -142,6 +144,43 @@ def test_max_pooling_gives_a_tied_window_to_one_tap():
     gradient = pt.grad(MaxPool1D("pool", kernel_size=2)(X).sum(), X)
 
     np.testing.assert_allclose(gradient.eval({X: X_np})[0, :, 0], [1.0, 0.0, 1.0, 0.0], atol=ATOL)
+
+
+# No linker runs the pooling ops' inner graph once every backend dispatches them, so it is reached
+# deliberately here. It is the portable definition of what pooling means, and a backend's kernel is
+# only correct if it agrees with it.
+FALLBACK = Mode(linker="py", optimizer="fast_compile")
+
+
+@pytest.mark.parametrize("padding", ["valid", "same"], ids=["valid", "same"])
+@pytest.mark.parametrize("layer_cls", [MaxPool1D, AvgPool1D], ids=["max", "avg"])
+def test_the_portable_graph_agrees_with_the_kernel_that_replaces_it(layer_cls, padding, rng):
+    """Every backend dispatches past the inner graph, so nothing else exercises it -- and it is what
+    runs wherever a kernel is missing. A kernel and a fallback that disagree is a result that changes
+    with the backend."""
+    X_np = rng.normal(size=(2, 9, 3)).astype(floatX)
+    X = pt.tensor("X", shape=X_np.shape)
+    out = layer_cls("pool", kernel_size=3, stride=2, padding=padding)(X)
+
+    np.testing.assert_allclose(
+        pytensor.function([X], out, mode=FALLBACK)(X_np),
+        pytensor.function([X], out)(X_np),
+        atol=ATOL,
+    )
+
+
+def test_the_portable_graph_routes_a_tied_window_the_way_the_kernel_does():
+    """The tie rule is the part of the contract most easily lost: `pt.max` would hand the cotangent to
+    every tied tap, and the fallback is where that would go unnoticed."""
+    X_np = np.array([1.0, 1.0, 2.0, 2.0], dtype=floatX).reshape(1, 4, 1)
+    X = pt.tensor("X", shape=X_np.shape)
+    gradient = pt.grad(MaxPool1D("pool", kernel_size=2)(X).sum(), X)
+
+    np.testing.assert_allclose(
+        pytensor.function([X], gradient, mode=FALLBACK)(X_np)[0, :, 0],
+        [1.0, 0.0, 1.0, 0.0],
+        atol=ATOL,
+    )
 
 
 def test_the_pooling_gradient_op_rejects_a_reduction_it_does_not_have():

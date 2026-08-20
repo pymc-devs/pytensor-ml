@@ -1,15 +1,21 @@
+from typing import NamedTuple
+
 import numpy as np
 
 from pytensor.link.numba.cache import compile_numba_function_src
 from pytensor.link.numba.dispatch import basic as numba_basic
-from pytensor.link.numba.dispatch.basic import register_funcify_default_op_cache_key
+from pytensor.link.numba.dispatch.basic import (
+    default_hash_key_from_props,
+    register_funcify_and_cache_key,
+    register_funcify_default_op_cache_key,
+)
 from pytensor.link.numba.dispatch.string_codegen import (
     CODE_TOKEN,
     build_source_code,
     create_tuple_string,
 )
 
-from pytensor_ml.layers.conv import Col2Im, Im2Col
+from pytensor_ml.layers.conv import Col2Im, Im2Col, PoolLayer, PoolLayerGrad
 
 # The generated kernels are compiled against this namespace rather than the module's, so the only
 # name they can reach is spelled out rather than being whatever the module happens to import.
@@ -144,3 +150,140 @@ def numba_funcify_Col2Im(op, node=None, **kwargs):
     # Bump whenever the generated source changes: the default key covers the op's props, not this
     cache_version = 1
     return kernel, cache_version
+
+
+class _Accumulator(NamedTuple):
+    """How one reduction seeds an accumulator, folds one tap into it, and finishes it."""
+
+    seed: str
+    fold: _Source
+    finish: str
+
+
+# Max seeds from the window's own first tap rather than from an infinity, so the kernel never depends on
+# the input's dtype having one.
+_ACCUMULATORS = {
+    "max": _Accumulator(
+        seed="acc = X[b, {first_tap}, c]",
+        fold=["if value > acc:", CODE_TOKEN.INDENT, "acc = value", CODE_TOKEN.DEDENT],
+        finish="acc",
+    ),
+    "mean": _Accumulator(
+        seed="acc = X.dtype.type(0)",
+        fold=["acc += value"],
+        finish="acc / {taps}",
+    ),
+}
+
+
+# Registered against the keyed dispatcher rather than the default-key helper: a `PoolLayer` is an
+# `OpFromGraph`, and the generic OpFromGraph entry is the more specific match for the dispatcher the
+# linker actually calls, so it would otherwise win and inline the inner graph.
+@register_funcify_and_cache_key(PoolLayer)
+def numba_funcify_PoolLayer(op, node=None, **kwargs):
+    """
+    Reduce each window in place, without materializing the windows.
+
+    The inner graph gathers every window and then reduces the gathered copy, which writes and re-reads a
+    buffer several times the input. Reading each window where it lies costs one pass and no buffer.
+    """
+    n_spatial = len(op.kernel_size)
+    extents = [f"X.shape[{1 + axis}]" for axis in range(n_spatial)]
+    windows = [f"w{axis}" for axis in range(n_spatial)]
+    accumulator = _ACCUMULATORS[op.reduction]
+    read = ", ".join(_window_position(op, axis) for axis in range(n_spatial))
+    first_tap = ", ".join(f"w{axis} * {op.stride[axis]}" for axis in range(n_spatial))
+
+    source: _Source = [
+        "def pool(X):",
+        CODE_TOKEN.INDENT,
+        "batch = X.shape[0]",
+        f"channels = X.shape[{1 + n_spatial}]",
+    ]
+    count_lines, counts = _window_counts(op, extents)
+    source += count_lines
+    out_shape = create_tuple_string(["batch", *counts, "channels"])
+    source.append(f"out = np.empty({out_shape}, dtype=X.dtype)")
+
+    source += _window_loops(counts)
+    source += ["for c in range(channels):", CODE_TOKEN.INDENT]
+    source.append(accumulator.seed.format(first_tap=first_tap))
+    source += _tap_loops(op)
+    source.append(f"value = X[b, {read}, c]")
+    source += accumulator.fold
+    source += [CODE_TOKEN.DEDENT] * n_spatial
+    reduced = accumulator.finish.format(taps=int(np.prod(op.kernel_size)))
+    source.append(f"out[b, {', '.join(windows)}, c] = {reduced}")
+    source += [CODE_TOKEN.DEDENT] * (n_spatial + 2)
+    source.append("return out")
+
+    kernel = numba_basic.numba_njit(
+        compile_numba_function_src(
+            build_source_code(source), function_name="pool", global_env=_KERNEL_GLOBALS
+        )
+    )
+    cache_version = 1
+    return kernel, default_hash_key_from_props(op, cache_version=cache_version)
+
+
+@register_funcify_and_cache_key(PoolLayerGrad)
+def numba_funcify_PoolLayerGrad(op, node=None, **kwargs):
+    """
+    Route each window's cotangent straight to the positions that earned it.
+
+    Differentiating the forward instead gathers every window, reduces it a second time to find where its
+    maximum was, and scatters -- three passes over a buffer larger than the input, to move one value per
+    window.
+    """
+    n_spatial = len(op.kernel_size)
+    extents = [f"X.shape[{1 + axis}]" for axis in range(n_spatial)]
+    windows = [f"w{axis}" for axis in range(n_spatial)]
+    read = ", ".join(_window_position(op, axis) for axis in range(n_spatial))
+    first_tap = ", ".join(f"w{axis} * {op.stride[axis]}" for axis in range(n_spatial))
+    cotangent = f"cotangent[b, {', '.join(windows)}, c]"
+
+    source: _Source = [
+        "def pool_grad(X, cotangent):",
+        CODE_TOKEN.INDENT,
+        "batch = X.shape[0]",
+        f"channels = X.shape[{1 + n_spatial}]",
+    ]
+    count_lines, counts = _window_counts(op, extents)
+    source += count_lines
+    source.append("out = np.zeros(X.shape, dtype=X.dtype)")
+    source += _window_loops(counts)
+    source += ["for c in range(channels):", CODE_TOKEN.INDENT]
+
+    if op.reduction == "max":
+        # Locate the winner first, then credit it once. Ties go to the earliest tap, matching the
+        # `>` the forward kernel uses to keep its own running maximum.
+        source.append(f"best = X[b, {first_tap}, c]")
+        source += [f"best_{axis} = 0" for axis in range(n_spatial)]
+        source += _tap_loops(op)
+        source.append(f"value = X[b, {read}, c]")
+        source += ["if value > best:", CODE_TOKEN.INDENT, "best = value"]
+        source += [f"best_{axis} = t{axis}" for axis in range(n_spatial)]
+        source.append(CODE_TOKEN.DEDENT)
+        source += [CODE_TOKEN.DEDENT] * n_spatial
+        winner = ", ".join(
+            f"w{axis} * {op.stride[axis]} + best_{axis} * {op.dilation[axis]}"
+            for axis in range(n_spatial)
+        )
+        source.append(f"out[b, {winner}, c] += {cotangent}")
+    else:
+        taps = int(np.prod(op.kernel_size))
+        source.append(f"share = {cotangent} / {taps}")
+        source += _tap_loops(op)
+        source.append(f"out[b, {read}, c] += share")
+        source += [CODE_TOKEN.DEDENT] * n_spatial
+
+    source += [CODE_TOKEN.DEDENT] * (n_spatial + 2)
+    source.append("return out")
+
+    kernel = numba_basic.numba_njit(
+        compile_numba_function_src(
+            build_source_code(source), function_name="pool_grad", global_env=_KERNEL_GLOBALS
+        )
+    )
+    cache_version = 1
+    return kernel, default_hash_key_from_props(op, cache_version=cache_version)
