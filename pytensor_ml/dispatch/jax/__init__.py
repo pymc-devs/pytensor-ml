@@ -2,3 +2,4 @@
 # marker op that gets a kernel, mirroring the layout under pytensor_ml/layers.
 import pytensor_ml.dispatch.jax.attention
 import pytensor_ml.dispatch.jax.conv
+import pytensor_ml.dispatch.jax.pooling
