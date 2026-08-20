@@ -5,7 +5,7 @@ import pytest
 
 from scipy.signal import correlate
 
-from pytensor_ml.layers import Conv1D, Input, Linear
+from pytensor_ml.layers import Conv1D, Conv2D, Input, Linear
 from pytensor_ml.layers.conv import (
     Col2Im,
     ConvLayer,
@@ -113,13 +113,18 @@ def correlate_reference(X_np, W_np, stride=1, dilation=1):
     ``scipy.signal.correlate`` is not another path through pytensor, so it cannot agree with a bug the
     implementation and a pytensor-based reference would share. It has no notion of stride or dilation,
     so dilation is spelled by zero-stuffing the kernel and stride by subsampling the result -- both
-    definitions rather than reimplementations of what the layer does.
+    definitions rather than reimplementations of what the layer does. ``stride`` and ``dilation`` each
+    take a scalar or one value per spatial axis.
     """
     *kernel, in_channels, out_channels = W_np.shape
-    spans = tuple(dilation * (extent - 1) + 1 for extent in kernel)
-    if dilation != 1:
+    strides = (stride,) * len(kernel) if isinstance(stride, int) else tuple(stride)
+    dilations = (dilation,) * len(kernel) if isinstance(dilation, int) else tuple(dilation)
+    spans = tuple(spacing * (extent - 1) + 1 for extent, spacing in zip(kernel, dilations))
+    if any(spacing != 1 for spacing in dilations):
         stuffed = np.zeros((*spans, in_channels, out_channels), dtype=W_np.dtype)
-        stuffed[(*(slice(None, None, dilation) for _ in kernel), slice(None), slice(None))] = W_np
+        stuffed[
+            (*(slice(None, None, spacing) for spacing in dilations), slice(None), slice(None))
+        ] = W_np
         W_np = stuffed
     outputs = []
     for image in X_np:
@@ -135,7 +140,7 @@ def correlate_reference(X_np, W_np, stride=1, dilation=1):
         outputs.append(np.stack(planes, axis=-1))
     assert outputs[0].ndim == len(kernel) + 1
     stacked = np.stack(outputs)
-    return stacked[(slice(None), *(slice(None, None, stride) for _ in kernel), slice(None))]
+    return stacked[(slice(None), *(slice(None, None, step) for step in strides), slice(None))]
 
 
 @pytest.mark.parametrize(
@@ -615,3 +620,125 @@ def test_the_gather_backward_runs_when_the_spatial_extent_is_only_known_at_runti
         gradients.append(pytensor.function([X, seed], pulled_back)(X_np, seed_np))
 
     np.testing.assert_allclose(*gradients, atol=ATOL)
+
+
+def test_conv2d_correlates_like_scipy_and_adds_its_bias(rng):
+    """The layer at rank 2, against the reference rather than against the op. A rectangular kernel is
+    what separates the two spatial axes: a layer that transposed them would still pass at rank 1 and
+    with a square kernel."""
+    X = pt.tensor("X", shape=(None, None, None, 3))
+    layer = Conv2D("conv", in_channels=3, out_channels=5, kernel_size=(2, 4))
+
+    W_np = rng.normal(size=(2, 4, 3, 5)).astype(floatX)
+    b_np = rng.normal(size=(5,)).astype(floatX)
+    layer.W.set_value(W_np)
+    layer.b.set_value(b_np)
+    X_np = rng.normal(size=(2, 9, 11, 3)).astype(floatX)
+
+    np.testing.assert_allclose(
+        layer(X).eval({X: X_np}), correlate_reference(X_np, W_np) + b_np, atol=ATOL
+    )
+
+
+@pytest.mark.parametrize(
+    "stride, dilation",
+    [((2, 1), (1, 1)), ((1, 3), (1, 1)), ((1, 1), (2, 1)), ((1, 1), (1, 3)), ((3, 2), (1, 2))],
+    ids=["stride_h", "stride_w", "dilate_h", "dilate_w", "both_asymmetric"],
+)
+def test_conv2d_strides_and_dilates_per_axis_like_scipy(stride, dilation, rng):
+    """Each axis carries its own stride and dilation, and only an asymmetric setting can catch the two
+    being swapped or one of them broadcast over both axes."""
+    X = pt.tensor("X", shape=(None, None, None, 3))
+    layer = Conv2D(
+        "conv",
+        in_channels=3,
+        out_channels=4,
+        kernel_size=(2, 3),
+        stride=stride,
+        dilation=dilation,
+        bias=False,
+    )
+
+    W_np = rng.normal(size=(2, 3, 3, 4)).astype(floatX)
+    layer.W.set_value(W_np)
+    X_np = rng.normal(size=(2, 14, 16, 3)).astype(floatX)
+
+    np.testing.assert_allclose(
+        layer(X).eval({X: X_np}),
+        correlate_reference(X_np, W_np, stride=stride, dilation=dilation),
+        atol=ATOL,
+    )
+
+
+@pytest.mark.parametrize(
+    "kernel_size, spatial, expected",
+    [
+        ((3, 3), (8, 10), (8, 10)),
+        ((2, 4), (8, 10), (8, 10)),
+        ((2, 5), (7, 7), (7, 7)),
+    ],
+    ids=["both_odd", "both_even", "mixed_parity"],
+)
+def test_conv2d_same_padding_holds_each_axis_independently(kernel_size, spatial, expected, rng):
+    """`same` has no symmetric answer at an even extent, and rank 2 is where one axis can be even while
+    the other is odd -- the case that catches a padding amount computed once and reused."""
+    X = pt.tensor("X", shape=(None, None, None, 3))
+    layer = Conv2D("conv", in_channels=3, out_channels=2, kernel_size=kernel_size, padding="same")
+    X_np = rng.normal(size=(2, *spatial, 3)).astype(floatX)
+
+    assert layer(X).eval({X: X_np}).shape == (2, *expected, 2)
+
+
+def test_conv1d_matches_a_conv2d_whose_second_axis_is_degenerate(rng):
+    """Both layers are `_ConvNd` with a different `n_spatial`, and this is what pins that: a 2-D
+    convolution over a width-1 image with a width-1 kernel is a 1-D convolution, so the two have to
+    agree to the last bit rather than merely have matching shapes."""
+    W_np = rng.normal(size=(3, 4, 5)).astype(floatX)
+    b_np = rng.normal(size=(5,)).astype(floatX)
+    X_np = rng.normal(size=(2, 12, 4)).astype(floatX)
+
+    one_d = Conv1D("one_d", in_channels=4, out_channels=5, kernel_size=3, stride=2)
+    one_d.W.set_value(W_np)
+    one_d.b.set_value(b_np)
+
+    two_d = Conv2D("two_d", in_channels=4, out_channels=5, kernel_size=(3, 1), stride=(2, 1))
+    two_d.W.set_value(W_np[:, None])
+    two_d.b.set_value(b_np)
+
+    X1 = pt.tensor("X1", shape=(None, None, 4))
+    X2 = pt.tensor("X2", shape=(None, None, None, 4))
+    np.testing.assert_allclose(
+        one_d(X1).eval({X1: X_np}),
+        two_d(X2).eval({X2: X_np[:, :, None]})[:, :, 0],
+        atol=ATOL,
+    )
+
+
+def test_conv2d_draws_its_kernel_with_both_extents_in_the_fans():
+    """`fans` takes the two trailing dimensions as the features and everything before them as the
+    receptive field, so at rank 2 the field is the product of both extents."""
+    layer = Conv2D("conv", in_channels=8, out_channels=16, kernel_size=(3, 5))
+
+    assert layer.W.get_value().shape == (3, 5, 8, 16)
+    assert fans(layer.W.get_value().shape) == (8 * 15, 16 * 15)
+
+
+def test_conv2d_same_padding_puts_the_odd_element_after_on_each_axis():
+    """At an even extent `same` cannot pad symmetrically, and the extra element goes after rather than
+    before. Nothing about the output shape distinguishes the two, so only the values pin it -- and a
+    mixed-parity kernel puts the asymmetry on one axis while the other stays symmetric."""
+    X = pt.tensor("X", shape=(None, None, None, 1))
+    X_np = np.ones((1, 4, 4, 1), dtype=floatX)
+
+    layer = Conv2D(
+        "conv", in_channels=1, out_channels=1, kernel_size=(2, 3), padding="same", bias=False
+    )
+    layer.W.set_value(np.ones((2, 3, 1, 1), dtype=floatX))
+
+    # Summing over a constant input counts how many real elements each window saw. Height pads (0, 1),
+    # so only the last row is short; width pads (1, 1), so the first and last columns are.
+    np.testing.assert_allclose(
+        layer(X).eval({X: X_np})[0, :, :, 0],
+        [[4, 6, 6, 4], [4, 6, 6, 4], [4, 6, 6, 4], [2, 3, 3, 2]],
+        atol=ATOL,
+    )

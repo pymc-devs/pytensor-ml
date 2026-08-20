@@ -610,3 +610,52 @@ class Conv1D(_ConvNd):
     """
 
     n_spatial = 1
+
+
+class Conv2D(_ConvNd):
+    r"""
+    Cross-correlate an image with a learned kernel, over two spatial axes.
+
+    Takes ``(batch, height, width, in_channels)`` and returns ``(batch, out_height, out_width,
+    out_channels)``, keeping the channels-last layout the rest of the library uses. Each output position
+    is the kernel contracted against the window of the input beneath it:
+
+    .. math::
+
+        y_{h,w,o} = b_o + \sum_{c} \sum_{i,j}
+            x_{h s_0 + i d_0,\; w s_1 + j d_1,\; c} \, W_{i,j,c,o},
+
+    with :math:`s` the stride and :math:`d` the dilation, one of each per axis. The kernel is not
+    flipped, so this is correlation in the signal-processing sense and convolution in the sense every
+    ML framework means.
+
+    Parameters
+    ----------
+    name : str or None
+        Name prefix for the layer's parameters. Defaults to the class name when None.
+    in_channels : int
+        Size of the input's channel axis.
+    out_channels : int
+        Size of the output's channel axis, one per kernel.
+    kernel_size : int or tuple of int
+        Window extent, shared by both axes or given as ``(height, width)``.
+    stride : int or tuple of int, optional
+        Step between windows, shared or per axis. Default is 1.
+    dilation : int or tuple of int, optional
+        Spacing between the kernel's taps, which widens the receptive field without adding parameters.
+        Shared or per axis. Default is 1.
+    padding : {"valid", "same"}, int, or tuple of int, optional
+        No padding, enough to leave each output extent at :math:`\lceil \text{extent} / s \rceil`, or
+        an explicit number of elements on each side, shared or per axis. Default is "valid".
+    padding_mode : str, optional
+        How padded elements are filled, passed to :func:`pytensor.tensor.pad`. Default is "constant",
+        which pads with zeros; "reflect", "symmetric" and "edge" are the other useful ones.
+    bias : bool, optional
+        Add the learned shift :math:`b`, one per output channel. Default is True.
+    weight_initializer : Initializer, optional
+        How :math:`W` is drawn. Xavier normal when omitted, whose fans count the receptive field.
+    bias_initializer : Initializer, optional
+        How :math:`b` is drawn. Zeros when omitted.
+    """
+
+    n_spatial = 2
