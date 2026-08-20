@@ -17,6 +17,7 @@ from pytensor_ml.layers.conv import (
     MaxPool1D,
     MaxPool2D,
     PoolLayer,
+    PoolLayerGrad,
 )
 from pytensor_ml.layers.dropout import Dropout, DropoutLayer
 from pytensor_ml.layers.embedding import Embedding, EmbeddingLayer
@@ -69,6 +70,7 @@ __all__ = [
     "MaxPool2D",
     "MultiheadAttention",
     "PoolLayer",
+    "PoolLayerGrad",
     "Recurrent",
     "RecurrentCell",
     "Sequential",

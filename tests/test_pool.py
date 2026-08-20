@@ -4,7 +4,7 @@ import pytensor.tensor as pt
 import pytest
 
 from pytensor_ml.layers import AvgPool1D, AvgPool2D, MaxPool1D, MaxPool2D
-from pytensor_ml.layers.conv import PoolLayer
+from pytensor_ml.layers.conv import PoolLayer, PoolLayerGrad
 
 floatX = pytensor.config.floatX
 ATOL = 1e-6 if floatX == "float64" else 1e-4
@@ -142,3 +142,10 @@ def test_max_pooling_gives_a_tied_window_to_one_tap():
     gradient = pt.grad(MaxPool1D("pool", kernel_size=2)(X).sum(), X)
 
     np.testing.assert_allclose(gradient.eval({X: X_np})[0, :, 0], [1.0, 0.0, 1.0, 0.0], atol=ATOL)
+
+
+def test_the_pooling_gradient_op_rejects_a_reduction_it_does_not_have():
+    """`PoolLayerGrad` is built by `PoolLayer.pullback` today, but it is a public op, and a bad
+    reduction would otherwise surface as a KeyError from a lookup inside its inner graph."""
+    with pytest.raises(ValueError, match="reduction must be one of"):
+        PoolLayerGrad((2,), (2,), (1,), "median")

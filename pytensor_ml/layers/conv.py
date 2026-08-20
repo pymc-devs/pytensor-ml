@@ -469,6 +469,58 @@ class PoolLayer(UnaryLayerOp):
         """Collapse the tap axes of ``(batch, *out_spatial, *kernel_size, channels)``."""
         return [_pool(X, self.kernel_size, self.stride, self.dilation, self.reduction)]
 
+    def pullback(self, inputs, outputs, cotangents):
+        """
+        Differentiate through one :class:`PoolLayerGrad` rather than through the inner graph.
+
+        The default would wrap the pullback in an anonymous ``OpFromGraph``, which registers against no
+        type, so the backward pass would gather every window and reduce it again on every backend.
+        """
+        (X,) = inputs
+        (cotangent,) = cotangents
+        grad_op = PoolLayerGrad(self.kernel_size, self.stride, self.dilation, self.reduction)
+        return [grad_op(X, cotangent)]
+
+
+class PoolLayerGrad(UnaryLayerOp):
+    """
+    The pullback of :class:`PoolLayer`, as a node a backend can dispatch against.
+
+    A max pool routes each window's cotangent to the position that won it and a mean pool splits it
+    evenly, so a backend with its own pooling primitive has both by differentiating that primitive rather
+    than by spelling either out.
+
+    Parameters
+    ----------
+    kernel_size, stride, dilation : tuple of int
+        The forward pooling being differentiated.
+    reduction : {"max", "mean"}
+        Which reduction the forward collapsed each window to.
+    """
+
+    __props__ = ("kernel_size", "stride", "dilation", "reduction")
+
+    def __init__(
+        self,
+        kernel_size: tuple[int, ...],
+        stride: tuple[int, ...],
+        dilation: tuple[int, ...],
+        reduction: str,
+        **kwargs,
+    ):
+        _check_reduction(reduction)
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.dilation = dilation
+        self.reduction = reduction
+        super().__init__(**kwargs)
+
+    def build_inner_graph(self, X, cotangent):
+        """Differentiate the forward reduction, which is what every dispatch also does."""
+        out = _pool(X, self.kernel_size, self.stride, self.dilation, self.reduction)
+        [gradient] = pt.grad(cost=None, wrt=[X], known_grads={out: cotangent})
+        return [gradient]
+
 
 def _pool(
     X: TensorVariable,
