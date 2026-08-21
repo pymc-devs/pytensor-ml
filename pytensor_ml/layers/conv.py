@@ -381,12 +381,13 @@ class ConvLayerGrad(LayerOp):
     ----------
     kernel_size, stride, dilation : tuple of int
         The forward convolution being differentiated.
-    compute_dX : bool
-        Return the input gradient alongside the kernel's. False drops it, which is right only where
-        nothing consumes it -- the first convolution of a network, whose input is data.
+    compute_dX, compute_dW : bool, optional
+        Which gradients to return, in that order. Dropping one is right wherever nothing consumes it:
+        the first convolution of a network needs no input gradient, and a transposed convolution needs
+        no kernel gradient. At least one must be asked for. Both default to ``True``.
     """
 
-    __props__ = ("kernel_size", "stride", "dilation", "compute_dX")
+    __props__ = ("kernel_size", "stride", "dilation", "compute_dX", "compute_dW")
 
     def __init__(
         self,
@@ -394,18 +395,27 @@ class ConvLayerGrad(LayerOp):
         stride: tuple[int, ...],
         dilation: tuple[int, ...],
         compute_dX: bool = True,
+        compute_dW: bool = True,
         **kwargs,
     ):
+        if not (compute_dX or compute_dW):
+            raise ValueError(
+                "ConvLayerGrad must return at least one gradient, but both compute_dX and compute_dW "
+                "are False."
+            )
         self.kernel_size = kernel_size
         self.stride = stride
         self.dilation = dilation
         self.compute_dX = compute_dX
+        self.compute_dW = compute_dW
         super().__init__(**kwargs)
 
     def build_inner_graph(self, X, W, cotangent):
         """Differentiate the forward correlation, which is what every dispatch also does."""
         out = _correlate(X, W, self.kernel_size, self.stride, self.dilation)
-        wrt = [X, W] if self.compute_dX else [W]
+        wrt = [
+            variable for variable, wanted in ((X, self.compute_dX), (W, self.compute_dW)) if wanted
+        ]
         return list(pt.grad(cost=None, wrt=wrt, known_grads={out: cotangent}))
 
 

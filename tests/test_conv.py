@@ -779,3 +779,33 @@ def test_a_convolutional_network_trains_end_to_end(rng):
 
     losses = [float(step(X_np, y_np)) for _ in range(50)]
     assert losses[-1] < losses[0] / 5
+
+
+@pytest.mark.parametrize("dropped", ["dX", "dW"], ids=["without_dX", "without_dW"])
+def test_dropping_one_gradient_leaves_the_other_unchanged(dropped, rng):
+    """The rewrite is only safe if a lowered op returns the same numbers as the pair it replaces, so
+    this compares them directly rather than trusting that fewer outputs means the same arithmetic."""
+    X_np = rng.normal(size=(2, 6, 6, 3)).astype(floatX)
+    W_np = rng.normal(size=(3, 3, 3, 4)).astype(floatX)
+    V_np = rng.normal(size=(2, 4, 4, 4)).astype(floatX)
+    X = pt.tensor("X", shape=X_np.shape)
+    W = pt.tensor("W", shape=W_np.shape)
+    cotangent = pt.tensor("cotangent", shape=V_np.shape)
+
+    geometry = ((3, 3), (1, 1), (1, 1))
+    keeping_dX = dropped == "dW"
+    both = ConvLayerGrad(*geometry)(X, W, cotangent)
+    alone = ConvLayerGrad(*geometry, compute_dX=keeping_dX, compute_dW=not keeping_dX)(
+        X, W, cotangent
+    )
+
+    kept = both[0] if keeping_dX else both[1]
+    values = pytensor.function([X, W, cotangent], [kept, alone])(X_np, W_np, V_np)
+    np.testing.assert_allclose(*values, atol=ATOL)
+
+
+def test_the_pullback_must_return_some_gradient():
+    """Both flags false describes an op with no outputs, which would build and then fail somewhere
+    downstream rather than where the mistake was made."""
+    with pytest.raises(ValueError, match="must return at least one gradient"):
+        ConvLayerGrad((3,), (1,), (1,), compute_dX=False, compute_dW=False)
