@@ -5,7 +5,8 @@ import pytest
 
 from scipy.signal import correlate
 
-from pytensor_ml.layers import Conv1D, Conv2D, Input, Linear
+from pytensor_ml.activations import ReLU
+from pytensor_ml.layers import BatchNorm, Conv1D, Conv2D, Flatten, Input, Linear, MaxPool2D
 from pytensor_ml.layers.conv import (
     Col2Im,
     ConvLayer,
@@ -758,3 +759,23 @@ def test_a_conv_stack_keeps_the_output_shape_it_can_work_out(spatial, expected):
     second = Conv2D("c2", in_channels=8, out_channels=16, kernel_size=3)(first)
 
     assert second.type.shape == expected
+
+
+def test_a_convolutional_network_trains_end_to_end(rng):
+    """The step the whole plan is for: convolution, pooling, spatial batch norm and a dense head, in
+    one graph, learning. Each piece is tested alone elsewhere -- this is the only test that says they
+    compose, and that gradients survive every op boundary between them."""
+    X = Input("X", shape=(None, 8, 8, 2))
+    features = Conv2D("conv", in_channels=2, out_channels=4, kernel_size=3, padding="same")(X)
+    normalized = BatchNorm("norm", n_in=4)(ReLU()(features))
+    pooled = MaxPool2D("pool", kernel_size=2)(normalized)
+    y = Linear("head", 4 * 4 * 4, 1)(Flatten(pooled))
+
+    model = Model(X, y).initialize(seed=1)
+    step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)
+
+    X_np = rng.normal(size=(32, 8, 8, 2)).astype(floatX)
+    y_np = X_np.sum(axis=(1, 2, 3))[:, None].astype(floatX)
+
+    losses = [float(step(X_np, y_np)) for _ in range(50)]
+    assert losses[-1] < losses[0] / 5
