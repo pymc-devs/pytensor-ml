@@ -57,21 +57,26 @@ def test_the_gradient_dispatch_matches_the_graph(rng):
         )
 
 
-def test_the_input_gradient_is_dropped_when_nothing_reads_it(rng):
-    """The rewrite lowers `compute_dX` where the input gradient has no clients, so torch is asked to
-    differentiate with respect to the kernel alone."""
+@pytest.mark.parametrize("wrt", ["W", "X"], ids=["kernel_only", "input_only"])
+def test_a_lone_gradient_dispatches_and_matches_the_graph(wrt, rng):
+    """`ConvLayer.pullback` asks for both gradients; the rewrite drops whichever has no clients. That
+    reaches a different branch of the dispatch than the pair does -- one that differentiates toward a
+    single input and returns a bare array rather than a tuple -- so it is checked for itself."""
     X = pt.tensor("X", shape=(4, 24, 3), dtype=floatX)
     layer = Conv1D("conv", in_channels=3, out_channels=5, kernel_size=3)
-    cost = layer(X).sum()
+    layer.W.set_value(rng.normal(size=(3, 3, 5)).astype(floatX))
+    layer.b.set_value(rng.normal(size=(5,)).astype(floatX))
+    cost = (layer(X) ** 2).sum()
+    X_np = rng.normal(size=(4, 24, 3)).astype(floatX)
 
-    def grad_op(targets):
-        fn = pytensor.function([X], targets, mode="PYTORCH")
-        return next(
-            n.op for n in fn.maker.fgraph.apply_nodes if type(n.op).__name__ == "ConvLayerGrad"
-        )
+    gradient = pt.grad(cost, X if wrt == "X" else layer.W)
+    fn = pytensor.function([X], gradient, mode="PYTORCH")
+    grad_op = next(
+        n.op for n in fn.maker.fgraph.apply_nodes if type(n.op).__name__ == "ConvLayerGrad"
+    )
 
-    assert grad_op([pt.grad(cost, layer.W)]).compute_dX is False
-    assert grad_op(pt.grad(cost, [layer.W, X])).compute_dX is True
+    assert (grad_op.compute_dX, grad_op.compute_dW) == (wrt == "X", wrt == "W")
+    assert_close(np.asarray(fn(X_np)), np.asarray(pytensor.function([X], gradient)(X_np)))
 
 
 def test_the_conv_op_matches_the_graph_over_two_spatial_axes(rng):

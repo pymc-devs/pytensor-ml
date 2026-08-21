@@ -3,6 +3,7 @@ import pytensor
 import pytensor.tensor as pt
 import pytest
 
+from pytensor.compile.mode import get_default_mode
 from scipy.signal import correlate
 
 from pytensor_ml.activations import ReLU
@@ -496,30 +497,6 @@ def test_im2col_infers_the_shape_it_produces(rng):
     np.testing.assert_array_equal(inferred, pytensor.function([X], patches)(X_np).shape)
 
 
-def test_the_input_gradient_is_dropped_when_nothing_reads_it(rng):
-    """`ConvLayer.pullback` always asks for both gradients, because only the graph knows which are
-    wanted. The rewrite lowers `compute_dX` where the input gradient has no clients -- the first
-    convolution of a network -- so the backward computes one gradient rather than two."""
-    X = pt.tensor("X", shape=(4, 24, 3))
-    layer = Conv1D("conv", in_channels=3, out_channels=5, kernel_size=3)
-    cost = layer(X).sum()
-
-    def grad_op(targets):
-        fn = pytensor.function([X], targets)
-        return next(
-            node.op for node in fn.maker.fgraph.apply_nodes if isinstance(node.op, ConvLayerGrad)
-        )
-
-    assert grad_op([pt.grad(cost, layer.W)]).compute_dX is False
-    assert grad_op(pt.grad(cost, [layer.W, X])).compute_dX is True
-
-    # Dropping the output must not change the one that is kept.
-    X_np = rng.normal(size=(4, 24, 3)).astype(floatX)
-    alone = pytensor.function([X], pt.grad(cost, layer.W))(X_np)
-    alongside = pytensor.function([X], pt.grad(cost, [layer.W, X]))(X_np)[0]
-    np.testing.assert_allclose(alone, alongside, atol=ATOL)
-
-
 @pytest.mark.parametrize(
     "spatial, kernel_size, stride, dilation",
     [
@@ -779,6 +756,39 @@ def test_a_convolutional_network_trains_end_to_end(rng):
 
     losses = [float(step(X_np, y_np)) for _ in range(50)]
     assert losses[-1] < losses[0] / 5
+
+
+@pytest.mark.parametrize(
+    "wanted, expected",
+    [("dX", (True, False)), ("dW", (False, True)), ("both", (True, True))],
+    ids=["input_only", "kernel_only", "both"],
+)
+def test_the_pullback_computes_only_the_gradients_something_reads(wanted, expected, rng):
+    """`ConvLayer.pullback` asks for both gradients because only the graph knows which are wanted, and
+    only once it is built. A rewrite then drops whichever has no clients -- the input gradient for the
+    first convolution of a network, the kernel gradient for a transposed one -- and the numbers it
+    leaves behind have to be the ones the un-rewritten graph would have produced."""
+    X = pt.tensor("X", shape=(4, 24, 3))
+    layer = Conv1D("conv", in_channels=3, out_channels=5, kernel_size=3)
+    layer.W.set_value(rng.normal(size=(3, 3, 5)).astype(floatX))
+    layer.b.set_value(rng.normal(size=(5,)).astype(floatX))
+    cost = (layer(X) ** 2).sum()
+    targets = {
+        "dX": [pt.grad(cost, X)],
+        "dW": [pt.grad(cost, layer.W)],
+        "both": pt.grad(cost, [X, layer.W]),
+    }[wanted]
+    X_np = rng.normal(size=(4, 24, 3)).astype(floatX)
+
+    fn = pytensor.function([X], targets)
+    grad_op = next(
+        node.op for node in fn.maker.fgraph.apply_nodes if isinstance(node.op, ConvLayerGrad)
+    )
+    assert (grad_op.compute_dX, grad_op.compute_dW) == expected
+
+    unrewritten = get_default_mode().excluding("drop_unused_input_grad", "drop_unused_kernel_grad")
+    for dropped, kept in zip(pytensor.function([X], targets, mode=unrewritten)(X_np), fn(X_np)):
+        np.testing.assert_allclose(kept, dropped, atol=ATOL)
 
 
 @pytest.mark.parametrize("dropped", ["dX", "dW"], ids=["without_dX", "without_dW"])
