@@ -11,7 +11,7 @@ import pytensor_ml.layers
 
 from pytensor_ml.activations import ReLU
 from pytensor_ml.layers import (
-    BatchNorm2D,
+    BatchNorm,
     Conv2D,
     Dropout,
     Embedding,
@@ -162,9 +162,9 @@ def test_embedding_table_is_trainable(rng):
 
 
 @pytest.mark.parametrize("n_in", [6, None], ids=["specified", "lazy"])
-def test_batch_norm_2d_forward(n_in, rng):
+def test_batch_norm_forward(n_in, rng):
     X = pt.tensor("X", shape=(None, 6))
-    batch_norm = BatchNorm2D(name="BatchNorm_1", n_in=n_in)
+    batch_norm = BatchNorm(name="BatchNorm_1", n_in=n_in)
     out = batch_norm(X)
 
     X_np = rng.normal(size=(10, 6)).astype(floatX)
@@ -247,10 +247,10 @@ def test_layer_norm_no_affine_standardizes_each_row(rng):
     np.testing.assert_allclose(res.var(axis=-1), 1.0, rtol=1e-3)
 
 
-def test_batch_norm_2d_learns_population_stats(rng):
+def test_batch_norm_learns_population_stats(rng):
     population_mean, population_std = 3.2, 6.2
     X = pt.tensor("X", shape=(None, 32))
-    batch_norm = BatchNorm2D(name="BatchNorm_1", n_in=32, momentum=0.05, epsilon=1e-8)
+    batch_norm = BatchNorm(name="BatchNorm_1", n_in=32, momentum=0.05, epsilon=1e-8)
     X_normalized = batch_norm(X)
 
     loss = pt.square(X_normalized - X).mean()
@@ -323,9 +323,9 @@ def test_marker_ops_stay_reachable_from_the_package(op_name, submodule):
     assert from_package is from_submodule
 
 
-def test_batch_norm_2d_without_running_stats_normalizes_with_batch_statistics(rng):
+def test_batch_norm_without_running_stats_normalizes_with_batch_statistics(rng):
     X = pt.tensor("X", shape=(None, 4))
-    normalize = pytensor.function([X], BatchNorm2D("bn", n_in=4, track_running_stats=False)(X))
+    normalize = pytensor.function([X], BatchNorm("bn", n_in=4, track_running_stats=False)(X))
 
     out = normalize(rng.normal(loc=5.0, scale=3.0, size=(256, 4)).astype(floatX))
 
@@ -334,11 +334,11 @@ def test_batch_norm_2d_without_running_stats_normalizes_with_batch_statistics(rn
 
 
 @pytest.mark.parametrize("affine", [True, False], ids=["affine", "no_affine"])
-def test_batch_norm_2d_running_stats_write_back_to_the_right_inputs(affine):
+def test_batch_norm_running_stats_write_back_to_the_right_inputs(affine):
     # The update map indexes inputs positionally, and the affine parameters shift the running
     # statistics along by two when present.
     X = pt.tensor("X", shape=(None, 4))
-    batch_norm = BatchNorm2D("bn", n_in=4, affine=affine)
+    batch_norm = BatchNorm("bn", n_in=4, affine=affine)
 
     updates = collect_non_trainable_updates(batch_norm(X))
 
@@ -348,10 +348,10 @@ def test_batch_norm_2d_running_stats_write_back_to_the_right_inputs(affine):
     }
 
 
-def test_batch_norm_2d_variants_agree_on_output_arity():
+def test_batch_norm_variants_agree_on_output_arity():
     X = pt.tensor("X", shape=(None, 4))
-    tracked = BatchNorm2D("tracked", n_in=4)(X)
-    untracked = BatchNorm2D("untracked", n_in=4, track_running_stats=False)(X)
+    tracked = BatchNorm("tracked", n_in=4)(X)
+    untracked = BatchNorm("untracked", n_in=4, track_running_stats=False)(X)
 
     # Matching arity is what lets BatchNorm use one code path; the untracked variant reports the
     # batch statistics but must not write them anywhere.
@@ -373,7 +373,7 @@ DECLARED_BY_LAYERS = {
         IDS,
         {"emb_W": None},
     ),
-    "BatchNorm": (lambda: BatchNorm2D("bn", n_in=4), FEATURES, {"bn_scale": 1.0, "bn_loc": 0.0}),
+    "BatchNorm": (lambda: BatchNorm("bn", n_in=4), FEATURES, {"bn_scale": 1.0, "bn_loc": 0.0}),
     "LayerNorm": (lambda: LayerNorm("ln", n_in=4), FEATURES, {"ln_scale": 1.0, "ln_loc": 0.0}),
 }
 
@@ -419,13 +419,13 @@ INITIALIZER_KEYWORDS = {
         {},
     ),
     "BatchNorm.scale": (
-        lambda init: BatchNorm2D("bn", n_in=4, scale_initializer=init),
+        lambda init: BatchNorm("bn", n_in=4, scale_initializer=init),
         FEATURES,
         "bn_scale",
         {"bn_loc": 0.0},
     ),
     "BatchNorm.loc": (
-        lambda init: BatchNorm2D("bn", n_in=4, loc_initializer=init),
+        lambda init: BatchNorm("bn", n_in=4, loc_initializer=init),
         FEATURES,
         "bn_loc",
         {"bn_scale": 1.0},
@@ -568,12 +568,12 @@ def test_flatten_reaches_a_dense_head_from_a_convolution(rng):
     assert head(flattened).eval({X: X_np}).shape == (5, 2)
 
 
-def test_batch_norm_2d_on_a_flat_input_reduces_over_the_batch_alone(rng):
+def test_batch_norm_on_a_flat_input_reduces_over_the_batch_alone(rng):
     """On `(batch, features)` there is nothing to reduce but the batch, so this pins the whole contract
     at that rank: the normalized values, the per-feature running statistics and the prediction path that
     reads them. Every other rank adds axes to the same reduction rather than changing it."""
     X = pt.tensor("X", shape=(None, 4))
-    batch_norm = BatchNorm2D("bn", n_in=4, momentum=0.25, epsilon=1e-5)
+    batch_norm = BatchNorm("bn", n_in=4, momentum=0.25, epsilon=1e-5)
     out = batch_norm(X)
     batch_norm.scale.set_value(np.array([1.5, 0.5, 2.0, 1.0], dtype=floatX))
     batch_norm.loc.set_value(np.array([0.25, -0.5, 0.0, 1.0], dtype=floatX))
@@ -617,12 +617,12 @@ def test_batch_norm_2d_on_a_flat_input_reduces_over_the_batch_alone(rng):
     )
 
 
-def test_batch_norm_2d_takes_per_channel_statistics_from_an_image(rng):
+def test_batch_norm_takes_per_channel_statistics_from_an_image(rng):
     """On a `(batch, height, width, channels)` activation a channel is one feature, however many
     positions it appears at. Reducing over the batch alone would give every pixel position its own mean
     and variance, which normalizes each position against the batch instead of normalizing the channel."""
     X = pt.tensor("X", shape=(None, 5, 3, 2))
-    batch_norm = BatchNorm2D("bn", n_in=2, affine=False)
+    batch_norm = BatchNorm("bn", n_in=2, affine=False)
     out = batch_norm(X)
 
     X_np = rng.normal(size=(4, 5, 3, 2)).astype(floatX)
@@ -634,12 +634,12 @@ def test_batch_norm_2d_takes_per_channel_statistics_from_an_image(rng):
     np.testing.assert_allclose(out.eval({X: X_np}), expected, rtol=1e-5, atol=ATOL)
 
 
-def test_batch_norm_2d_keeps_one_running_statistic_per_channel(rng):
+def test_batch_norm_keeps_one_running_statistic_per_channel(rng):
     """The running statistics are allocated from `n_in` and written from the batch statistics, so a
     reduction over the wrong axes makes the update a shape error rather than a wrong number -- unless
     the image happens to be square, where it silently writes per-pixel values into a per-channel slot."""
     X = pt.tensor("X", shape=(None, 3, 3, 3))
-    batch_norm = BatchNorm2D("bn", n_in=3, momentum=1.0, affine=False)
+    batch_norm = BatchNorm("bn", n_in=3, momentum=1.0, affine=False)
     out = batch_norm(X)
 
     X_np = rng.normal(size=(2, 3, 3, 3)).astype(floatX)
@@ -659,11 +659,11 @@ def test_batch_norm_2d_keeps_one_running_statistic_per_channel(rng):
     )
 
 
-def test_batch_norm_2d_predicts_an_image_from_its_running_statistics(rng):
+def test_batch_norm_predicts_an_image_from_its_running_statistics(rng):
     """Prediction broadcasts the per-channel statistics over every spatial position, which is only
     correct once those statistics are per-channel in the first place."""
     X = pt.tensor("X", shape=(None, 4, 2, 3))
-    batch_norm = BatchNorm2D("bn", n_in=3)
+    batch_norm = BatchNorm("bn", n_in=3)
     out = batch_norm(X)
     batch_norm.scale.set_value(rng.normal(size=3).astype(floatX))
     batch_norm.loc.set_value(rng.normal(size=3).astype(floatX))
@@ -686,20 +686,20 @@ def test_batch_norm_2d_predicts_an_image_from_its_running_statistics(rng):
     )
 
 
-def test_batch_norm_2d_rejects_an_input_with_no_batch_axis():
+def test_batch_norm_rejects_an_input_with_no_batch_axis():
     """Reducing over every axis but the last leaves nothing to reduce on a rank-1 input, which
     standardizes to zeros -- a plausible-looking result from a layer that cannot do its job without a
     batch to take statistics over."""
     with pytest.raises(ValueError, match="needs at least a batch axis and a feature axis"):
-        BatchNorm2D("bn", n_in=4)(pt.tensor("X", shape=(4,)))
+        BatchNorm("bn", n_in=4)(pt.tensor("X", shape=(4,)))
 
 
-def test_batch_norm_2d_reduces_over_time_as_well_as_the_batch(rng):
+def test_batch_norm_reduces_over_time_as_well_as_the_batch(rng):
     """A `(batch, time, channels)` activation is what `Conv1D` produces, and a channel is one feature
     however many time steps it spans. Reducing over the batch alone would give each time step its own
     statistics, which is the same bug at one axis fewer."""
     X = pt.tensor("X", shape=(None, 7, 3))
-    batch_norm = BatchNorm2D("bn", n_in=3, affine=False)
+    batch_norm = BatchNorm("bn", n_in=3, affine=False)
     out = batch_norm(X)
 
     X_np = rng.normal(size=(4, 7, 3)).astype(floatX)

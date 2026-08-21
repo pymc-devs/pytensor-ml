@@ -144,7 +144,7 @@ class PredictionBatchNormLayer(UnaryLayerOp):
         return [_rescale(X_normalized, affine_params)]
 
 
-class BatchNorm2D(Layer):
+class BatchNorm(Layer):
     r"""
     Batch normalization over every axis but the last.
 

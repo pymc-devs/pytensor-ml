@@ -6,7 +6,7 @@ import pytensor.tensor as pt
 import pytest
 
 from pytensor_ml.activations import ReLU
-from pytensor_ml.layers import BatchNorm2D, Dropout, Embedding, Linear, Sequential
+from pytensor_ml.layers import BatchNorm, Dropout, Embedding, Linear, Sequential
 from pytensor_ml.params import NonTrainableParameter, TrainableParameter
 from pytensor_ml.pretrained import from_pretrained, load_network, save_network, save_pretrained
 from pytensor_ml.pytensorf import collect_shared_variables, collect_trainable_params
@@ -129,7 +129,7 @@ def test_restore_rng_reproduces_dropout_draws(tmp_path):
 def test_batchnorm_non_trainable_state_survives_roundtrip(tmp_path):
     rng = np.random.default_rng(0)
     X = pt.matrix("X")
-    output = Sequential(Linear("fc", 4, 4), BatchNorm2D("bn", n_in=4))(X)
+    output = Sequential(Linear("fc", 4, 4), BatchNorm("bn", n_in=4))(X)
     running_mean = next(v for v in collect_shared_variables(output) if v.name == "bn_running_mean")
     running_mean.set_value(rng.normal(size=4).astype(running_mean.type.dtype))
 
@@ -163,7 +163,7 @@ def test_a_loaded_batch_norm_returns_to_its_identity_transform(tmp_path):
     and a config that dropped the declaration gave the scale a fan-scaled draw -- and once `fans` started
     refusing 1-D shapes, an outright error."""
     X = pt.matrix("X")
-    output = Sequential(Linear("fc", 4, 4), BatchNorm2D("norm", n_in=4))(X)
+    output = Sequential(Linear("fc", 4, 4), BatchNorm("norm", n_in=4))(X)
     save_network(output, tmp_path / "config.json")
 
     _, restored = load_network(tmp_path / "config.json")
@@ -234,7 +234,7 @@ def test_a_loaded_network_initializes_exactly_like_the_one_it_was_saved_from(tmp
     original = Sequential(
         Linear("fc1", 4, 8),
         ReLU(),
-        BatchNorm2D("norm", n_in=8),
+        BatchNorm("norm", n_in=8),
         Linear("fc2", 8, 2, weight_initializer=NormalInitializer(0.0, 0.02)),
     )(X)
     save_network(original, tmp_path / "config.json")

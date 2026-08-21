@@ -7,7 +7,7 @@ from pytensor import config
 import pytensor_ml.model
 
 from pytensor_ml.activations import ReLU
-from pytensor_ml.layers import BatchNorm2D, LayerNorm, Linear, Sequential
+from pytensor_ml.layers import BatchNorm, LayerNorm, Linear, Sequential
 from pytensor_ml.loss import SquaredError
 from pytensor_ml.model import Model
 from pytensor_ml.optim import sgd
@@ -35,7 +35,7 @@ class TestModelPredict:
     def test_normalizes_with_running_stats_not_batch_stats(self):
         X = pt.tensor("X", shape=(None, 4))
         fc1 = Linear("fc1", n_in=4, n_out=4)
-        bn = BatchNorm2D("bn1", n_in=4)
+        bn = BatchNorm("bn1", n_in=4)
         model = Model(X, Sequential(fc1, bn)(X)).initialize(seed=42)
 
         bn.running_mean.set_value(np.array([1.0, 2.0, 3.0, 4.0], dtype=config.floatX))
@@ -76,9 +76,7 @@ class TestModelPredict:
 
 
 class TestModelInitialize:
-    @pytest.mark.parametrize(
-        "norm_layer", [BatchNorm2D, LayerNorm], ids=["batch_norm", "layer_norm"]
-    )
+    @pytest.mark.parametrize("norm_layer", [BatchNorm, LayerNorm], ids=["batch_norm", "layer_norm"])
     def test_leaves_a_norm_layer_at_the_identity_transform(self, norm_layer):
         X = pt.tensor("X", shape=(None, 8))
         norm = norm_layer("norm", n_in=4)
@@ -122,7 +120,7 @@ class TestModelInitialize:
         every assertion above."""
         rng = np.random.default_rng(0)
         X = pt.tensor("X", shape=(None, 8))
-        norm = BatchNorm2D("norm", n_in=4)
+        norm = BatchNorm("norm", n_in=4)
         y = Sequential(Linear("fc1", 8, 4), norm, ReLU(), Linear("fc2", 4, 2))(X)
         model = Model(X, y).initialize(seed=0)
 
@@ -189,7 +187,7 @@ def test_initialize_takes_per_parameter_initializers():
     it is what makes a bias inside a composed layer addressable, since no constructor keyword exposes one."""
     X = pt.tensor("X", shape=(None, 8))
     fc1 = Linear("fc1", 8, 4)
-    norm = BatchNorm2D("norm", n_in=4)
+    norm = BatchNorm("norm", n_in=4)
     y = Sequential(fc1, norm, ReLU(), Linear("fc2", 4, 2))(X)
     drawn = constant(value=7.0)
 

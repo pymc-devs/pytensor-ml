@@ -21,7 +21,7 @@ from pytensor_ml.json_serialize import (
     type_to_json,
 )
 from pytensor_ml.layers import (
-    BatchNorm2D,
+    BatchNorm,
     Concatenate,
     Dropout,
     Embedding,
@@ -109,7 +109,7 @@ def test_linear_bias_variants_roundtrip(bias):
     ids=["default", "no_affine", "no_running_stats"],
 )
 def test_batchnorm_variants_roundtrip(kwargs):
-    X, output = initialized_network(Linear("fc", 4, 4), BatchNorm2D("bn", n_in=4, **kwargs))
+    X, output = initialized_network(Linear("fc", 4, 4), BatchNorm("bn", n_in=4, **kwargs))
     assert_outputs_roundtrip([X], output, [np.random.default_rng(1).normal(size=(8, 4))])
 
 

@@ -29,7 +29,7 @@ from pytensor_ml.layers.dropout import Dropout, DropoutLayer
 from pytensor_ml.layers.embedding import Embedding, EmbeddingLayer
 from pytensor_ml.layers.linear import Linear, LinearLayer
 from pytensor_ml.layers.norm import (
-    BatchNorm2D,
+    BatchNorm,
     BatchNormLayer,
     LayerNorm,
     LayerNormLayer,
@@ -55,7 +55,7 @@ __all__ = [
     "RNN",
     "AvgPool1D",
     "AvgPool2D",
-    "BatchNorm2D",
+    "BatchNorm",
     "Bidirectional",
     "CausalSelfAttention",
     "Concatenate",

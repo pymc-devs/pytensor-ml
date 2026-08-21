@@ -3,7 +3,7 @@ import pytest
 
 from pytensor.graph.basic import equal_computations
 
-from pytensor_ml.layers import BatchNorm2D, Dropout, Linear, PredictionBatchNormLayer, Sequential
+from pytensor_ml.layers import BatchNorm, Dropout, Linear, PredictionBatchNormLayer, Sequential
 from pytensor_ml.pytensorf import rewrite_for_prediction
 
 
@@ -26,7 +26,7 @@ def test_remove_dropout():
 )
 def test_rewrite_batch_stats_to_running_average_stats(consumed_downstream, affine):
     linear = Linear("Layer_1", n_in=6, n_out=3)
-    batch_norm = BatchNorm2D("bn", n_in=3, affine=affine)
+    batch_norm = BatchNorm("bn", n_in=3, affine=affine)
     # A downstream SymbolicOp type-checks its inputs more strictly than a graph output does.
     head = Linear("Layer_2", n_in=3, n_out=1) if consumed_downstream else None
     X = pt.tensor("X", shape=(None, 6))
@@ -46,7 +46,7 @@ def test_rewrite_batch_stats_to_running_average_stats(consumed_downstream, affin
 def test_rewrite_leaves_batch_norm_without_running_stats_alone():
     X = pt.tensor("X", shape=(None, 6))
     normalized = Sequential(
-        Linear("Layer_1", n_in=6, n_out=3), BatchNorm2D("bn", track_running_stats=False)
+        Linear("Layer_1", n_in=6, n_out=3), BatchNorm("bn", track_running_stats=False)
     )(X)
 
     assert equal_computations([rewrite_for_prediction(normalized)], [normalized])

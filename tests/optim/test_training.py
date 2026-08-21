@@ -8,7 +8,7 @@ from sklearn.datasets import load_digits, make_regression
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder, StandardScaler
 
 from pytensor_ml.activations import LeakyReLU, Tanh
-from pytensor_ml.layers import BatchNorm2D, Linear, Sequential
+from pytensor_ml.layers import BatchNorm, Linear, Sequential
 from pytensor_ml.loss import CrossEntropy, SquaredError, supervised_loss
 from pytensor_ml.optim import adam, adamw, compile_train, cosine_schedule, sgd
 from pytensor_ml.optim.base import state_for
@@ -178,7 +178,7 @@ def test_compile_train_ignores_updates_of_extra_outputs():
     # write-back folded into the step, or monitoring would silently mutate training state.
     X = pt.tensor("X", shape=(None, 4))
     prediction = Linear("fc", n_in=4, n_out=4)(X)
-    monitor = BatchNorm2D("bn", n_in=4)(prediction)
+    monitor = BatchNorm("bn", n_in=4)(prediction)
     parameters = collect_trainable_params(prediction)
     initialize(parameters)
     loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
@@ -245,7 +245,7 @@ def test_two_rules_over_different_parameter_groups_train_both():
 def test_compile_train_includes_non_trainable_updates():
     # compile_train merges batch-norm running-stat updates that a bare gradient rule would omit.
     X = pt.tensor("X", shape=(None, 4))
-    prediction = Sequential(Linear("fc", n_in=4, n_out=4), BatchNorm2D("bn", n_in=4))(X)
+    prediction = Sequential(Linear("fc", n_in=4, n_out=4), BatchNorm("bn", n_in=4))(X)
     parameters = collect_trainable_params(prediction)
     initialize(parameters)
     loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
@@ -396,7 +396,7 @@ def test_a_rule_writing_a_statistic_the_model_owns_is_rejected():
     """A batch-norm statistic is the model's to write. A rule writing it too has no way to win: the model's
     write is folded in second, so the rule's would be replaced rather than merged."""
     X = pt.tensor("X", shape=(None, 4))
-    prediction = Sequential(Linear("fc", n_in=4, n_out=4), BatchNorm2D("bn", n_in=4))(X)
+    prediction = Sequential(Linear("fc", n_in=4, n_out=4), BatchNorm("bn", n_in=4))(X)
     parameters = collect_trainable_params(prediction)
     initialize(parameters)
     loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
@@ -428,7 +428,7 @@ def test_extra_updates_reject_a_write_the_rule_already_makes():
 def test_extra_updates_reject_a_write_the_model_already_makes():
     # Batch-norm statistics are written by the model rather than the rule, and collide just the same.
     X = pt.tensor("X", shape=(None, 4))
-    prediction = Sequential(Linear("fc", n_in=4, n_out=4), BatchNorm2D("bn", n_in=4))(X)
+    prediction = Sequential(Linear("fc", n_in=4, n_out=4), BatchNorm("bn", n_in=4))(X)
     parameters = collect_trainable_params(prediction)
     initialize(parameters)
     loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
