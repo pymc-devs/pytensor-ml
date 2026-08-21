@@ -8,6 +8,11 @@ from pytensor_ml.params import NonTrainableParameter, TrainableParameter, non_tr
 from pytensor_ml.state import Initializer, OneInitializer, ZeroInitializer
 
 
+def _batch_axes(X: pt.TensorVariable) -> tuple[int, ...]:
+    """Every axis a batch statistic is taken over, which is all of them but the feature axis at the end."""
+    return tuple(range(X.ndim - 1))
+
+
 def _standardize(X, epsilon, axis, keepdims=False):
     """
     Center and scale ``X`` over ``axis``, returning the statistics used.
@@ -109,7 +114,7 @@ class BatchNormLayer(LayerOp):
 
     def build_inner_graph(self, X, *rest):
         affine_params, (running_mean, running_var) = _split_affine(self.affine, rest)
-        X_normalized, mu, sigma_sq = _standardize(X, self.epsilon, axis=0)
+        X_normalized, mu, sigma_sq = _standardize(X, self.epsilon, axis=_batch_axes(X))
 
         new_running_mean = self.momentum * mu + (1 - self.momentum) * running_mean
         new_running_var = self.momentum * sigma_sq + (1 - self.momentum) * running_var
@@ -124,7 +129,7 @@ class NoRunningStatsBatchNormLayer(LayerOp):
         # Reports the batch statistics to match BatchNormLayer's arity; declaring no update_map is what
         # keeps them from being written back to anything.
         affine_params, _ = _split_affine(self.affine, rest)
-        X_normalized, mu, sigma_sq = _standardize(X, self.epsilon, axis=0)
+        X_normalized, mu, sigma_sq = _standardize(X, self.epsilon, axis=_batch_axes(X))
 
         return [_rescale(X_normalized, affine_params), mu, sigma_sq]
 
@@ -141,7 +146,7 @@ class PredictionBatchNormLayer(UnaryLayerOp):
 
 class BatchNorm2D(Layer):
     r"""
-    Batch normalization over the batch axis.
+    Batch normalization over every axis but the last.
 
     Standardize each feature across the batch, then optionally apply a learned affine transform:
 
@@ -149,9 +154,12 @@ class BatchNorm2D(Layer):
 
         y = \frac{x - \mathrm{E}[x]}{\sqrt{\mathrm{Var}[x] + \epsilon}} \cdot \gamma + \beta,
 
-    where the mean and (biased) variance are taken over the batch (first) axis. During training the
-    batch statistics are used and the running mean and variance are updated toward them as
-    :math:`(1 - m)\,r + m\,b` from each batch statistic :math:`b`.
+    where the mean and (biased) variance are taken over every axis but the last, and the last axis is
+    the feature. On a flat ``(batch, features)`` input that is the batch axis alone, which is what torch
+    calls ``BatchNorm1d``; on the ``(batch, height, width, channels)`` a convolution produces it is the
+    batch and both spatial axes, giving one statistic per channel, which torch calls ``BatchNorm2d``.
+    During training the batch statistics are used and the running mean and variance are updated toward
+    them as :math:`(1 - m)\,r + m\,b` from each batch statistic :math:`b`.
 
     Parameters
     ----------
@@ -245,6 +253,11 @@ class BatchNorm2D(Layer):
 
     def __call__(self, X: pt.TensorLike) -> pt.TensorVariable:
         X = pt.as_tensor(X)
+        if X.ndim < 2:
+            raise ValueError(
+                f"{self.name} takes statistics over every axis but the last, so it needs at least a "
+                f"batch axis and a feature axis; got a {X.ndim}-dimensional input."
+            )
         inputs = [X]
 
         self._initialize_params(X)
