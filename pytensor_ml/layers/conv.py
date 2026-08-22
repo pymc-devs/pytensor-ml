@@ -265,7 +265,9 @@ class Col2Im(Op):
         outputs[0][0] = out
 
     def infer_shape(self, node, input_shapes):
-        [(batch, *_, channels)] = input_shapes
+        # Only the patches carry a shape worth reading; the spatial extents are the scalars that
+        # give the output its own, and they arrive as further entries in `input_shapes`.
+        batch, *_, channels = input_shapes[0]
         return [[batch, *node.inputs[1:], channels]]
 
     def connection_pattern(self, node):

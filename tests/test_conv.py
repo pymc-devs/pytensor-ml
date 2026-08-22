@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytensor
 import pytensor.tensor as pt
@@ -877,3 +879,19 @@ def test_the_pullback_of_the_pullback_matches_finite_differences(flags, stride, 
         return sum((out**2).sum() for out in op(X, W, cotangent, return_list=True))
 
     verify_grad(summed_outputs, [X_np, W_np, cotangent_np], rng=np.random.default_rng(0))
+
+
+def test_col2im_infers_its_shape_from_symbolic_extents():
+    """`Col2Im` takes the output's spatial extents as separate scalar inputs, so `input_shapes` holds
+    one entry per input rather than only the patches'. A statically known extent is folded away before
+    shape inference runs, so only a symbolic one reaches the failure."""
+    patches = pt.tensor("patches", shape=(None, 4, 4, 3, 3, 5))
+    extent = pt.scalar("extent", dtype="int64")
+    out = Col2Im((3, 3), (2, 2), (1, 1))(patches, extent, extent)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        shapes = pytensor.function([patches, extent], out.shape)
+        assert not [w for w in caught if "infer_shape" in str(w.message)]
+
+    assert list(shapes(np.zeros((2, 4, 4, 3, 3, 5)), 9)) == [2, 9, 9, 5]
