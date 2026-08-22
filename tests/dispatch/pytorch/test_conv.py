@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("torch")
 
 from pytensor_ml.layers import Conv1D
-from pytensor_ml.layers.conv import ConvLayer
+from pytensor_ml.layers.conv import ConvLayer, ConvLayerGrad
 
 floatX = pytensor.config.floatX
 assert_close = partial(np.testing.assert_allclose, atol=1e-4, rtol=1e-3)
@@ -93,3 +93,28 @@ def test_the_conv_op_matches_the_graph_over_two_spatial_axes(rng):
         np.asarray(pytensor.function([X, W], out, mode="PYTORCH")(X_np, W_np)),
         out.eval({X: X_np, W: W_np}),
     )
+
+
+@pytest.mark.parametrize("stride", [1, 2], ids=["plain", "strided"])
+def test_a_transposed_convolutions_gradient_matches_the_graph(stride, rng):
+    """A transposed convolution is `ConvLayerGrad` run forward, so its own gradient is what a decoder
+    trains on. The pullback has to reach ops this backend dispatches -- the inherited `OpFromGraph` one
+    reaches the patch gather, which has no torch kernel and so fails to convert at all. Stride rides
+    on the op's props, so the dispatch has to read it back rather than assume it."""
+    X_shape = (2, 7, 7, 3)
+    W_np = rng.normal(size=(3, 3, 3, 4)).astype(floatX)
+    geometry = ((3, 3), (stride, stride), (1, 1))
+    cotangent_shape = ConvLayer(*geometry)(
+        pt.zeros(X_shape, dtype=floatX), pt.tensor(shape=W_np.shape)
+    ).type.shape
+    cotangent_np = rng.normal(size=cotangent_shape).astype(floatX)
+
+    W = pt.tensor("W", shape=W_np.shape, dtype=floatX)
+    cotangent = pt.tensor("cotangent", shape=cotangent_shape, dtype=floatX)
+    out = ConvLayerGrad(*geometry, compute_dW=False)(pt.zeros(X_shape, dtype=floatX), W, cotangent)
+    gradients = pt.grad((out**2).sum(), [W, cotangent])
+
+    dispatched = pytensor.function([W, cotangent], gradients, mode="PYTORCH")(W_np, cotangent_np)
+    reference = pytensor.function([W, cotangent], gradients)(W_np, cotangent_np)
+    for got, expected in zip(dispatched, reference):
+        assert_close(np.asarray(got), np.asarray(expected))

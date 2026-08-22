@@ -3,7 +3,9 @@ import pytensor
 import pytensor.tensor as pt
 import pytest
 
+from pytensor.compile.builders import OpFromGraph
 from pytensor.compile.mode import get_default_mode
+from pytensor.gradient import verify_grad
 from scipy.signal import correlate
 
 from pytensor_ml.activations import ReLU
@@ -819,3 +821,59 @@ def test_the_pullback_must_return_some_gradient():
     downstream rather than where the mistake was made."""
     with pytest.raises(ValueError, match="must return at least one gradient"):
         ConvLayerGrad((3,), (1,), (1,), compute_dX=False, compute_dW=False)
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [{"compute_dW": False}, {"compute_dX": False}, {}],
+    ids=["dX_only", "dW_only", "both"],
+)
+def test_differentiating_a_conv_gradient_leaves_only_dispatchable_ops(flags):
+    """A transposed convolution is `ConvLayerGrad` run forward, so training one differentiates through
+    it. Inheriting `OpFromGraph`'s pullback would wrap the gather in an anonymous op carrying no props
+    and registered against no type, which every backend but numba refuses outright. Each combination of
+    flags builds a different set of terms, so each is checked."""
+    geometry = ((3, 3), (1, 1), (1, 1))
+    X = pt.tensor("X", shape=(2, 6, 6, 3))
+    W = pt.tensor("W", shape=(3, 3, 3, 4))
+    cotangent = pt.tensor("cotangent", shape=(2, 4, 4, 4))
+
+    outputs = ConvLayerGrad(*geometry, **flags)(X, W, cotangent, return_list=True)
+    cost = sum((out**2).sum() for out in outputs)
+    gradients = pt.grad(cost, [X, W, cotangent], disconnected_inputs="ignore")
+    fn = pytensor.function([X, W, cotangent], gradients)
+
+    convolutions = {ConvLayer, ConvLayerGrad}
+    leftover = [
+        node.op
+        for node in fn.maker.fgraph.apply_nodes
+        if isinstance(node.op, OpFromGraph) and type(node.op) not in convolutions
+    ]
+    assert not leftover, f"undispatchable ops survived the pullback: {leftover}"
+
+
+@pytest.mark.parametrize(
+    "flags",
+    [{"compute_dW": False}, {"compute_dX": False}, {}],
+    ids=["dX_only", "dW_only", "both"],
+)
+@pytest.mark.parametrize(
+    "stride, dilation", [(1, 1), (2, 1), (1, 2)], ids=["plain", "strided", "dilated"]
+)
+def test_the_pullback_of_the_pullback_matches_finite_differences(flags, stride, dilation, rng):
+    """The closed forms the pullback uses are adjoint identities rather than a differentiated graph,
+    so they are checked numerically. Every input is perturbed, including the one each output
+    ignores."""
+    geometry = ((3, 3), (stride, stride), (dilation, dilation))
+    X_np = rng.normal(size=(2, 7, 7, 3)).astype(floatX)
+    W_np = rng.normal(size=(3, 3, 3, 4)).astype(floatX)
+    cotangent_shape = ConvLayer(*geometry)(
+        pt.zeros(X_np.shape, dtype=floatX), pt.tensor(shape=W_np.shape)
+    ).type.shape
+    cotangent_np = rng.normal(size=cotangent_shape).astype(floatX)
+    op = ConvLayerGrad(*geometry, **flags)
+
+    def summed_outputs(X, W, cotangent):
+        return sum((out**2).sum() for out in op(X, W, cotangent, return_list=True))
+
+    verify_grad(summed_outputs, [X_np, W_np, cotangent_np], rng=np.random.default_rng(0))
