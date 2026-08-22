@@ -662,6 +662,39 @@ def _pad_spatial(
     return pt.pad(X, pad_width, mode=mode)
 
 
+def _check_output_survives_cropping(
+    X: TensorVariable,
+    name: str,
+    kernel_size: Sequence[int],
+    stride: Sequence[int],
+    dilation: Sequence[int],
+    padding: Sequence[tuple[int, int]],
+    output_padding: Sequence[int],
+) -> None:
+    """
+    Reject a crop that removes the whole output, where the input's length is known at build time.
+
+    A transposed convolution's padding takes elements off its output rather than adding them to its
+    input, so enough of it leaves nothing at all: every downstream shape has a zero axis and the graph
+    computes an empty answer rather than failing. Whether that happens depends on the input's length as
+    well as on the arguments -- a crop that empties a length-1 input can be right for a longer one --
+    so it cannot be settled at construction. Only a statically known spatial size can be checked; a
+    symbolic one still reaches the op and comes back empty.
+    """
+    extents = zip(kernel_size, stride, dilation, padding, output_padding)
+    for axis, (extent, step, spacing, (before, after), extra) in enumerate(extents):
+        length = X.type.shape[1 + axis]
+        if length is None:
+            continue
+        uncropped = (length - 1) * step + spacing * (extent - 1) + 1 + extra
+        if uncropped - before - after <= 0:
+            raise ValueError(
+                f"{name} would crop {before + after} elements from spatial axis {axis}, which the "
+                f"transposed convolution grows to only {uncropped}, leaving nothing. Reduce padding, "
+                f"or give the layer an input longer than {length} on that axis."
+            )
+
+
 def _as_spatial_tuple(value: int | Sequence[int], n_spatial: int, name: str) -> tuple[int, ...]:
     """Broadcast a scalar argument across the spatial axes, or check one already given per axis."""
     if isinstance(value, int):
@@ -871,6 +904,191 @@ class Conv2D(_ConvNd):
         How :math:`W` is drawn. Xavier normal when omitted, whose fans count the receptive field.
     bias_initializer : Initializer, optional
         How :math:`b` is drawn. Zeros when omitted.
+    """
+
+    n_spatial = 2
+
+
+class _ConvTransposeNd(_ConvNd):
+    """
+    Everything a transposed convolution does that does not depend on how many spatial axes it has.
+
+    Subclasses set :attr:`n_spatial`; see :class:`ConvTranspose1D` for the arguments, which are shared.
+    """
+
+    def __init__(
+        self,
+        name: str | None,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int | Sequence[int],
+        stride: int | Sequence[int] = 1,
+        dilation: int | Sequence[int] = 1,
+        padding: str | int | Sequence[int] = 0,
+        output_padding: int | Sequence[int] = 0,
+        *,
+        bias: bool = True,
+        weight_initializer: Initializer | None = None,
+        bias_initializer: Initializer | None = None,
+    ):
+        if isinstance(padding, str):
+            raise ValueError(
+                f"A transposed convolution's padding removes elements from its output rather than "
+                f"adding them to its input, so it takes a number of elements rather than {padding!r}."
+            )
+        super().__init__(
+            name,
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=stride,
+            dilation=dilation,
+            padding=padding,
+            bias=bias,
+            weight_initializer=weight_initializer,
+            bias_initializer=bias_initializer,
+        )
+        self.output_padding = _as_spatial_tuple(output_padding, self.n_spatial, "output_padding")
+        for axis, (extra, step) in enumerate(zip(self.output_padding, self.stride)):
+            if not 0 <= extra < step:
+                raise ValueError(
+                    f"output_padding picks between the input sizes a stride collapses together, so "
+                    f"it must be at least 0 and less than that stride; on spatial axis {axis} it is "
+                    f"{extra} against a stride of {step}."
+                )
+
+    def __call__(self, X: pt.TensorLike) -> TensorVariable:
+        """
+        Scatter ``X`` of shape ``(batch, *spatial, in_channels)`` back through the layer's kernel.
+
+        Returns
+        -------
+        TensorVariable
+            Shape ``(batch, *out_spatial, out_channels)``, where each output axis is
+            ``(spatial - 1) * stride - 2 * padding + dilation * (kernel_size - 1) + output_padding + 1``.
+        """
+        X = pt.as_tensor(X)
+        _check_input_rank(X, self.name, self.n_spatial)
+        _check_output_survives_cropping(
+            X,
+            self.name,
+            self.kernel_size,
+            self.stride,
+            self.dilation,
+            self.padding,
+            self.output_padding,
+        )
+
+        # The forward convolution this inverts consumed an input of this size. Several sizes collapse
+        # to `X`'s under a stride greater than one, and `output_padding` says which was meant.
+        spatial = [X.shape[1 + axis] for axis in range(self.n_spatial)]
+        uncropped = [
+            (length - 1) * step + spacing * (extent - 1) + 1 + extra
+            for length, step, spacing, extent, extra in zip(
+                spatial, self.stride, self.dilation, self.kernel_size, self.output_padding
+            )
+        ]
+        placeholder = pt.zeros((X.shape[0], *uncropped, self.out_channels), dtype=X.dtype)
+
+        # The op differentiates a forward correlation, whose kernel runs (taps, in, out) in that
+        # convolution's terms -- our output channels then our input ones -- so the stored layout,
+        # which `fans` reads as (fan_in, fan_out), is swapped on the way in.
+        op = ConvLayerGrad(self.kernel_size, self.stride, self.dilation, compute_dW=False)
+        out = op(placeholder, pt.moveaxis(self.W, -1, -2), X)
+
+        if any(before or after for before, after in self.padding):
+            cropped = tuple(
+                slice(before, size - after)
+                for (before, after), size in zip(self.padding, uncropped)
+            )
+            out = out[(slice(None), *cropped, slice(None))]
+        if self.bias:
+            out = out + self.b
+
+        out.name = f"{self.name}_output"
+        return out
+
+
+class ConvTranspose1D(_ConvTransposeNd):
+    r"""
+    Scatter a sequence back through a learned kernel, over one spatial axis.
+
+    Takes ``(batch, time, in_channels)`` and returns ``(batch, out_time, out_channels)``, where
+    ``out_time`` is at least as long as ``time`` -- this is the operation that grows a sequence where
+    :class:`Conv1D` shrinks it, so it is what a decoder upsamples with. It is the gradient of
+    :class:`Conv1D` with respect to that layer's input, which is why it is sometimes called a
+    fractionally-strided convolution rather than a deconvolution: it inverts the shape of a
+    convolution, not its values.
+
+    Parameters
+    ----------
+    name : str or None
+        Name prefix for the layer's parameters. Defaults to the class name when None.
+    in_channels : int
+        Size of the input's channel axis.
+    out_channels : int
+        Size of the output's channel axis.
+    kernel_size : int
+        Window extent along the time axis.
+    stride : int, optional
+        Step between the windows the output is scattered into, so the factor the input grows by.
+        Default is 1.
+    dilation : int, optional
+        Spacing between the kernel's taps. Default is 1.
+    padding : int, optional
+        Elements removed from each end of the output, being the inverse of the padding a forward
+        convolution would add to its input. Default is 0.
+    output_padding : int, optional
+        Extra elements added to the far end of the output. A stride greater than one maps several
+        input lengths onto the same output length, and this picks between them, so it must be less
+        than ``stride``. Default is 0.
+    bias : bool, optional
+        Add the learned shift, one per output channel. Default is True.
+    weight_initializer : Initializer, optional
+        How the kernel is drawn. Xavier normal when omitted.
+    bias_initializer : Initializer, optional
+        How the bias is drawn. Zeros when omitted.
+    """
+
+    n_spatial = 1
+
+
+class ConvTranspose2D(_ConvTransposeNd):
+    r"""
+    Scatter an image back through a learned kernel, over two spatial axes.
+
+    Takes ``(batch, height, width, in_channels)`` and returns ``(batch, out_height, out_width,
+    out_channels)``, both at least as large as the input's -- the operation that grows an image where
+    :class:`Conv2D` shrinks it, and so the one a decoder upsamples with. It is the gradient of
+    :class:`Conv2D` with respect to that layer's input.
+
+    Parameters
+    ----------
+    name : str or None
+        Name prefix for the layer's parameters. Defaults to the class name when None.
+    in_channels : int
+        Size of the input's channel axis.
+    out_channels : int
+        Size of the output's channel axis.
+    kernel_size : int or tuple of int
+        Window extent, either shared by both axes or given per axis.
+    stride : int or tuple of int, optional
+        Step between the windows the output is scattered into, so the factor each axis grows by.
+        Default is 1.
+    dilation : int or tuple of int, optional
+        Spacing between the kernel's taps. Default is 1.
+    padding : int or tuple of int, optional
+        Elements removed from each end of each output axis, being the inverse of the padding a forward
+        convolution would add to its input. Default is 0.
+    output_padding : int or tuple of int, optional
+        Extra elements added to the far end of each output axis, picking between the input sizes a
+        stride greater than one collapses together, so each must be less than its stride. Default is 0.
+    bias : bool, optional
+        Add the learned shift, one per output channel. Default is True.
+    weight_initializer : Initializer, optional
+        How the kernel is drawn. Xavier normal when omitted.
+    bias_initializer : Initializer, optional
+        How the bias is drawn. Zeros when omitted.
     """
 
     n_spatial = 2
