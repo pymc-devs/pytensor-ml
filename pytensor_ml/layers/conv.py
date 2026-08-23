@@ -13,7 +13,8 @@ from pytensor.tensor.basic import get_scalar_constant_value
 from pytensor.tensor.pad import PadMode
 from pytensor.tensor.variable import TensorVariable
 
-from pytensor_ml.base import Layer, LayerOp, UnaryLayerOp
+from pytensor_ml.base import Layer, LayerOp, UnaryLayerOp, _check_input_rank
+from pytensor_ml.layers.padding import _pad_spatial
 from pytensor_ml.params import trainable_parameter
 from pytensor_ml.state import Initializer, XavierNormalInitializer, ZeroInitializer
 
@@ -645,21 +646,17 @@ def _resolve_padding(
     return tuple((amount, amount) for amount in amounts)
 
 
-def _pad_spatial(
-    X: TensorVariable,
-    padding: tuple[tuple[int, int], ...],
-    mode: PadMode,
-    constant_value: float = 0.0,
-) -> TensorVariable:
-    """Pad the spatial axes of ``(batch, *spatial, channels)``, leaving batch and channels alone."""
-    if not any(before or after for before, after in padding):
-        return X
-    pad_width = [(0, 0), *padding, (0, 0)]
-    # Spelled out per branch rather than unpacked from a dict: only `constant` takes a fill value, and
-    # `pad` is overloaded per mode, so a `**kwargs` call cannot be matched against those overloads.
-    if mode == "constant":
-        return pt.pad(X, pad_width, mode="constant", constant_values=constant_value)
-    return pt.pad(X, pad_width, mode=mode)
+def _as_spatial_tuple(value: int | Sequence[int], n_spatial: int, name: str) -> tuple[int, ...]:
+    """Broadcast a scalar argument across the spatial axes, or check one already given per axis."""
+    if isinstance(value, int):
+        return (value,) * n_spatial
+    given = tuple(value)
+    if len(given) != n_spatial:
+        raise ValueError(
+            f"{name} must be an int or one value per spatial axis, but got {len(given)} values for "
+            f"{n_spatial} spatial axes."
+        )
+    return given
 
 
 def _check_output_survives_cropping(
@@ -693,28 +690,6 @@ def _check_output_survives_cropping(
                 f"transposed convolution grows to only {uncropped}, leaving nothing. Reduce padding, "
                 f"or give the layer an input longer than {length} on that axis."
             )
-
-
-def _as_spatial_tuple(value: int | Sequence[int], n_spatial: int, name: str) -> tuple[int, ...]:
-    """Broadcast a scalar argument across the spatial axes, or check one already given per axis."""
-    if isinstance(value, int):
-        return (value,) * n_spatial
-    given = tuple(value)
-    if len(given) != n_spatial:
-        raise ValueError(
-            f"{name} must be an int or one value per spatial axis, but got {len(given)} values for "
-            f"{n_spatial} spatial axes."
-        )
-    return given
-
-
-def _check_input_rank(X: TensorVariable, name: str, n_spatial: int) -> None:
-    """Reject an input whose rank is not batch, one axis per spatial dimension, then channels."""
-    if X.ndim != n_spatial + 2:
-        raise ValueError(
-            f"{name} takes an input of shape (batch, {', '.join(['spatial'] * n_spatial)}, channels), "
-            f"so it needs a {n_spatial + 2}-dimensional input; got a {X.ndim}-dimensional one."
-        )
 
 
 def _check_input_covers_a_window(

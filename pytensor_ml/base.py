@@ -7,6 +7,15 @@ from pytensor.compile.builders import SymbolicOp
 from pytensor.tensor.variable import TensorVariable
 
 
+def _check_input_rank(X: TensorVariable, name: str, n_spatial: int) -> None:
+    """Reject an input whose rank is not batch, one axis per spatial dimension, then channels."""
+    if X.ndim != n_spatial + 2:
+        raise ValueError(
+            f"{name} takes an input of shape (batch, {', '.join(['spatial'] * n_spatial)}, channels), "
+            f"so it needs a {n_spatial + 2}-dimensional input; got a {X.ndim}-dimensional one."
+        )
+
+
 class Layer(ABC):
     """Base class for the objects that build layer graphs. Defined here, not in ``pytensor_ml.layers``, so
     that ``pytensor_ml.activations`` can subclass it without a circular import."""
