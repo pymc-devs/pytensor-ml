@@ -38,6 +38,16 @@ from pytensor_ml.layers.norm import (
     NoRunningStatsBatchNormLayer,
     PredictionBatchNormLayer,
 )
+from pytensor_ml.layers.padding import (
+    ConstantPad1D,
+    ConstantPad2D,
+    ReflectionPad1D,
+    ReflectionPad2D,
+    ReplicationPad1D,
+    ReplicationPad2D,
+    ZeroPad1D,
+    ZeroPad2D,
+)
 from pytensor_ml.layers.recurrent import (
     GRU,
     LSTM,
@@ -61,6 +71,8 @@ __all__ = [
     "Bidirectional",
     "CausalSelfAttention",
     "Concatenate",
+    "ConstantPad1D",
+    "ConstantPad2D",
     "Conv1D",
     "Conv2D",
     "ConvLayer",
@@ -84,8 +96,14 @@ __all__ = [
     "PoolLayerGrad",
     "Recurrent",
     "RecurrentCell",
+    "ReflectionPad1D",
+    "ReflectionPad2D",
+    "ReplicationPad1D",
+    "ReplicationPad2D",
     "Sequential",
     "Squeeze",
     "TransformerBlock",
+    "ZeroPad1D",
+    "ZeroPad2D",
     "scaled_dot_product_attention",
 ]
