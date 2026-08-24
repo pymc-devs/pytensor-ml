@@ -16,6 +16,7 @@ from pytensor.scan import scan
 from pytensor.tensor import random as ptr
 
 from pytensor_ml.layers import Dropout, DropoutLayer, Linear, Sequential
+from pytensor_ml.params import step_counter
 from pytensor_ml.pytensorf import (
     collect_trainable_params,
     compile_predict,
@@ -317,3 +318,76 @@ def test_a_draw_shared_between_an_output_and_an_update_is_rejected():
 
     with pytest.raises(ValueError, match="which nothing advances"):
         function([], output_draw, updates={accumulator: accumulator + update_draw})
+
+
+def test_a_clock_read_only_by_an_update_advances():
+    """A schedule reads the clock and feeds a learning rate into an update expression, never into an
+    output, so collecting from the outputs alone would leave the clock at zero and pin the schedule with
+    it -- a warmup then holds the rate at zero and the loss never moves."""
+    clock = step_counter(name="schedule/step_count")
+    parameter = shared(np.zeros(()), name="w")
+
+    step = function([], parameter, updates={parameter: parameter + clock.astype(config.floatX)})
+
+    for expected_count in range(1, 4):
+        step()
+        assert int(clock.get_value()) == expected_count
+    assert float(parameter.get_value()) == 0.0 + 1.0 + 2.0
+
+
+def test_a_clock_read_by_an_output_advances():
+    clock = step_counter()
+
+    read = function([], clock * 2)
+
+    assert [int(read()) for _ in range(3)] == [0, 2, 4]
+
+
+def test_every_reader_shares_one_advance_of_the_clock():
+    """Readers share a clock by referring to the same variable, so a clock two schedules read still counts
+    one step per call rather than one per reader."""
+    clock = step_counter()
+    parameter = shared(np.zeros(()), name="w")
+    reported_rate = clock * 2
+    applied_rate = clock.astype(config.floatX)
+
+    step = function([], reported_rate, updates={parameter: parameter + applied_rate})
+
+    step()
+    step()
+    assert int(clock.get_value()) == 2
+
+
+def test_the_callers_own_clock_update_wins():
+    """The threaded advance is a default, not a rule: a caller who writes the clock themselves has said
+    what time does here, which is how a diagnostic pins one with `updates={clock: clock}`."""
+    clock = step_counter()
+
+    read = function([], clock, updates={clock: clock})
+
+    assert [int(read()) for _ in range(3)] == [0, 0, 0]
+    assert int(clock.get_value()) == 0
+
+
+def test_clocks_holding_different_counts_are_rejected():
+    """Every clock counts training steps, so two of them disagreeing means a checkpoint restored one and
+    not the other; advancing both from where they are would keep the two schedules out of step forever."""
+    restored, fresh = step_counter(name="restored"), step_counter(name="fresh")
+    restored.set_value(np.asarray(7, dtype="int64"))
+
+    with pytest.raises(ValueError, match="hold different step counts"):
+        function([], restored + fresh)
+
+
+def test_a_graph_reading_both_a_clock_and_a_generator_advances_each():
+    """Clocks and generators are threaded from the same traversal and merged into one updates dict, so a
+    step that both draws noise and reads the time has to advance both, not whichever lands last."""
+    clock = step_counter(name="clock")
+    rng = shared(np.random.default_rng(0), name="rng")
+    _, noise = ptr.normal(rng=rng, return_next_rng=True)
+
+    step = function([], [clock, noise])
+
+    counts, draws = zip(*(step() for _ in range(3)))
+    assert [int(count) for count in counts] == [0, 1, 2]
+    assert len(set(float(draw) for draw in draws)) == 3

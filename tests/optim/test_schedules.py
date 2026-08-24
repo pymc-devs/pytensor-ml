@@ -207,6 +207,25 @@ def test_schedule_drives_training_through_a_scaled_chain(schedule_factory):
     np.testing.assert_allclose(p.get_value(), [1.71], rtol=1e-6)
 
 
+def test_schedule_drives_training_when_the_caller_assembles_the_updates():
+    """A caller who builds the updates by hand and compiles them with :func:`function`, rather than going
+    through :func:`compile_train`, still gets a clock that advances -- otherwise every step reads the
+    initial rate, and under a warmup that rate is zero, so the parameter never moves at all."""
+    p = trainable(np.array([2.0]), name="w")
+    loss = 0.5 * (p**2).sum()  # grad = p, so the unit-rate base step is -p
+    clock = step_counter(name="schedule/step_count")
+    warmup = linear_schedule(0.0, total_steps=2, final_learning_rate=0.1)
+    updates = scale(warmup(clock))(sgd(learning_rate=1.0)(loss, [p]), [p])
+
+    step = function([], loss, updates=updates)
+
+    step()  # step 0 -> lr = 0, the warmup holds the parameter still
+    np.testing.assert_allclose(p.get_value(), [2.0], rtol=1e-6)
+    step()  # step 1 -> lr = 0.05, p = 2 - 0.05 * 2 = 1.9
+    np.testing.assert_allclose(p.get_value(), [1.9], rtol=1e-6)
+    assert int(clock.get_value()) == 2
+
+
 @pytest.mark.parametrize(
     "schedule_factory",
     [cosine_schedule, linear_schedule, exponential_schedule, polynomial_schedule],

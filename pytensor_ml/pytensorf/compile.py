@@ -8,7 +8,7 @@ from pytensor import Mode
 from pytensor.compile import Function, get_mode
 from pytensor.tensor.variable import Variable
 
-from pytensor_ml.pytensorf.collect import collect_graph_inputs
+from pytensor_ml.pytensorf.collect import collect_clock_updates, collect_graph_inputs
 from pytensor_ml.pytensorf.rewrite import hoist_scan_draws, rewrite_for_prediction
 from pytensor_ml.pytensorf.rng import (
     SeedSequenceSeed,
@@ -31,7 +31,8 @@ def function(
     Compile a Pytensor function, including specialized rewrites.
 
     Threads the default next-RNG update for every shared generator the graph draws from, so repeated calls
-    advance their state instead of repeating draws.
+    advance their state instead of repeating draws, and the one-step advance for every training clock the
+    graph reads, so a schedule moves through time rather than reading step zero on every call.
 
     Parameters
     ----------
@@ -46,7 +47,8 @@ def function(
     mode : Mode or str, optional
         PyTensor mode used to compile the function.
     **kwargs
-        Forwarded to :func:`pytensor.function`. Any ``updates`` entry is merged after the RNG updates.
+        Forwarded to :func:`pytensor.function`. An ``updates`` entry wins over the threaded RNG and clock
+        updates, which is how a clock is pinned: pass ``updates={clock: clock}``.
 
     Returns
     -------
@@ -98,6 +100,10 @@ def function(
             "return_next_rng=True)`, or pass an update for it yourself."
         )
 
+    # A clock's advance is always derivable, unlike a generator's next state, so an unwritten one is
+    # threaded rather than reported.
+    clock_updates = collect_clock_updates(read_variables)
+
     base_mode = get_mode(mode)
     mode = Mode(
         linker=base_mode.linker,
@@ -107,7 +113,7 @@ def function(
     return pytensor.function(
         inputs,
         outputs,
-        updates={**rng_updates, **updates},
+        updates={**rng_updates, **clock_updates, **updates},
         mode=mode,
         **kwargs,
     )
