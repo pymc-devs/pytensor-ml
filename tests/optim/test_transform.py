@@ -1,7 +1,7 @@
 import numpy as np
 import pytensor.tensor as pt
 
-from pytensor_ml.optim import add_weight_decay, chain, scale, sgd_updates, trace
+from pytensor_ml.optim import add_weight_decay, chain, scale, sgd, sgd_updates, trace
 from pytensor_ml.params import trainable
 from pytensor_ml.pytensorf import function
 
@@ -48,6 +48,17 @@ def test_chain_threads_updates_in_order():
     assert any(k.name == "w/trace/velocity" for k in out)
     # velocity = -1, scaled step = 0.1 * -1, new p = 1 - 0.1 = 0.9
     np.testing.assert_allclose(function([], out[p])(), [0.9])
+
+
+def test_a_rule_headed_chain_composes_again_as_a_rule():
+    """A chain led by a rule is a rule, so it can head another chain. Composing in two places is how a
+    caller shares a configured optimizer and adds one more transform at the point of use."""
+    p = trainable(np.array([2.0]), name="w")
+    loss = 0.5 * (p**2).sum()  # grad = p, so a unit-rate sgd step is -p
+    out = chain(chain(sgd(learning_rate=1.0), scale(0.5)), scale(0.5))(loss, [p])
+
+    # Two nested halvings of a step of -2 leave p = 2 - 0.5.
+    np.testing.assert_allclose(function([], out[p])(), [1.5])
 
 
 def test_chain_reuses_transform_state_across_invocations():

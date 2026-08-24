@@ -1,6 +1,7 @@
 from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from functools import wraps
+from typing import overload
 
 import numpy as np
 import pytensor
@@ -252,27 +253,52 @@ def require_unique_state_names(updates: Updates) -> None:
         seen.add(name)
 
 
-def chain(*transforms: Transform) -> Transform:
-    """
-    Compose transforms left to right into a single transform.
+@overload
+def chain(head: UpdateRule, *rest: Transform) -> UpdateRule: ...
 
-    The returned transform threads the updates dict through each argument in turn, giving the optax-style
-    ``chain(clip_by_global_norm(...), trace(...), scale(...))`` surface over the underlying pure functions.
+
+@overload
+def chain(head: Transform, *rest: Transform) -> Transform: ...
+
+
+def chain(head, *rest: Transform):
+    """
+    Compose an update rule or transform with the transforms that follow it, left to right.
+
+    The head decides what the result is. Given a rule, the result is a rule: it differentiates the loss and
+    threads the updates through each transform, so ``adam`` then a clip then a scale is one value to pass to
+    :func:`~pytensor_ml.optim.train.compile_train` or to wrap in a guard. Given a transform, the result is a
+    transform, composing in step space for a rule to be pointed at later.
+
+    .. code-block:: python
+
+        rule = chain(adam(1e-3), clip_by_global_norm(1.0), scale(0.5))
+        step = compile_train(loss, rule)
+
+        post_process = chain(clip_by_global_norm(1.0), scale(0.5))
+        step = compile_train(loss, chain(adam(1e-3), post_process))
+
+    The composed callable owns one set of optimizer-state buffers however many times it is invoked, so two
+    training functions compiled from one chain share its momentum rather than each allocating their own.
 
     Parameters
     ----------
-    *transforms : Transform
-        Transforms to apply in order.
+    head : UpdateRule or Transform
+        What runs first, and what the result is. A rule such as ``adam(1e-3)`` reads a loss; a transform
+        reads an updates dict.
+    *rest : Transform
+        Transforms applied in order to whatever the head produces.
 
     Returns
     -------
-    Transform
-        A transform that applies each input transform in sequence.
+    UpdateRule or Transform
+        A callable matching the head, applying every argument in sequence.
     """
 
     @reuses_state
-    def combined(updates: Updates, parameters: Sequence[Parameter]) -> Updates:
-        for transform in transforms:
+    def combined(loss_gradients_or_updates, parameters: Sequence[Parameter]) -> Updates:
+        updates = head(loss_gradients_or_updates, parameters)
+        for transform in rest:
             updates = transform(updates, parameters)
         return updates
 
