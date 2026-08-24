@@ -391,3 +391,15 @@ def test_a_graph_reading_both_a_clock_and_a_generator_advances_each():
     counts, draws = zip(*(step() for _ in range(3)))
     assert [int(count) for count in counts] == [0, 1, 2]
     assert len(set(float(draw) for draw in draws)) == 3
+
+
+def test_pinned_clocks_are_exempt_from_the_agreeing_count_check():
+    """Disagreeing clocks mean a half-restored checkpoint only when the step is advancing them. A caller
+    who pins every clock has said none of them counts this step, so there is nothing left to disagree."""
+    restored, fresh = step_counter(name="restored"), step_counter(name="fresh")
+    restored.set_value(np.asarray(7, dtype="int64"))
+
+    read = function([], restored + fresh, updates={restored: restored, fresh: fresh})
+
+    assert [int(read()) for _ in range(2)] == [7, 7]
+    assert (int(restored.get_value()), int(fresh.get_value())) == (7, 0)

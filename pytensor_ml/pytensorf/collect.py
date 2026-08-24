@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Container, Sequence
 
 from pytensor.compile.sharedvalue import SharedVariable
 from pytensor.gradient import DisconnectedGrad, ZeroGrad
@@ -112,6 +112,7 @@ def collect_step_counters(outputs: Variable | Sequence[Variable]) -> list[StepCo
 
 def collect_clock_updates(
     outputs: Variable | Sequence[Variable],
+    already_written: Container[SharedVariable] = (),
 ) -> dict[StepCounter, TensorVariable]:
     """
     Collect the advance for every training clock the graph reads, ready to pass as a function's ``updates``.
@@ -123,13 +124,20 @@ def collect_clock_updates(
     ----------
     outputs
         One or more graph outputs to trace back from.
+    already_written : container of shared variable, optional
+        The variables the caller writes themselves, typically the ``updates`` mapping itself. Any clock
+        among them is left out of the result and exempt from the rule that every clock agrees on its step
+        count, since a clock this step does not advance is not counting its steps. Default is empty, which
+        collects and checks every clock the graph reads.
 
     Returns
     -------
     clock_updates : dict
         Mapping from each clock the graph reads to the expression for its next value.
     """
-    counters = collect_step_counters(outputs)
+    counters = [
+        counter for counter in collect_step_counters(outputs) if counter not in already_written
+    ]
     step_counts = {int(counter.get_value()) for counter in counters}
     if len(step_counts) > 1:
         raise ValueError(

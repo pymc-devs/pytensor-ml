@@ -102,7 +102,7 @@ def function(
 
     # A clock's advance is always derivable, unlike a generator's next state, so an unwritten one is
     # threaded rather than reported.
-    clock_updates = collect_clock_updates(read_variables)
+    clock_updates = collect_clock_updates(read_variables, already_written=updates)
 
     base_mode = get_mode(mode)
     mode = Mode(
