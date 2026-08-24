@@ -1,9 +1,18 @@
 import numpy as np
 import pytensor.tensor as pt
 
-from pytensor_ml.optim import add_weight_decay, chain, scale, sgd, sgd_updates, trace
+from pytensor_ml.optim import (
+    add_weight_decay,
+    chain,
+    linear_schedule,
+    scale,
+    scale_by_schedule,
+    sgd,
+    sgd_updates,
+    trace,
+)
 from pytensor_ml.params import trainable
-from pytensor_ml.pytensorf import function
+from pytensor_ml.pytensorf import collect_step_counters, function
 
 
 def test_scale_applies_factor():
@@ -11,6 +20,52 @@ def test_scale_applies_factor():
     updates = {p: p + pt.constant(np.array([2.0, -4.0]))}
     out = scale(0.25)(updates, [p])
     np.testing.assert_allclose(function([], out[p])(), [0.5, -1.0])
+
+
+def test_scale_by_schedule_applies_the_rate_its_clock_reads():
+    p = trainable(np.zeros(2), name="w")
+    updates = {p: p + pt.constant(np.array([2.0, -4.0]))}
+    out = scale_by_schedule(linear_schedule(1.0, total_steps=4, final_learning_rate=0.0))(
+        updates, [p]
+    )
+
+    (clock,) = collect_step_counters(out[p])
+    step = function([], out[p], updates={clock: clock.advance()})
+
+    # The clock starts at zero, where the schedule is still at its initial rate of 1.0.
+    np.testing.assert_allclose(step(), [2.0, -4.0])
+    # One quarter of the horizon later the rate is 0.75.
+    np.testing.assert_allclose(step(), [1.5, -3.0])
+
+
+def test_scale_by_schedule_allocates_a_clock_per_namespace():
+    """Two scheduled scales in one graph measure their own time. Sharing a clock by default would make the
+    second one's schedule start wherever the first had already advanced it to."""
+    p = trainable(np.zeros(1), name="w")
+    schedule = linear_schedule(1.0, total_steps=4)
+    out = chain(
+        scale_by_schedule(schedule, namespace="warmup"),
+        scale_by_schedule(schedule, namespace="decay"),
+    )({p: p + pt.constant(np.array([1.0]))}, [p])
+
+    assert sorted(clock.name for clock in collect_step_counters(out[p])) == [
+        "decay/step_count",
+        "warmup/step_count",
+    ]
+
+
+def test_scale_by_schedule_reuses_its_clock_across_invocations():
+    """Two functions compiled from one configured transform must read one clock; a second would restart the
+    schedule at zero while the first kept counting."""
+    p = trainable(np.zeros(1), name="w")
+    transform = scale_by_schedule(linear_schedule(1.0, total_steps=4))
+
+    (first_clock,) = collect_step_counters(transform({p: p + pt.constant(np.array([1.0]))}, [p])[p])
+    (second_clock,) = collect_step_counters(
+        transform({p: p + pt.constant(np.array([1.0]))}, [p])[p]
+    )
+
+    assert first_clock is second_clock
 
 
 def test_trace_accumulates_velocity_with_decay():

@@ -55,6 +55,7 @@ from pytensor_ml.optim.train import compile_train
 from pytensor_ml.optim.transform import (
     add_weight_decay,
     scale,
+    scale_by_schedule,
     trace,
 )
 
@@ -101,6 +102,7 @@ __all__ = [
     "rprop_updates",
     "scalar_state",
     "scale",
+    "scale_by_schedule",
     "sgd",
     "sgd_updates",
     "skip_if",

@@ -12,14 +12,18 @@ from pytensor_ml.optim import (
     adamax,
     adamw,
     chain,
+    clip_by_global_norm,
     compile_train,
+    constant_schedule,
     cosine_schedule,
+    linear_schedule,
     nadam,
     rmsprop,
     rprop,
     rprop_updates,
     scalar_state,
     scale,
+    scale_by_schedule,
     sgd,
     to_floatx,
 )
@@ -399,3 +403,37 @@ def test_to_floatx_casts_a_rate_stored_at_another_dtype():
     stored = pytensor.shared(np.asarray(0.1, dtype=other_dtype), name="learning_rate")
 
     assert to_floatx(stored).dtype == config.floatX
+
+
+def test_a_scheduled_scale_advances_its_own_clock():
+    """The caller writes no clock bookkeeping. `compile_train` finds the clock in the graph and advances it,
+    so the rate moves along the schedule from one step to the next on its own."""
+    p, loss = quadratic_problem()
+    schedule = linear_schedule(0.5, total_steps=4, final_learning_rate=0.0)
+    step = compile_train(loss, chain(sgd(learning_rate=1.0), scale_by_schedule(schedule)))
+
+    step()  # rate 0.5 on a unit-rate step of -2, so p = 2 - 1
+    np.testing.assert_allclose(p.get_value(), [1.0], rtol=RTOL)
+    step()  # the clock advanced, so the rate is now 0.375 on a step of -1
+    np.testing.assert_allclose(p.get_value(), [0.625], rtol=RTOL)
+
+
+def test_a_clip_before_a_scheduled_scale_bounds_the_step_in_gradient_units():
+    """Scheduling after the rule buys exactly this over scheduling inside it. With the clip between the two
+    the bound applies to a unit-rate step, so it stays in gradient units; a rule that has already applied the
+    rate hands the clip a step the schedule has shrunk, and the same bound never binds."""
+    rate = constant_schedule(0.1)
+
+    scaled_after, scaled_loss = quadratic_problem()
+    compile_train(
+        scaled_loss,
+        chain(sgd(learning_rate=1.0), clip_by_global_norm(0.5), scale_by_schedule(rate)),
+    )()
+
+    read_by_the_rule, rule_loss = quadratic_problem()
+    compile_train(rule_loss, chain(sgd(learning_rate=rate), clip_by_global_norm(0.5)))()
+
+    # Clipped first: the step of -2 is bounded to -0.5, then scaled to -0.05.
+    np.testing.assert_allclose(scaled_after.get_value(), [1.95], rtol=RTOL)
+    # Scaled first: the step is already -0.2, so the bound of 0.5 never binds.
+    np.testing.assert_allclose(read_by_the_rule.get_value(), [1.8], rtol=RTOL)

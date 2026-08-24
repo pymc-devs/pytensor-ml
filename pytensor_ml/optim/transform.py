@@ -1,6 +1,15 @@
 from collections.abc import Callable, Sequence
 
-from pytensor_ml.optim.base import Parameter, Rate, Transform, Updates, state_for
+from pytensor_ml.optim.base import (
+    Parameter,
+    Rate,
+    Schedule,
+    Transform,
+    Updates,
+    counter,
+    reuses_state,
+    state_for,
+)
 
 
 def trace(decay: float = 0.9, nesterov: bool = False) -> Transform:
@@ -61,6 +70,47 @@ def scale(factor: Rate) -> Transform:
         for parameter in parameters:
             next_updates[parameter] = parameter + factor * (updates[parameter] - parameter)
         return next_updates
+
+    return transform
+
+
+def scale_by_schedule(schedule: Schedule, *, namespace: str = "scale_by_schedule") -> Transform:
+    """
+    Scale each step by a schedule read off a training clock of its own.
+
+    The terminal transform for scheduling a rate *after* a rule rather than inside it. The two are different
+    graphs whenever anything sits between them: a clip placed before this one bounds a step at unit rate, so
+    its bound stays in gradient units instead of moving with the rate, while a rule given the schedule as its
+    ``learning_rate`` has already applied the rate by the time the clip sees the step.
+
+    .. code-block:: python
+
+        schedule = cosine_schedule(3e-4, 10_000)
+        rule = chain(adam(1.0), clip_by_global_norm(1.0), scale_by_schedule(schedule))
+
+    The clock advances on its own. It is a :class:`~pytensor_ml.params.StepCounter`, so
+    :func:`~pytensor_ml.pytensorf.collect_clock_updates` finds it in the graph and writes its advance into
+    the compiled step, and every other clock the step reads counts the same steps as this one.
+
+    Parameters
+    ----------
+    schedule : Schedule
+        A ``(step_count) -> rate`` callable such as :func:`~pytensor_ml.optim.schedules.cosine_schedule`,
+        applied to the clock and multiplied into every step.
+    namespace : str
+        Prefix for the clock this transform allocates, as ``"{namespace}/step_count"``. Give two scheduled
+        scales in one graph different namespaces so their clocks stay distinct at the serialization
+        boundary. Default ``"scale_by_schedule"``.
+
+    Returns
+    -------
+    Transform
+        A transform that rescales the updates dict by the rate its clock currently reads.
+    """
+
+    @reuses_state
+    def transform(updates: Updates, parameters: Sequence[Parameter]) -> Updates:
+        return scale(schedule(counter(f"{namespace}/step_count")))(updates, parameters)
 
     return transform
 

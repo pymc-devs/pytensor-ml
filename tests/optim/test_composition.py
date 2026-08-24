@@ -18,6 +18,7 @@ from pytensor_ml.optim import (
     reduce_on_plateau,
     scalar_state,
     scale,
+    scale_by_schedule,
     sgd,
     skip_if,
 )
@@ -169,3 +170,22 @@ def test_either_condition_guards_a_full_chain(condition):
     step(BAD)
 
     np.testing.assert_allclose(p.get_value(), before)
+
+
+def test_two_scheduled_scales_sharing_a_namespace_collide_loudly():
+    """Each allocates its own clock, and optimizer state is matched by name when it is saved, so two under
+    one name would alias each other on restore. The compile has to be where that is caught."""
+    _, loss = quadratic_problem()
+    schedule = cosine_schedule(1e-2, 50)
+    rule = chain(sgd(learning_rate=1.0), scale_by_schedule(schedule), scale_by_schedule(schedule))
+
+    with pytest.raises(ValueError, match="share the name 'scale_by_schedule/step_count'"):
+        compile_train(loss, rule)
+
+    # Naming them apart is the remedy the transform offers, and it compiles.
+    apart = chain(
+        sgd(learning_rate=1.0),
+        scale_by_schedule(schedule, namespace="warmup"),
+        scale_by_schedule(schedule, namespace="decay"),
+    )
+    compile_train(loss, apart)
