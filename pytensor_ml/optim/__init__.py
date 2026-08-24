@@ -22,6 +22,14 @@ from pytensor_ml.optim.base import (
     to_floatx,
 )
 from pytensor_ml.optim.clipping import clip_by_global_norm, clip_by_value
+from pytensor_ml.optim.guards import (
+    Decision,
+    SkipCondition,
+    apply_if_finite,
+    large_step,
+    nonfinite,
+    skip_if,
+)
 from pytensor_ml.optim.policy import reduce_on_plateau
 from pytensor_ml.optim.rules import (
     adadelta_updates,
@@ -51,9 +59,11 @@ from pytensor_ml.optim.transform import (
 )
 
 __all__ = [
+    "Decision",
     "LearningRate",
     "Rate",
     "Schedule",
+    "SkipCondition",
     "Transform",
     "UpdateRule",
     "Updates",
@@ -68,6 +78,7 @@ __all__ = [
     "adamw",
     "adamw_updates",
     "add_weight_decay",
+    "apply_if_finite",
     "chain",
     "clip_by_global_norm",
     "clip_by_value",
@@ -77,9 +88,11 @@ __all__ = [
     "exponential_schedule",
     "get_gradients",
     "join_schedules",
+    "large_step",
     "linear_schedule",
     "nadam",
     "nadam_updates",
+    "nonfinite",
     "polynomial_schedule",
     "reduce_on_plateau",
     "rmsprop",
@@ -90,6 +103,7 @@ __all__ = [
     "scale",
     "sgd",
     "sgd_updates",
+    "skip_if",
     "step_decay",
     "to_floatx",
     "trace",
