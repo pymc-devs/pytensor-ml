@@ -24,22 +24,36 @@ logger = sphinx.util.logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 NOTEBOOKS_ROOT = REPO_ROOT / "examples"
 
-# Pretty titles for known subfolders. Anything not listed is title-cased.
-CATEGORY_TITLES = {
-    "examples": "Examples",
-    "introductory": "Introductory",
-    "advanced": "Advanced",
-    "case_study": "Case Studies",
-}
+# A notebook's path under examples/ decides where it lands: `examples/<page>/<section>/nb.ipynb`
+# puts it in a named section of that page, `examples/<page>/nb.ipynb` puts it on the page with no
+# section heading, and a notebook at the top level falls to CATCH_ALL_PAGE. Pages appear in the order
+# listed here; a page with no notebooks writes no file at all.
+GALLERY_PAGES = (
+    ("getting_started", "Getting Started", "getting_started"),
+    ("gallery", "Example Gallery", "gallery"),
+)
+CATCH_ALL_PAGE = "gallery"
 
-TITLE = """
-Example Gallery
-===============
+# Sections are the folders themselves, titled by their folder name. List a folder here to pin where
+# it sits on the page (anything unlisted follows, alphabetically), and give it a title only when
+# title-casing the folder name would get it wrong.
+SECTION_ORDER: tuple[str, ...] = ()
+SECTION_TITLES: dict[str, str] = {}
+
+PAGE_TITLE = """
+{title}
+{underlines}
 """
 
 TOCTREE_HEAD = """
 .. toctree::
    :hidden:
+
+"""
+
+GRID_HEAD = """
+.. grid:: 1 2 3 3
+   :gutter: 4
 
 """
 
@@ -153,29 +167,82 @@ class NotebookGenerator:
 
 def discover_notebooks():
     """
-    Group notebooks by the category they belong to.
+    Group every notebook under ``examples/`` by the page and section its path puts it in.
 
     Returns
     -------
-    grouped : dict mapping str to list of pathlib.Path
-        Notebook paths keyed by category: the immediate subfolder of ``examples/`` a notebook sits in,
-        or ``"examples"`` for one at the top level.
+    grouped : dict mapping tuple to list of pathlib.Path
+        Notebook paths keyed by ``(page, section)``, where ``section`` is None for a notebook that
+        sits directly in a page's folder.
     """
     if not NOTEBOOKS_ROOT.exists():
         return {}
 
-    grouped: dict[str, list[Path]] = {}
+    grouped: dict[tuple[str, str | None], list[Path]] = {}
     for path in sorted(NOTEBOOKS_ROOT.rglob("*.ipynb")):
         if ".ipynb_checkpoints" in path.parts:
             continue
-        rel = path.relative_to(NOTEBOOKS_ROOT)
-        category = rel.parts[0] if len(rel.parts) > 1 else "examples"
-        grouped.setdefault(category, []).append(path)
+        parts = path.relative_to(NOTEBOOKS_ROOT).parts
+        page = parts[0] if len(parts) > 1 else CATCH_ALL_PAGE
+        section = parts[1] if len(parts) > 2 else None
+        grouped.setdefault((page, section), []).append(path)
     return grouped
 
 
+def _section_title(section: str) -> str:
+    return SECTION_TITLES.get(section, section.replace("_", " ").title())
+
+
+def _page_layout(grouped):
+    """
+    Lay the discovered notebooks out into pages and the sections within them.
+
+    Returns
+    -------
+    layout : list of tuple of str, str and list of tuple
+        One entry per page that has notebooks, in the order the pages appear: the document name, its
+        title, and its sections as ``(section title or None, notebook paths)``.
+    """
+    known_pages = {page for page, _, _ in GALLERY_PAGES}
+    ordering = {section: index for index, section in enumerate(SECTION_ORDER)}
+
+    layout = []
+    for page, page_title, document in GALLERY_PAGES:
+        sections = [(key[1], paths) for key, paths in grouped.items() if key[0] == page]
+        if document == CATCH_ALL_PAGE:
+            sections += [
+                (key[1], paths) for key, paths in grouped.items() if key[0] not in known_pages
+            ]
+        if not sections:
+            continue
+
+        # Unsectioned notebooks lead the page; the rest follow SECTION_ORDER, then alphabetically.
+        sections.sort(
+            key=lambda item: (
+                item[0] is not None,
+                ordering.get(item[0], len(ordering)),
+                item[0] or "",
+            )
+        )
+        merged: dict[str | None, list[Path]] = {}
+        for section, paths in sections:
+            merged.setdefault(section, []).extend(paths)
+        sections = list(merged.items())
+        layout.append(
+            (
+                document,
+                page_title,
+                [
+                    (None if section is None else _section_title(section), paths)
+                    for section, paths in sections
+                ],
+            )
+        )
+    return layout
+
+
 def main(app):
-    logger.info("Starting pytensor_ml example gallery generation.")
+    logger.info("Starting pytensor_ml gallery generation.")
 
     src_dir = Path(app.builder.srcdir)
     examples_dir = src_dir / "examples"
@@ -184,69 +251,74 @@ def main(app):
     thumbnails_dir.mkdir(parents=True, exist_ok=True)
 
     grouped = discover_notebooks()
-
     if not grouped:
         logger.warning(
-            "No notebooks found under examples/; writing empty gallery.",
+            "No notebooks found under examples/; no gallery pages will be written.",
             type="thumbnail_extractor",
         )
 
-    toctree_entries: list[str] = []
-    section_lines: list[str] = []
+    for document, page_title, sections in _page_layout(grouped):
+        toctree_entries: list[str] = []
+        body: list[str] = []
 
-    for category in sorted(grouped):
-        nb_paths = grouped[category]
-        title = CATEGORY_TITLES.get(category, category.replace("_", " ").title())
-        section_lines.append(
-            SECTION_TEMPLATE.format(
-                section_title=title,
-                section_id=category,
-                underlines="-" * len(title),
-            )
-        )
-
-        for nb_path in nb_paths:
-            if not is_tracked_by_git(nb_path):
-                logger.info(
-                    f"Skipping {nb_path.name}, not tracked by git",
-                    type="thumbnail_extractor",
+        for section_title, nb_paths in sections:
+            if section_title is None:
+                body.append(GRID_HEAD)
+            else:
+                body.append(
+                    SECTION_TEMPLATE.format(
+                        section_title=section_title,
+                        section_id=section_title.lower().replace(" ", "-"),
+                        underlines="-" * len(section_title),
+                    )
                 )
-                continue
 
-            nbg = NotebookGenerator(
-                src_nb=nb_path,
-                category=category,
-                examples_dir=examples_dir,
-                thumbnails_dir=thumbnails_dir,
-            )
-            nbg.stage_notebook()
-            nbg.gen_previews()
+            for nb_path in nb_paths:
+                if not is_tracked_by_git(nb_path):
+                    logger.info(
+                        f"Skipping {nb_path.name}, not tracked by git",
+                        type="thumbnail_extractor",
+                    )
+                    continue
 
-            doc_name = f"{category}/{nbg.stripped_name}"
-            toctree_entries.append(doc_name)
-            # Path is relative to docs/source/ — the leading slash makes
-            # Sphinx resolve it from the source root, matching gEconpy's
-            # convention so users can drop in custom thumbnails too.
-            img_path = f"/_thumbnails/{category}/{nbg.stripped_name}.png"
-            section_lines.append(
-                ITEM_TEMPLATE.format(
-                    doc_name=doc_name,
-                    image=img_path,
-                    doc_reference=doc_name,
-                    link_type="doc",
+                # Staged under the same folders it came from, so two notebooks sharing a name in
+                # different sections cannot collide.
+                relative_dir = nb_path.parent.relative_to(NOTEBOOKS_ROOT)
+                nbg = NotebookGenerator(
+                    src_nb=nb_path,
+                    category=str(relative_dir) if relative_dir.parts else CATCH_ALL_PAGE,
+                    examples_dir=examples_dir,
+                    thumbnails_dir=thumbnails_dir,
                 )
-            )
+                nbg.stage_notebook()
+                nbg.gen_previews()
 
-    # Assemble: title, hidden toctree (so notebooks register with Sphinx),
-    # then the visible grid-card sections.
-    file_lines = [TITLE, TOCTREE_HEAD]
-    file_lines.extend(f"   {entry}\n" for entry in toctree_entries)
-    file_lines.append("\n")
-    file_lines.extend(section_lines)
+                doc_name = f"{nbg.category}/{nbg.stripped_name}"
+                toctree_entries.append(doc_name)
+                # Relative to docs/source/ — the leading slash makes Sphinx resolve it from the source
+                # root, so a hand-supplied thumbnail can be dropped in at the same path.
+                img_path = f"/_thumbnails/{nbg.category}/{nbg.stripped_name}.png"
+                body.append(
+                    ITEM_TEMPLATE.format(
+                        doc_name=doc_name,
+                        image=img_path,
+                        doc_reference=doc_name,
+                        link_type="doc",
+                    )
+                )
 
-    gallery_rst = examples_dir / "gallery.rst"
-    gallery_rst.write_text("\n".join(file_lines), encoding="utf-8")
-    logger.info(f"Wrote gallery to {gallery_rst.relative_to(src_dir)}")
+        # Title, then a hidden toctree so the notebooks register with Sphinx, then the grid cards.
+        file_lines = [
+            PAGE_TITLE.format(title=page_title, underlines="=" * len(page_title)),
+            TOCTREE_HEAD,
+        ]
+        file_lines.extend(f"   {entry}\n" for entry in toctree_entries)
+        file_lines.append("\n")
+        file_lines.extend(body)
+
+        page_rst = examples_dir / f"{document}.rst"
+        page_rst.write_text("\n".join(file_lines), encoding="utf-8")
+        logger.info(f"Wrote {page_title} to {page_rst.relative_to(src_dir)}")
 
 
 def setup(app):

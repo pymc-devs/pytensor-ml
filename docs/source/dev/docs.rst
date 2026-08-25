@@ -38,10 +38,12 @@ Source content lives under ``docs/source/``:
       - Autosummary entry points; one file per public submodule.
     * - ``install.rst``
       - Installation guide. Hand-written narrative.
-    * - ``examples/gallery.rst``
-      - Notebook gallery landing page. **Generated** at build time.
-    * - ``examples/<category>/*.ipynb``
-      - Notebook copies staged from ``examples/``. **Generated**.
+    * - ``examples/*.rst``
+      - One page per notebook category, in the order set by ``GALLERY_PAGES`` in
+        ``generate_gallery.py``. A category with no notebooks writes no page, so add its entry to the
+        toctree in ``index.rst`` along with the first notebook. **Generated** at build time.
+    * - ``examples/<page>/**/*.ipynb``
+      - Notebook copies staged from ``examples/``, under the same folders. **Generated**.
     * - ``dev/``
       - This page, the contributing guide and the style guide.
     * - ``references.bib``
