@@ -75,7 +75,6 @@ walkthroughs.
    :titlesonly:
 
    install
-   user_guide/index
    examples/gallery
    api
    dev/index

@@ -38,8 +38,6 @@ Source content lives under ``docs/source/``:
       - Autosummary entry points; one file per public submodule.
     * - ``install.rst``
       - Installation guide. Hand-written narrative.
-    * - ``user_guide/``
-      - Conceptual pages (layers, training, optimizers, backends, design).
     * - ``examples/gallery.rst``
       - Notebook gallery landing page. **Generated** at build time.
     * - ``examples/<category>/*.ipynb``
