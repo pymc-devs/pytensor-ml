@@ -16,7 +16,38 @@ from pytensor_ml.state import Initializer, initialize_params
 
 
 class Model:
-    """A network's input and output, with conveniences to initialize its weights, train, and run inference."""
+    """
+    A network's input and output, with conveniences to initialize its weights, train, and run inference.
+
+    Examples
+    --------
+    Build the network, wrap it, and the model carries the graph through initialization, a training
+    step, and inference:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.activations import ReLU
+        from pytensor_ml.layers import Input, Linear, Sequential
+        from pytensor_ml.loss import SquaredError
+        from pytensor_ml.model import Model
+        from pytensor_ml.optim import adam
+
+        X = Input("X", shape=(None, 4))
+        network = Sequential(
+            Linear("fc1", n_in=4, n_out=8),
+            ReLU(),
+            Linear("fc2", n_in=8, n_out=1),
+        )
+
+        model = Model(X, network(X)).initialize(seed=0)
+        step = model.compile_train(adam(1e-2), SquaredError(), ndim_out=2)
+
+        batch = np.zeros((16, 4))
+        loss_value = step(batch, np.zeros((16, 1)))
+        predictions = model.predict(batch)
+    """
 
     def __init__(self, X: TensorVariable, y: TensorVariable, compile_kwargs: dict | None = None):
         self.X = X

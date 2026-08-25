@@ -20,6 +20,28 @@ def _as_reduction(reduction: ReductionLike) -> ReductionFunction:
 
 
 class Loss(ABC):
+    """
+    Scalar objective a training step differentiates, called as ``loss(y_true, y_pred)``.
+
+    Examples
+    --------
+    Subclass it by implementing :meth:`loss`; the base class makes the instance callable:
+
+    .. code-block:: python
+
+        import pytensor.tensor as pt
+
+        from pytensor_ml.loss import Loss
+
+
+        class MeanAbsoluteError(Loss):
+            def loss(self, y_true, y_pred):
+                return pt.abs(y_true - y_pred).mean()
+
+
+        objective = MeanAbsoluteError()(pt.vector("y_true"), pt.vector("y_pred"))
+    """
+
     @abstractmethod
     def loss(self, y_true, y_pred) -> pt.TensorVariable: ...
 
@@ -28,6 +50,28 @@ class Loss(ABC):
 
 
 class SquaredError(Loss):
+    """
+    Mean or summed squared deviation between prediction and target, for regression.
+
+    Examples
+    --------
+    Call the loss on a target and a prediction to get the scalar a training step differentiates:
+
+    .. code-block:: python
+
+        import numpy as np
+        import pytensor
+        import pytensor.tensor as pt
+
+        from pytensor_ml.loss import SquaredError
+
+        y_true = pt.matrix("y_true")
+        y_pred = pt.matrix("y_pred")
+
+        objective = SquaredError()(y_true, y_pred)
+        value = pytensor.function([y_true, y_pred], objective)(np.ones((4, 1)), np.zeros((4, 1)))
+    """
+
     def __init__(self, reduction: ReductionLike = "mean"):
         self.reduction = _as_reduction(reduction)
 
@@ -38,6 +82,49 @@ class SquaredError(Loss):
 
 
 class CrossEntropy(Loss):
+    """
+    Negative log likelihood of the true class under the predicted distribution, for classification.
+
+    Examples
+    --------
+    Integer labels against predicted probabilities, the default:
+
+    .. code-block:: python
+
+        import numpy as np
+        import pytensor
+        import pytensor.tensor as pt
+
+        from pytensor_ml.loss import CrossEntropy
+
+        labels = pt.vector("labels", dtype="int64")
+        probabilities = pt.matrix("probabilities")
+
+        objective = CrossEntropy()(labels, probabilities)
+        value = pytensor.function([labels, probabilities], objective)(
+            np.array([0, 2]), np.array([[0.7, 0.2, 0.1], [0.1, 0.2, 0.7]])
+        )
+
+    A classifier head emits logits, and one-hot labels are what an encoder produces, so both flags are
+    usually set together. Passing logits keeps the loss on the numerically stable log-softmax path:
+
+    .. code-block:: python
+
+        import numpy as np
+        import pytensor
+        import pytensor.tensor as pt
+
+        from pytensor_ml.loss import CrossEntropy
+
+        onehot = pt.matrix("onehot")
+        logits = pt.matrix("logits")
+
+        objective = CrossEntropy(expect_logits=True, expect_onehot_labels=True)(onehot, logits)
+        value = pytensor.function([onehot, logits], objective)(
+            np.eye(3)[[0, 2]], np.array([[2.0, 0.5, 0.1], [0.1, 0.5, 2.0]])
+        )
+    """
+
     def __init__(
         self,
         reduction: ReductionLike = "mean",
@@ -106,6 +193,24 @@ def supervised_loss(
         Scalar training loss.
     target : TensorVariable
         Input placeholder for the ground-truth labels, to be supplied at call time.
+
+    Examples
+    --------
+    Point it at a model's output and it hands back the target placeholder to feed alongside each batch:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import CrossEntropy, supervised_loss
+        from pytensor_ml.optim import adam, compile_train
+
+        X = Input("X", shape=(None, 4))
+        logits = Linear("logits", n_in=4, n_out=3)(X)
+
+        loss_fn = CrossEntropy(expect_logits=True, expect_onehot_labels=True)
+        objective, target = supervised_loss(logits, loss_fn, ndim_out=2)
+
+        step = compile_train(objective, adam(1e-3), inputs=[X, target])
     """
     label_slice = (slice(None),) * ndim_out + (0,) * (prediction.ndim - ndim_out)
     target = prediction[label_slice].type()
