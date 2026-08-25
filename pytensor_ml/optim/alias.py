@@ -56,6 +56,25 @@ def sgd(
         Momentum coefficient. A value of 0 (the default) gives plain SGD.
     nesterov : bool
         Use Nesterov momentum. Ignored when ``momentum`` is 0. Default False.
+
+    Examples
+    --------
+    Plain gradient descent by default. Momentum carries a running average of past steps, and
+    ``nesterov`` measures the gradient after that carry rather than before:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import compile_train, sgd
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+        step = compile_train(loss, sgd(learning_rate=0.1, momentum=0.9, nesterov=True))
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
     @reuses_state
@@ -84,6 +103,25 @@ def adam(
 
     ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
     :func:`sgd`.
+
+    Examples
+    --------
+    The usual first choice: a per-parameter rate adapted from the first and second gradient moments,
+    both bias-corrected, so the earliest steps are not damped towards zero:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import adam, compile_train
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+        step = compile_train(loss, adam(learning_rate=1e-3))
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
     @reuses_state
@@ -120,6 +158,25 @@ def adamw(
 
     ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
     :func:`sgd`.
+
+    Examples
+    --------
+    Adam entangles weight decay with its adaptive rate; this one subtracts the decay from the weights
+    directly. A ``mask`` keeps biases and norm scales out of it, which is almost always what you want:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import adamw, compile_train
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+        step = compile_train(loss, adamw(learning_rate=1e-3, mask=lambda parameter: parameter.ndim > 1))
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
     @reuses_state
@@ -155,6 +212,25 @@ def nadam(
 
     ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
     :func:`sgd`.
+
+    Examples
+    --------
+    Adam with Nesterov's look-ahead folded into the first moment, which turns corners a little faster
+    than plain Adam on the same rate:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import compile_train, nadam
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+        step = compile_train(loss, nadam(learning_rate=2e-3))
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
     @reuses_state
@@ -187,6 +263,25 @@ def adamax(
 
     ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
     :func:`sgd`.
+
+    Examples
+    --------
+    Adam's second moment replaced by a running infinity norm, so one outsized gradient cannot shrink
+    every step for many iterations afterwards:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import adamax, compile_train
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+        step = compile_train(loss, adamax(learning_rate=2e-3))
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
     @reuses_state
@@ -219,6 +314,25 @@ def rprop(
 
     Unlike the other rules, ``learning_rate`` must be a plain number: it initializes the per-parameter
     step sizes Rprop then adapts, so it never enters the graph and cannot be scheduled or steered.
+
+    Examples
+    --------
+    Steps by the sign of the gradient alone, growing or shrinking a per-parameter step size. It reads a
+    sign change as overshoot, so minibatch noise misleads it -- keep it to full-batch objectives:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import compile_train, rprop
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+        step = compile_train(loss, rprop(learning_rate=1e-2, eta_plus=1.2, eta_minus=0.5))
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     _require_numeric_learning_rate(learning_rate)
 
@@ -249,6 +363,25 @@ def rmsprop(
 
     ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
     :func:`sgd`.
+
+    Examples
+    --------
+    Scales each step by a decaying average of squared gradients. Setting ``centered`` subtracts the
+    mean gradient first, which estimates variance rather than raw magnitude:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import compile_train, rmsprop
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+        step = compile_train(loss, rmsprop(learning_rate=1e-2, centered=True))
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
     @reuses_state
@@ -276,6 +409,25 @@ def adagrad(learning_rate: LearningRate = 0.01, epsilon: float = 1e-8) -> Update
 
     ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
     :func:`sgd`.
+
+    Examples
+    --------
+    Accumulates every squared gradient it has seen, so the effective rate only ever decreases. That
+    suits sparse features and stalls on long runs:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import adagrad, compile_train
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+        step = compile_train(loss, adagrad(learning_rate=1e-2))
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
     @reuses_state
@@ -299,6 +451,25 @@ def adadelta(
 
     ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
     :func:`sgd`.
+
+    Examples
+    --------
+    Tracks a window of squared updates alongside squared gradients, so their ratio sets the scale and
+    the learning rate stays at its default of 1.0:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import adadelta, compile_train
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+        step = compile_train(loss, adadelta())
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
     @reuses_state

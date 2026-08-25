@@ -16,8 +16,35 @@ from pytensor_ml.optim.base import (
 )
 from pytensor_ml.params import StepCounter
 
-# Reads the step a rule has proposed and returns a scalar boolean graph: True to throw the step away.
 type Decision = Callable[[Updates, Sequence[Parameter]], TensorVariable]
+"""
+Reads the step a rule has proposed and returns a scalar boolean graph: True to throw the step away.
+
+Examples
+--------
+Pass one straight to :func:`skip_if` when the reason a raised error names does not matter, or wrap it in
+a :class:`SkipCondition` when it does:
+
+.. code-block:: python
+
+    import numpy as np
+    import pytensor.tensor as pt
+
+    from pytensor_ml.layers import Input, Linear
+    from pytensor_ml.loss import SquaredError, supervised_loss
+    from pytensor_ml.optim import adam, compile_train, skip_if
+
+
+    def loss_is_huge(updates, parameters):
+        return pt.max([pt.abs(updates[parameter]).max() for parameter in parameters]) > 1e6
+
+
+    X = Input("X", shape=(None, 4))
+    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+    step = compile_train(loss, skip_if(adam(1e-3), loss_is_huge))
+    loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
+"""
 
 
 @dataclass(frozen=True)
@@ -32,6 +59,30 @@ class SkipCondition:
     reason : str
         Phrase naming why this condition skips, completing the sentence "the optimizer ..." in the error a
         run of consecutive skips raises. Default names no particular cause.
+
+    Examples
+    --------
+    Pair a decision graph with the reason a raised error should name, for a condition of your own:
+
+    .. code-block:: python
+
+        import numpy as np
+        import pytensor.tensor as pt
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import SkipCondition, adam, compile_train, skip_if
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+        any_step_huge = SkipCondition(
+            decide=lambda updates, parameters: pt.max([pt.abs(step).max() for step in updates.values()]) > 1e3,
+            reason="took a step with an implausibly large coordinate",
+        )
+
+        step = compile_train(loss, skip_if(adam(1e-3), any_step_huge))
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
     decide: Decision
@@ -53,6 +104,25 @@ def nonfinite() -> SkipCondition:
     :func:`~pytensor_ml.optim.policy.reduce_on_plateau` holds an infinite best-loss until it has seen a full
     window -- and that is not a step to throw away. Optimizer state cannot hide a NaN for long in any case,
     since a poisoned moment reaches its parameter on the very next step.
+
+    Examples
+    --------
+    The condition behind :func:`apply_if_finite`, useful when you want it alongside a different skip budget
+    than that helper's default:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import adam, compile_train, nonfinite, skip_if
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+        step = compile_train(loss, skip_if(adam(1e-3), nonfinite(), max_consecutive_skips=None))
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
     def decide(updates: Updates, parameters: Sequence[Parameter]) -> TensorVariable:
@@ -88,6 +158,25 @@ def large_step(max_norm: float) -> SkipCondition:
     ----------
     max_norm : float
         Norm at which a step is thrown away rather than applied.
+
+    Examples
+    --------
+    Skip a step whose global norm exceeds a bound. Unlike :func:`clip_by_global_norm`, which rescales an
+    outsized step and applies it, this one discards it entirely:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import adam, compile_train, large_step, skip_if
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+        step = compile_train(loss, skip_if(adam(1e-3), large_step(10.0)))
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     if max_norm <= 0.0:
         raise ValueError(
@@ -162,6 +251,28 @@ def skip_if(
     -------
     guarded_rule : UpdateRule
         The guarded rule, which also writes both skip counters.
+
+    Examples
+    --------
+    Wrap a rule to throw away any step meeting the condition, leaving the parameters where they were. It
+    raises once too many steps in a row are skipped, so a divergence surfaces instead of looking like
+    training that quietly stopped learning:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import adam, compile_train, large_step, skip_if
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+        rule = skip_if(adam(1e-3), large_step(10.0), max_consecutive_skips=3)
+
+        step = compile_train(loss, rule)
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     if max_consecutive_skips is not None and max_consecutive_skips < 1:
         raise ValueError(
@@ -227,6 +338,25 @@ def apply_if_finite(
     :func:`skip_if` under :func:`nonfinite`, which is the common case and the name optax gives it. Takes the
     same keyword arguments; see :func:`skip_if` for what they mean and what the guard does and does not
     cover.
+
+    Examples
+    --------
+    The common case of :func:`skip_if`: drop any step carrying a NaN or an infinity, which would otherwise
+    poison every parameter it touches and every step after it:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import adam, apply_if_finite, compile_train
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+        step = compile_train(loss, apply_if_finite(adam(1e-3)))
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     return skip_if(
         rule,

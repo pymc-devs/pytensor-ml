@@ -69,6 +69,29 @@ def reduce_on_plateau(
     -------
     wrapped_rule : UpdateRule
         The wrapped rule, which also writes the scale and the policy's own history.
+
+    Examples
+    --------
+    Own a scale the rule's rate is built from, and the policy cuts it once the loss stops improving. It
+    decides once per step rather than once per epoch, so widen ``accumulation_size`` to judge on a window
+    of batches rather than on a single noisy one:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import adam, compile_train, reduce_on_plateau, scalar_state
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+        scale = scalar_state("plateau/scale", fill_value=1.0)
+        rule = reduce_on_plateau(adam(learning_rate=scale * 1e-3), scale, patience=5, accumulation_size=50)
+
+        step = compile_train(loss, rule)
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     if not 0.0 < factor < 1.0:
         raise ValueError(f"factor must lie in (0, 1), got {factor}.")

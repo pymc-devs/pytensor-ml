@@ -52,7 +52,6 @@ Guards and policies
     nonfinite
     large_step
     reduce_on_plateau
-    Decision
     SkipCondition
 
 Schedules
@@ -75,14 +74,29 @@ Building blocks
 .. autosummary::
     :toctree: generated/
 
+    get_gradients
+    scalar_state
+    to_floatx
+
+.. currentmodule:: pytensor_ml.optim.base
+
+.. autosummary::
+    :toctree: generated/
+
     UpdateRule
     Transform
     Schedule
     Rate
     LearningRate
-    get_gradients
-    scalar_state
-    to_floatx
+
+.. currentmodule:: pytensor_ml.optim.guards
+
+.. autosummary::
+    :toctree: generated/
+
+    Decision
+
+.. currentmodule:: pytensor_ml.optim
 
 Low-level update functions
 --------------------------

@@ -82,6 +82,27 @@ def compile_train(
     step : Function
         The compiled one-step training function, applying every update in place. Returns the loss alone, or
         ``(loss, *extra_outputs)`` when diagnostics were requested.
+
+    Examples
+    --------
+    Hand it any scalar loss graph and a rule, and it differentiates the loss, applies the rule, and folds in
+    every update the graph carries -- optimizer state, batch-norm statistics, RNGs, training clocks. Pass
+    ``extra_outputs`` to read a value out alongside the loss:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import adam, compile_train
+
+        X = Input("X", shape=(None, 4))
+        prediction = Linear("fc", n_in=4, n_out=1)(X)
+        loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+
+        step = compile_train(loss, adam(1e-3), inputs=[X, target], extra_outputs=[prediction])
+        loss_value, predictions = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     extra_outputs = list(extra_outputs or [])
     extra_updates = dict(extra_updates or {})

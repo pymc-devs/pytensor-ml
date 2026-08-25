@@ -127,6 +127,16 @@ def linear_schedule(
     schedule : Schedule
         A callable mapping a symbolic step count to a scalar learning rate, ready to hand to a rule as
         its ``learning_rate``.
+
+    Examples
+    --------
+    Move the rate along a straight line, the usual choice for a warmup or a linear decay to zero:
+
+    .. code-block:: python
+
+        from pytensor_ml.optim import adam, linear_schedule
+
+        rule = adam(learning_rate=linear_schedule(3e-4, total_steps=10_000, final_learning_rate=1e-5))
     """
     _validate_horizon(total_steps, transition_begin)
 
@@ -181,6 +191,17 @@ def exponential_schedule(
     schedule : Schedule
         A callable mapping a symbolic step count to a scalar learning rate, ready to hand to a rule as
         its ``learning_rate``.
+
+    Examples
+    --------
+    Decay by a constant factor per step, so the rate falls fast early and flattens out. Both endpoints
+    must be positive, since no finite number of multiplications reaches zero:
+
+    .. code-block:: python
+
+        from pytensor_ml.optim import adam, exponential_schedule
+
+        rule = adam(learning_rate=exponential_schedule(3e-4, total_steps=10_000, final_learning_rate=1e-6))
     """
     _validate_horizon(total_steps, transition_begin)
     if final_learning_rate <= 0.0 or learning_rate <= 0.0:
@@ -244,6 +265,17 @@ def polynomial_schedule(
     schedule : Schedule
         A callable mapping a symbolic step count to a scalar learning rate, ready to hand to a rule as
         its ``learning_rate``.
+
+    Examples
+    --------
+    Bend the path between the endpoints: ``power=1.0`` is linear, higher powers hold the initial rate
+    longer before dropping away:
+
+    .. code-block:: python
+
+        from pytensor_ml.optim import adam, polynomial_schedule
+
+        rule = adam(learning_rate=polynomial_schedule(3e-4, total_steps=10_000, power=2.0))
     """
     _validate_horizon(total_steps, transition_begin)
     if power <= 0.0:
@@ -302,6 +334,17 @@ def step_decay(
     schedule : Schedule
         A callable mapping a symbolic step count to a scalar learning rate, ready to hand to a rule as
         its ``learning_rate``.
+
+    Examples
+    --------
+    Cut the rate by a factor on a fixed cadence, holding it flat in between -- the staircase familiar
+    from torch's ``StepLR``:
+
+    .. code-block:: python
+
+        from pytensor_ml.optim import adam, step_decay
+
+        rule = adam(learning_rate=step_decay(3e-4, decay_every=2_000, decay_factor=0.5))
     """
     if decay_every < 1:
         raise ValueError(f"decay_every must be at least 1, got {decay_every}.")
@@ -339,6 +382,17 @@ def constant_schedule(learning_rate: float) -> Schedule:
     schedule : Schedule
         A callable mapping a symbolic step count to a scalar learning rate, ready to hand to a rule as
         its ``learning_rate``.
+
+    Examples
+    --------
+    Hold one rate for the whole run. Useful as a segment of :func:`join_schedules`, where every other
+    segment is a schedule too:
+
+    .. code-block:: python
+
+        from pytensor_ml.optim import adam, constant_schedule
+
+        rule = adam(learning_rate=constant_schedule(3e-4))
     """
 
     def schedule(step_count: TensorVariable) -> TensorVariable:
@@ -376,6 +430,20 @@ def join_schedules(schedules: Sequence[Schedule], boundaries: Sequence[int]) -> 
     schedule : Schedule
         A callable mapping a symbolic step count to a scalar learning rate, ready to hand to a rule as
         its ``learning_rate``.
+
+    Examples
+    --------
+    Run schedules back to back, switching at each boundary step. A linear warmup into a cosine decay is
+    the standard recipe for a transformer:
+
+    .. code-block:: python
+
+        from pytensor_ml.optim import adam, cosine_schedule, join_schedules, linear_schedule
+
+        warmup = linear_schedule(0.0, total_steps=1_000, final_learning_rate=3e-4)
+        decay = cosine_schedule(3e-4, total_steps=9_000)
+
+        rule = adam(learning_rate=join_schedules([warmup, decay], boundaries=[1_000]))
     """
     if not schedules:
         raise ValueError("join_schedules needs at least one schedule.")
