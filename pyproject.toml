@@ -181,8 +181,16 @@ pytensor_ml = { path = ".", editable = true }
 
 [tool.pixi.feature.docs.tasks]
 docs-build = { cmd = "sphinx-build -b html source build/html", cwd = "docs" }
-# Rebuilds on save and serves the result at http://localhost:8000.
-docs-serve = { cmd = "sphinx-autobuild source build/html --port 8000 --open-browser", cwd = "docs" }
+# Rebuilds on save and serves the result at http://localhost:8000. The ignored paths are the ones a
+# build writes back into source/ -- the gallery pages and staged notebooks, their thumbnails, and the
+# autosummary stubs -- which would otherwise retrigger the watcher and rebuild forever. They are the
+# same set docs/.gitignore lists, and have to move together.
+docs-serve = { cmd = """\
+    sphinx-autobuild source build/html --port 8000 --open-browser \
+    --ignore '*/source/examples/*' \
+    --ignore '*/source/_thumbnails/*' \
+    --ignore '*/source/api/generated/*'\
+""", cwd = "docs" }
 
 [tool.pixi.environments]
 docs = { features = ["docs"] }
