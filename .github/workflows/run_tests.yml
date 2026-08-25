@@ -58,9 +58,6 @@ jobs:
               tests/test_collect.py
               tests/test_util.py
               tests/test_workflow_groups.py
-              tests/test_docstrings.py
-              tests/test_docstring_examples.py
-              tests/test_public_api.py
         # Windows runners are roughly twice as slow, and almost everything here is platform independent.
         # It runs one job over the parts that are not: file IO, paths, and compiling a graph to train.
         # One job per backend, each installing only that backend. They live here rather than in

@@ -71,9 +71,8 @@ the :doc:`style guide <style_guide>`.
 
 Docstrings are numpydoc. Every public entrypoint carries an ``Examples``
 section whose code is complete and runnable -- imports included, no ``>>>``
-prompts, so a reader can paste it straight into a script. Those examples are
-executed as part of the test suite, so an example that omits an import fails
-like any other test.
+prompts, so a reader can paste it straight into a script. Run a new example
+before you submit it; nothing checks that for you yet.
 
 Working with LLMs
 -----------------

@@ -152,8 +152,7 @@ short structured one:
 Examples
 --------
 
-Every public entrypoint carries an ``Examples`` section, and the test suite runs
-the code in it. Three rules:
+Every public entrypoint carries an ``Examples`` section. Three rules:
 
 #. **A lead-in sentence, always**, even when the code looks self-evident. Never
    open the section with the directive. Where two entrypoints have nearly
