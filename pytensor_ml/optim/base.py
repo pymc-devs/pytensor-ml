@@ -79,7 +79,7 @@ def get_gradients(
 
     Returns
     -------
-    list of TensorVariable
+    gradients : list of TensorVariable
         One gradient per parameter, in the order of ``parameters``.
     """
     if isinstance(loss_or_gradients, list | tuple):
@@ -291,7 +291,7 @@ def chain(head, *rest: Transform):
 
     Returns
     -------
-    UpdateRule or Transform
+    chained : UpdateRule or Transform
         A callable matching the head, applying every argument in sequence.
     """
 

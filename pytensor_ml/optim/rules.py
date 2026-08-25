@@ -41,7 +41,7 @@ def sgd_updates(
 
     Returns
     -------
-    Updates
+    updates : Updates
         Mapping from each parameter to its next value.
     """
     gradients = get_gradients(loss_or_gradients, parameters)
@@ -90,7 +90,7 @@ def adam_updates(
 
     Returns
     -------
-    Updates
+    updates : Updates
         Mapping from each parameter and its moment buffers to their next values.
     """
     return _adam_family_updates(
@@ -239,7 +239,7 @@ def adamw_updates(
 
     Returns
     -------
-    Updates
+    updates : Updates
         Mapping from each parameter and its moment buffers to their next values.
     """
     return _adam_family_updates(
@@ -292,7 +292,7 @@ def nadam_updates(
 
     Returns
     -------
-    Updates
+    updates : Updates
         Mapping from each parameter and its moment buffers to their next values.
     """
     gradients = get_gradients(loss_or_gradients, parameters)
@@ -361,7 +361,7 @@ def adamax_updates(
 
     Returns
     -------
-    Updates
+    updates : Updates
         Mapping from each parameter and its state buffers to their next values.
     """
     gradients = get_gradients(loss_or_gradients, parameters)
@@ -416,7 +416,7 @@ def adagrad_updates(
 
     Returns
     -------
-    Updates
+    updates : Updates
         Mapping from each parameter and its accumulator to their next values.
     """
     gradients = get_gradients(loss_or_gradients, parameters)
@@ -474,7 +474,7 @@ def rmsprop_updates(
 
     Returns
     -------
-    Updates
+    updates : Updates
         Mapping from each parameter and its state buffers to their next values.
     """
     gradients = get_gradients(loss_or_gradients, parameters)
@@ -538,7 +538,7 @@ def adadelta_updates(
 
     Returns
     -------
-    Updates
+    updates : Updates
         Mapping from each parameter and its two accumulators to their next values.
     """
     gradients = get_gradients(loss_or_gradients, parameters)
@@ -625,7 +625,7 @@ def rprop_updates(
 
     Returns
     -------
-    Updates
+    updates : Updates
         Mapping from each parameter and its state buffers to their next values.
     """
     _require_numeric_learning_rate(learning_rate)

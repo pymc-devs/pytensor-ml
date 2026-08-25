@@ -160,7 +160,7 @@ def skip_if(
 
     Returns
     -------
-    UpdateRule
+    guarded_rule : UpdateRule
         The guarded rule, which also writes both skip counters.
     """
     if max_consecutive_skips is not None and max_consecutive_skips < 1:

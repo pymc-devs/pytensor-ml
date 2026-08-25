@@ -29,7 +29,7 @@ def trace(decay: float = 0.9, nesterov: bool = False) -> Transform:
 
     Returns
     -------
-    Transform
+    transform : Transform
         A transform that folds momentum into the updates dict.
     """
 
@@ -61,7 +61,7 @@ def scale(factor: Rate) -> Transform:
 
     Returns
     -------
-    Transform
+    transform : Transform
         A transform that rescales the updates dict.
     """
 
@@ -104,7 +104,7 @@ def scale_by_schedule(schedule: Schedule, *, namespace: str = "scale_by_schedule
 
     Returns
     -------
-    Transform
+    transform : Transform
         A transform that rescales the updates dict by the rate its clock currently reads.
     """
 
@@ -136,7 +136,7 @@ def add_weight_decay(
 
     Returns
     -------
-    Transform
+    transform : Transform
         A transform that folds weight decay into the updates dict.
     """
 

@@ -40,7 +40,7 @@ def serialize_graph(inputs: Sequence[Variable], outputs: Sequence[Variable]) -> 
 
     Returns
     -------
-    dict
+    serialized_graph : dict
         A JSON-native description of the graph's structure (no parameter values).
     """
     return graph_to_json(list(inputs), list(outputs))

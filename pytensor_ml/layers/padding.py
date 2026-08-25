@@ -114,7 +114,7 @@ class _PadNd(Layer):
 
         Returns
         -------
-        TensorVariable
+        padded : TensorVariable
             Shape ``(batch, *padded_spatial, channels)``, with batch and channels untouched.
         """
         X = pt.as_tensor(X)

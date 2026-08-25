@@ -41,7 +41,7 @@ class RecurrentCell(ABC):
 
         Returns
         -------
-        tuple of TensorVariable
+        state : tuple of TensorVariable
             The new state, in the same order. Its first element is the cell's output, which is what
             :class:`Recurrent` stacks over time -- an LSTM carrying :math:`(h, c)` returns :math:`h` first.
         """
@@ -56,7 +56,7 @@ class RecurrentCell(ABC):
 
         Returns
         -------
-        tuple of TensorVariable
+        state : tuple of TensorVariable
             Zero-filled state, in the order :meth:`step` takes and returns it.
         """
 
@@ -115,7 +115,7 @@ class Recurrent(Layer):
 
         Returns
         -------
-        TensorVariable
+        outputs : TensorVariable
             The cell's output at each step, shape ``(..., time, n_out)``.
         """
         reverse = self.reverse if reverse is None else reverse
@@ -766,7 +766,7 @@ class Bidirectional(Layer):
 
         Returns
         -------
-        TensorVariable
+        outputs : TensorVariable
             Both directions' outputs, shape ``(..., time, n_forward + n_backward)``.
         """
         out = pt.concatenate(

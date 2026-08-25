@@ -52,7 +52,7 @@ def function(
 
     Returns
     -------
-    Function
+    compiled_function : Function
         The compiled function.
     """
     updates = dict(kwargs.pop("updates", {}))
@@ -144,7 +144,7 @@ def compile_predict(
 
     Returns
     -------
-    Function
+    predict_function : Function
         The compiled prediction function.
     """
     specialized = rewrite_for_prediction(prediction)

@@ -304,7 +304,7 @@ def _extract_patches(
 
     Returns
     -------
-    TensorVariable
+    patches : TensorVariable
         Shape ``(batch, *out_spatial, *kernel_size, channels)``, where ``out_spatial`` counts the
         windows that fit.
     """
@@ -772,7 +772,7 @@ class _ConvNd(Layer):
 
         Returns
         -------
-        TensorVariable
+        output : TensorVariable
             Shape ``(batch, *out_spatial, out_channels)``.
         """
         X = pt.as_tensor(X)
@@ -938,7 +938,7 @@ class _ConvTransposeNd(_ConvNd):
 
         Returns
         -------
-        TensorVariable
+        output : TensorVariable
             Shape ``(batch, *out_spatial, out_channels)``, where each output axis is
             ``(spatial - 1) * stride - 2 * padding + dilation * (kernel_size - 1) + output_padding + 1``.
         """
@@ -1104,7 +1104,7 @@ class _PoolNd(Layer):
 
         Returns
         -------
-        TensorVariable
+        pooled : TensorVariable
             Shape ``(batch, *out_spatial, channels)``, with the channel axis untouched.
         """
         X = pt.as_tensor(X)

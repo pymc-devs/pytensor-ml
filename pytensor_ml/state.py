@@ -287,7 +287,7 @@ def initializer(sample_fn: Callable[..., np.ndarray]) -> type[Initializer]:
 
     Returns
     -------
-    type of Initializer
+    initializer_class : type of Initializer
         A class to instantiate with the parameters, e.g. ``scaled_normal(std=0.02)``.
 
     Examples
@@ -427,7 +427,7 @@ def initialize_params(
 
     Returns
     -------
-    list of ndarray
+    values : list of ndarray
         Drawn values, matching the shapes and dtypes of ``params``.
     """
     # Resolve once and share: a seed handed to each _sample_like call would repeat draws across parameters.

@@ -110,7 +110,7 @@ def scaled_dot_product_attention(
 
     Returns
     -------
-    TensorVariable
+    output : TensorVariable
         Attention output, shape ``(..., n_head, q_len, v_dim)``.
     """
     q, k, v = (pt.as_tensor(t).copy() for t in (q, k, v))

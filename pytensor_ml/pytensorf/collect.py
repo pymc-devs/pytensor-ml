@@ -75,7 +75,7 @@ def collect_differentiable_params(
 
     Returns
     -------
-    list of TrainableParameter
+    parameters : list of TrainableParameter
         The differentiable parameters, in graph-input order.
     """
     output_list = as_output_list(outputs)

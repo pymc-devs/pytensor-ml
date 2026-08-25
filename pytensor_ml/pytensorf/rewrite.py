@@ -19,7 +19,7 @@ def hoist_scan_draws(outputs):
 
     Returns
     -------
-    list of Variable
+    rewritten : list of Variable
         The rewritten graphs, in the order given.
     """
     fgraph = FunctionGraph(outputs=list(outputs), clone=True, copy_inputs=False)
@@ -54,7 +54,7 @@ def rewrite_for_prediction(graph):
 
     Returns
     -------
-    FunctionGraph, Variable, or list of Variable
+    specialized_graph : FunctionGraph, Variable, or list of Variable
         The specialized graph, matching the form of ``graph``. A FunctionGraph is rewritten in place and
         returned; a Variable or sequence is rewritten on a clone, leaving the original untouched.
     """

@@ -63,7 +63,7 @@ def find_generators_drawn_from(
 
     Returns
     -------
-    list of RandomGeneratorSharedVariable
+    generators : list of RandomGeneratorSharedVariable
         The generators a draw op consumes, in graph-input order.
     """
     fgraph = FunctionGraph(outputs=list(outputs), clone=False)
@@ -110,7 +110,7 @@ def collect_default_updates(
 
     Returns
     -------
-    dict mapping Variable to Variable
+    updates : dict mapping Variable to Variable
         Each RNG variable to the expression for its next state.
     """
 

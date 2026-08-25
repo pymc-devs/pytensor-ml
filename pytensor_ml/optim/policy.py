@@ -67,7 +67,7 @@ def reduce_on_plateau(
 
     Returns
     -------
-    UpdateRule
+    wrapped_rule : UpdateRule
         The wrapped rule, which also writes the scale and the policy's own history.
     """
     if not 0.0 < factor < 1.0:

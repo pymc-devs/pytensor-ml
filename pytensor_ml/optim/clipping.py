@@ -20,7 +20,7 @@ def clip_by_global_norm(max_norm: float = 1.0) -> Transform:
 
     Returns
     -------
-    Transform
+    transform : Transform
         A transform that clips the updates dict by global norm.
     """
 
@@ -49,7 +49,7 @@ def clip_by_value(min_value: float = -1.0, max_value: float = 1.0) -> Transform:
 
     Returns
     -------
-    Transform
+    transform : Transform
         A transform that clips the updates dict element-wise.
     """
 

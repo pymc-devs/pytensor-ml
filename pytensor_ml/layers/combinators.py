@@ -41,7 +41,7 @@ def Flatten(X: pt.TensorLike) -> pt.TensorVariable:
 
     Returns
     -------
-    TensorVariable
+    flattened : TensorVariable
         Shape ``(batch, features)``, with ``features`` the product of every remaining axis.
     """
     return pt.join_dims(X, start_axis=1)

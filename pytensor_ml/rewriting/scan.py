@@ -120,7 +120,7 @@ def hoist_draws_out_of_scan(fgraph: FunctionGraph, node: Apply) -> list[Variable
 
     Returns
     -------
-    list of Variable or None
+    outputs : list of Variable or None
         The rebuilt scan's outputs, or None when the loop has no such draw.
     """
     args = ScanArgs.from_node(node, clone=True)

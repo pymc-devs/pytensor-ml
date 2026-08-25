@@ -60,7 +60,7 @@ def cosine_schedule(
 
     Returns
     -------
-    Schedule
+    schedule : Schedule
         A callable mapping a symbolic step count to a scalar learning rate, ready to hand to a rule as
         its ``learning_rate``.
 
@@ -124,7 +124,7 @@ def linear_schedule(
 
     Returns
     -------
-    Schedule
+    schedule : Schedule
         A callable mapping a symbolic step count to a scalar learning rate, ready to hand to a rule as
         its ``learning_rate``.
     """
@@ -178,7 +178,7 @@ def exponential_schedule(
 
     Returns
     -------
-    Schedule
+    schedule : Schedule
         A callable mapping a symbolic step count to a scalar learning rate, ready to hand to a rule as
         its ``learning_rate``.
     """
@@ -241,7 +241,7 @@ def polynomial_schedule(
 
     Returns
     -------
-    Schedule
+    schedule : Schedule
         A callable mapping a symbolic step count to a scalar learning rate, ready to hand to a rule as
         its ``learning_rate``.
     """
@@ -299,7 +299,7 @@ def step_decay(
 
     Returns
     -------
-    Schedule
+    schedule : Schedule
         A callable mapping a symbolic step count to a scalar learning rate, ready to hand to a rule as
         its ``learning_rate``.
     """
@@ -336,7 +336,7 @@ def constant_schedule(learning_rate: float) -> Schedule:
 
     Returns
     -------
-    Schedule
+    schedule : Schedule
         A callable mapping a symbolic step count to a scalar learning rate, ready to hand to a rule as
         its ``learning_rate``.
     """
@@ -373,7 +373,7 @@ def join_schedules(schedules: Sequence[Schedule], boundaries: Sequence[int]) -> 
 
     Returns
     -------
-    Schedule
+    schedule : Schedule
         A callable mapping a symbolic step count to a scalar learning rate, ready to hand to a rule as
         its ``learning_rate``.
     """
