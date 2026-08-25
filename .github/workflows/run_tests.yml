@@ -100,8 +100,8 @@ jobs:
         shell: bash -l {0}
 
     steps:
-    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-    - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       env:
         CACHE_NUMBER: 0
       with:
@@ -109,7 +109,7 @@ jobs:
         key: ${{ runner.os }}-py${{matrix.python-version}}-conda-${{ env.CACHE_NUMBER }}-${{
           hashFiles('conda_envs/pytensor_ml.yml') }}
     - name: Cache multiple paths
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       env:
         # Increase this value to reset cache if pyproject.toml has not changed
         CACHE_NUMBER: 0
@@ -121,7 +121,7 @@ jobs:
         key: ${{ runner.os }}-build-${{ matrix.python-version }}-${{ env.CACHE_NUMBER }}-${{
           hashFiles('pyproject.toml') }}
     - name: Cache the pytensor compile directory
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       env:
         CACHE_NUMBER: 0
       with:
@@ -165,7 +165,7 @@ jobs:
       run: |
         python -m pytest -vv --durations=25 --cov=pytensor_ml --cov-report=xml --no-cov-on-fail --cov-report term $TEST_SUBSET
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
+      uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
       with:
         token: ${{ secrets.CODECOV_TOKEN }} # use token for more robust uploads
         env_vars: TEST_SUBSET
