@@ -25,11 +25,7 @@ def _example_blocks(docstring: str) -> list[str]:
             if candidate.strip() and indent <= directive_indent:
                 break
             body.append(candidate)
-        code = textwrap.dedent("\n".join(body)).strip()
-        # An empty block means the directive is there but its body is not indented under it, which used to
-        # pass as a trivially successful exec.
-        assert code, f"code-block at line {index} has no indented body"
-        blocks.append(code)
+        blocks.append(textwrap.dedent("\n".join(body)).strip())
     return blocks
 
 
@@ -53,5 +49,9 @@ def test_docstring_example_runs(qualified_name, source, tmp_path, monkeypatch):
     # A fresh namespace per block: an example that leans on a name another example imported is not the
     # self-contained snippet a reader is invited to paste into a script. Each runs in its own directory
     # so an example that writes a checkpoint can use the plain relative path a reader would.
+    # A block whose body is not indented under the directive reads as empty here, and an empty exec
+    # passes for the wrong reason.
+    assert source, f"the code-block in {qualified_name} has no indented body"
+
     monkeypatch.chdir(tmp_path)
     exec(compile(source, f"<{qualified_name}>", "exec"), {"__name__": "__main__"})
