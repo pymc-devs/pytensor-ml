@@ -66,7 +66,8 @@ Style and typing
 ``ruff`` formats and lints, ``mypy`` type-checks ``pytensor_ml/``, and both run
 in CI, so a clean ``pre-commit run --all-files`` is the cheapest way to keep a
 PR green. There is no allowlist of expected type failures: the codebase is
-mypy-clean, and it stays that way.
+mypy-clean, and it stays that way. For the conventions no tool enforces, see
+the :doc:`style guide <style_guide>`.
 
 Docstrings are numpydoc. Every public entrypoint carries an ``Examples``
 section whose code is complete and runnable -- imports included, no ``>>>``

@@ -45,7 +45,7 @@ Source content lives under ``docs/source/``:
     * - ``examples/<category>/*.ipynb``
       - Notebook copies staged from ``examples/``. **Generated**.
     * - ``dev/``
-      - This page and other contributor docs.
+      - This page, the contributing guide and the style guide.
     * - ``references.bib``
       - BibTeX entries; cited via ``{cite:t}`` or ``{cite:p}``.
     * - ``_templates/autosummary/``

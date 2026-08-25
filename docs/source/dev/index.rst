@@ -5,4 +5,5 @@ Developer Guide
    :maxdepth: 1
 
    contributing
+   style_guide
    docs
