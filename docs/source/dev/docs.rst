@@ -36,8 +36,8 @@ Source content lives under ``docs/source/``:
       - Landing page + top-level toctree.
     * - ``api.rst`` + ``api/*.rst``
       - Autosummary entry points; one file per public submodule.
-    * - ``get_started/``
-      - Install + quickstart + about. Hand-written narrative.
+    * - ``install.rst``
+      - Installation guide. Hand-written narrative.
     * - ``user_guide/``
       - Conceptual pages (layers, training, optimizers, backends, design).
     * - ``examples/gallery.rst``

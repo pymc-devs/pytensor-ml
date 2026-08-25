@@ -5,14 +5,25 @@ A(nother) deep learning library, built on top of PyTensor.
 
 Networks are ordinary PyTensor graphs. You build one out of layers, and
 everything PyTensor already does — symbolic differentiation, graph rewrites,
-and compilation to C, Numba, JAX, PyTorch, or MLX — applies to it unchanged.
+and compilation to Numba, C, JAX, PyTorch, or MLX — applies to it unchanged.
 Training is a compiled function that takes a batch and returns a loss; there
 is no separate runtime or tape.
+
+That goes all the way down: layers are graph constructors, parameters are
+shared variables, and a training step is a compiled function whose updates are
+the optimizer. Because a model is only a graph, it composes with any other
+PyTensor graph — a PyMC model included — as there is nothing else to
+interoperate with.
 
 pytensor_ml ships the usual layer library (dense, convolutional, recurrent,
 attention, normalization), composable optimizers with learning-rate schedules
 and step guards, and safetensors-backed serialization that round-trips both
 weights and architecture.
+
+.. note::
+
+   pytensor_ml is pre-alpha. The API is still moving, and there is no
+   release-to-release compatibility guarantee yet.
 
 Quick install
 -------------
@@ -21,7 +32,7 @@ Quick install
 
     pip install pytensor-ml
 
-See the :doc:`installation guide <get_started/install>` for backend extras.
+See the :doc:`installation guide <install>` for backend extras.
 
 Quick example
 -------------
@@ -63,7 +74,7 @@ walkthroughs.
    :hidden:
    :titlesonly:
 
-   get_started/index
+   install
    user_guide/index
    examples/gallery
    api

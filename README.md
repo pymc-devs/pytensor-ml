@@ -3,9 +3,13 @@
 A(nother) deep learning library, built on top of [PyTensor](https://github.com/pymc-devs/pytensor).
 
 Networks are ordinary PyTensor graphs. You build one out of layers, and everything PyTensor already does —
-symbolic differentiation, graph rewrites, and compilation to C, Numba, JAX, PyTorch, or MLX — applies to it
+symbolic differentiation, graph rewrites, and compilation to Numba, C, JAX, PyTorch, or MLX — applies to it
 unchanged. Training is a compiled function that takes a batch and returns a loss; there is no separate runtime
 or tape.
+
+That goes all the way down: layers are graph constructors, parameters are shared variables, and a training
+step is a compiled function whose updates are the optimizer. Because a model is only a graph, it composes with
+any other PyTensor graph — a PyMC model included — as there is nothing else to interoperate with.
 
 > **Status: pre-alpha.** The API is still moving, and there is no release-to-release compatibility guarantee yet.
 
