@@ -1,4 +1,4 @@
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import pytensor.tensor as pt
 
@@ -47,5 +47,43 @@ def Flatten(X: pt.TensorLike) -> pt.TensorVariable:
     return pt.join_dims(X, start_axis=1)
 
 
-Squeeze = pt.squeeze
-Concatenate = pt.concatenate
+def Squeeze(X: pt.TensorLike, axis: int | Sequence[int] | None = None) -> pt.TensorVariable:
+    """
+    Drop length-1 axes, so a layer that emits a singleton axis feeds one that does not expect it.
+
+    Parameters
+    ----------
+    X : TensorLike
+        Tensor to squeeze.
+    axis : int or sequence of int, optional
+        Axes to drop. An axis whose length is statically known to be anything but 1 is rejected as the
+        graph is built; an axis of unknown length is accepted and checked when the function runs.
+        Default None, which drops every axis already known to have length 1 and leaves the rest.
+
+    Returns
+    -------
+    squeezed : TensorVariable
+        ``X`` with the selected axes removed.
+    """
+    return pt.squeeze(X, axis=axis)
+
+
+def Concatenate(tensors: Sequence[pt.TensorLike], axis: int = 0) -> pt.TensorVariable:
+    """
+    Join tensors end to end along one axis.
+
+    Parameters
+    ----------
+    tensors : sequence of TensorLike
+        Tensors to join. Every one must agree in rank, and in size on every axis but ``axis``.
+    axis : int, optional
+        Axis to join along; negative values count from the right. Default 0, which for a batched
+        activation is the batch axis -- merging two ``(batch, features)`` branches feature-wise wants
+        ``axis=-1``.
+
+    Returns
+    -------
+    joined : TensorVariable
+        The inputs joined, with extent along ``axis`` equal to the sum of the inputs' extents.
+    """
+    return pt.concatenate(tensors, axis=axis)
