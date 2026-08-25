@@ -15,12 +15,48 @@ def Input(name: str, shape: tuple[int | None, ...], dtype: str | None = None) ->
         Size of each dimension. Use None wherever the size varies between calls, such as a batch axis.
     dtype : str, optional
         Data type of the input. Default ``floatX``.
+
+    Examples
+    --------
+    Start every network with one: it names the placeholder a batch is fed to, with ``None`` wherever the
+    size varies from call to call:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, Linear
+
+        X = Input("X", shape=(None, 64))
+        activations = Linear("fc", n_in=64, n_out=10)(X)
     """
     return pt.tensor(name=name, shape=shape, dtype=dtype)
 
 
 def Sequential(*layers: Callable) -> Callable:
-    """Compose layers left to right into a single callable that threads its input through each in turn."""
+    """
+    Compose layers left to right into a single callable that threads its input through each in turn.
+
+    Examples
+    --------
+    Thread an input through several layers in order. The result is itself callable, so it nests inside
+    another ``Sequential`` wherever a block repeats:
+
+    .. code-block:: python
+
+        from pytensor_ml.activations import ReLU
+        from pytensor_ml.layers import BatchNorm, Input, Linear, Sequential
+
+        block = Sequential(
+            Linear("fc1", n_in=64, n_out=32),
+            BatchNorm("bn1", n_in=32),
+            ReLU(),
+        )
+        network = Sequential(
+            block,
+            Linear("logits", n_in=32, n_out=10),
+        )
+
+        logits = network(Input("X", shape=(None, 64)))
+    """
 
     def forward(x: pt.TensorLike) -> pt.TensorLike:
         for layer in layers:
@@ -43,6 +79,23 @@ def Flatten(X: pt.TensorLike) -> pt.TensorVariable:
     -------
     flattened : TensorVariable
         Shape ``(batch, features)``, with ``features`` the product of every remaining axis.
+
+    Examples
+    --------
+    Collapse everything after the batch axis, which is how a convolutional stack hands off to a dense head:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Conv2D, Flatten, Input, Linear, MaxPool2D, Sequential
+
+        X = Input("X", shape=(None, 28, 28, 1))
+        network = Sequential(
+            Conv2D("conv", in_channels=1, out_channels=8, kernel_size=3),
+            MaxPool2D(),
+        )
+        features = network(X)
+
+        logits = Linear("logits", n_in=8 * 13 * 13, n_out=10)(Flatten(features))
     """
     return pt.join_dims(X, start_axis=1)
 
@@ -64,6 +117,20 @@ def Squeeze(X: pt.TensorLike, axis: int | Sequence[int] | None = None) -> pt.Ten
     -------
     squeezed : TensorVariable
         ``X`` with the selected axes removed.
+
+    Examples
+    --------
+    Drop a length-1 axis a layer left behind, such as the trailing feature axis of a single-output
+    regression head:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, Linear, Squeeze
+
+        X = Input("X", shape=(None, 64))
+        prediction = Linear("fc", n_in=64, n_out=1)(X)
+
+        per_row = Squeeze(prediction, axis=-1)
     """
     return pt.squeeze(X, axis=axis)
 
@@ -85,5 +152,20 @@ def Concatenate(tensors: Sequence[pt.TensorLike], axis: int = 0) -> pt.TensorVar
     -------
     joined : TensorVariable
         The inputs joined, with extent along ``axis`` equal to the sum of the inputs' extents.
+
+    Examples
+    --------
+    Merge parallel branches back into one tensor. Pass ``axis=-1`` to join along features, since the
+    default of 0 joins along the batch:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Concatenate, Input, Linear
+
+        X = Input("X", shape=(None, 64))
+        wide = Linear("wide", n_in=64, n_out=8)(X)
+        deep = Linear("deep", n_in=64, n_out=4)(X)
+
+        merged = Concatenate([wide, deep], axis=-1)
     """
     return pt.concatenate(tensors, axis=axis)

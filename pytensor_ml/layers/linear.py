@@ -45,6 +45,23 @@ class Linear(Layer):
     Both parameters are drawn when the layer is built, so a network trains without any further call.
     :meth:`~pytensor_ml.model.Model.initialize` redraws them from a single seed, which is what makes a run
     reproducible.
+
+    Examples
+    --------
+    The dense layer: multiply by a learned matrix and add a learned bias. Pass ``bias=False`` where a
+    normalization layer follows and would subtract the bias away again:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import BatchNorm, Input, Linear, Sequential
+
+        X = Input("X", shape=(None, 64))
+        network = Sequential(
+            Linear("fc", n_in=64, n_out=32, bias=False),
+            BatchNorm("bn", n_in=32),
+        )
+
+        activations = network(X)
     """
 
     def __init__(

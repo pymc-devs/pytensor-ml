@@ -25,6 +25,42 @@ class RecurrentCell(ABC):
 
     A cell owns the parameters its step uses and knows the shape of the state it carries, which is all
     the loop needs from it. Subclasses implement :meth:`step` and :meth:`initial_state`.
+
+    Examples
+    --------
+    Subclass it to define one timestep and let :class:`Recurrent` scan it over the sequence. A cell owns its
+    parameters, says how to build its initial state, and maps ``(input, *state)`` to the next state:
+
+    .. code-block:: python
+
+        import numpy as np
+        import pytensor.tensor as pt
+
+        from pytensor_ml.layers import Input, Recurrent
+        from pytensor_ml.layers.recurrent import RecurrentCell
+        from pytensor_ml.params import trainable
+        from pytensor_ml.state import XavierUniformInitializer
+
+
+        class LeakyCell(RecurrentCell):
+            def __init__(self, name, n_in, n_hidden):
+                self.n_hidden = n_hidden
+                self.W = trainable(
+                    np.zeros((n_in + n_hidden, n_hidden)),
+                    f"{name}_W",
+                    initializer=XavierUniformInitializer(),
+                )
+
+            def step(self, x_t, h):
+                candidate = pt.tanh(pt.concatenate([x_t, h], axis=-1) @ self.W)
+                return (0.5 * h + 0.5 * candidate,)
+
+            def initial_state(self, X):
+                return (pt.zeros((X.shape[0], self.n_hidden)),)
+
+
+        X = Input("X", shape=(None, 50, 16))
+        hidden_states = Recurrent(LeakyCell("leaky", n_in=16, n_hidden=32))(X)
     """
 
     @abstractmethod
@@ -80,6 +116,19 @@ class Recurrent(Layer):
         Run the sequence from its last step to its first. The output stays aligned with the input, so
         ``out[..., t, :]`` is the step that read ``X[..., t, :]`` either way, and a backward layer's
         output concatenates elementwise with a forward one's. Default is False.
+
+    Examples
+    --------
+    Wrap any cell to scan it over the time axis. :class:`RNN`, :class:`LSTM` and :class:`GRU` are this
+    layer around their matching cell, and ``reverse=True`` is what the backward half of a
+    :class:`Bidirectional` uses:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import GRUCell, Input, Recurrent
+
+        X = Input("X", shape=(None, 200, 16))
+        hidden_states = Recurrent(GRUCell("cell", n_in=16, n_hidden=32), reverse=True)(X)
     """
 
     def __init__(self, cell: RecurrentCell, name: str | None = None, reverse: bool = False):
@@ -251,6 +300,21 @@ class ElmanCell(RecurrentCell):
         as in keras and flax.
     bias_initializer : Initializer, optional
         How :math:`b` is drawn. Zeros when omitted.
+
+    Examples
+    --------
+    One timestep of a plain recurrent layer, for handing to :class:`Recurrent` when you want the scan
+    configured yourself rather than through :class:`RNN`:
+
+    .. code-block:: python
+
+        from pytensor_ml.activations import Tanh
+        from pytensor_ml.layers import ElmanCell, Input, Recurrent
+
+        X = Input("X", shape=(None, 50, 16))
+        cell = ElmanCell("cell", n_in=16, n_hidden=32, activation=Tanh())
+
+        hidden_states = Recurrent(cell)(X)
     """
 
     def __init__(
@@ -327,6 +391,18 @@ class RNN(Recurrent):
         How :math:`b` is drawn. Zeros when omitted.
     reverse : bool, optional
         Run the sequence backward, with the output still aligned to the input. Default is False.
+
+    Examples
+    --------
+    The plain recurrent layer: one hidden state carried along the time axis, returning its value at every
+    step. Input is ``(batch, time, features)``:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import RNN, Input
+
+        X = Input("X", shape=(None, 50, 16))
+        hidden_states = RNN("rnn", n_in=16, n_hidden=32)(X)
     """
 
     def __init__(
@@ -405,6 +481,18 @@ class GRUCell(RecurrentCell):
         omitted; see :class:`ElmanCell` for why the state's own weight is the sensitive draw.
     bias_initializer : Initializer, optional
         How :math:`b` and :math:`c` are drawn. Zeros when omitted.
+
+    Examples
+    --------
+    One timestep of a GRU, carrying a single hidden state. Use it where the scan is built by hand rather
+    than through :class:`GRU`:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import GRUCell, Input, Recurrent
+
+        X = Input("X", shape=(None, 200, 16))
+        hidden_states = Recurrent(GRUCell("cell", n_in=16, n_hidden=32))(X)
     """
 
     _n_gates = 3
@@ -504,6 +592,18 @@ class GRU(Recurrent):
         How the biases are drawn. Zeros when omitted.
     reverse : bool, optional
         Run the sequence backward, with the output still aligned to the input. Default is False.
+
+    Examples
+    --------
+    Gated like an :class:`LSTM` but with one state instead of two, so it trains faster and holds fewer
+    parameters at similar quality on many sequences:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import GRU, Input
+
+        X = Input("X", shape=(None, 200, 16))
+        hidden_states = GRU("gru", n_in=16, n_hidden=32)(X)
     """
 
     def __init__(
@@ -587,6 +687,18 @@ class LSTMCell(RecurrentCell):
     bias_initializer : Initializer, optional
         How :math:`b` is drawn. Zeros when omitted, as in torch and flax. Drawing the forget slice at
         one instead starts the memory holding rather than decaying, which is keras' default.
+
+    Examples
+    --------
+    One timestep of an LSTM, carrying ``(hidden, cell)`` as its state. Reach for it when the scan needs
+    configuring directly rather than through :class:`LSTM`:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, LSTMCell, Recurrent
+
+        X = Input("X", shape=(None, 200, 16))
+        hidden_states = Recurrent(LSTMCell("cell", n_in=16, n_hidden=32), reverse=True)(X)
     """
 
     _n_gates = 4
@@ -685,6 +797,18 @@ class LSTM(Recurrent):
         How :math:`b` is drawn. Zeros when omitted.
     reverse : bool, optional
         Run the sequence backward, with the output still aligned to the input. Default is False.
+
+    Examples
+    --------
+    Carries a cell state alongside the hidden state, with gates deciding what to keep. That extra path is
+    what lets it hold information over far longer sequences than :class:`RNN`:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import LSTM, Input
+
+        X = Input("X", shape=(None, 200, 16))
+        hidden_states = LSTM("lstm", n_in=16, n_hidden=32)(X)
     """
 
     def __init__(
@@ -740,6 +864,21 @@ class Bidirectional(Layer):
         Run over the sequence from its last step to its first.
     name : str or None
         Name for the layer's output. Defaults to "Bidirectional" when None.
+
+    Examples
+    --------
+    Run one layer forwards and another backwards, concatenating their outputs, so every step sees the whole
+    sequence. Give the two directions separate layers -- sharing one would tie their weights:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import GRU, Bidirectional, Input
+
+        X = Input("X", shape=(None, 200, 16))
+        forward = GRU("forward", n_in=16, n_hidden=32)
+        backward = GRU("backward", n_in=16, n_hidden=32)
+
+        hidden_states = Bidirectional(forward, backward)(X)
     """
 
     def __init__(self, forward: Recurrent, backward: Recurrent, name: str | None = None):

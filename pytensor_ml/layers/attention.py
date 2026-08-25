@@ -112,6 +112,24 @@ def scaled_dot_product_attention(
     -------
     output : TensorVariable
         Attention output, shape ``(..., n_head, q_len, v_dim)``.
+
+    Examples
+    --------
+    The bare attention kernel, for building an attention variant of your own. It takes heads as an explicit
+    axis -- ``(batch, n_head, time, head_dim)`` -- and knows nothing about positions, so rotary or other
+    positional schemes are applied to ``q`` and ``k`` before the call:
+
+    .. code-block:: python
+
+        import pytensor.tensor as pt
+
+        from pytensor_ml.layers import scaled_dot_product_attention
+
+        q = pt.tensor("q", shape=(None, 8, 128, 32))
+        k = pt.tensor("k", shape=(None, 8, 128, 32))
+        v = pt.tensor("v", shape=(None, 8, 128, 32))
+
+        attended = scaled_dot_product_attention(q, k, v, is_causal=True)
     """
     q, k, v = (pt.as_tensor(t).copy() for t in (q, k, v))
     inputs = [q, k, v]
@@ -157,6 +175,19 @@ class MultiheadAttention(Layer):
         How the output projection's weight is drawn. The three input projections are unaffected, which is
         what a scaling applied only to the projection writing back into a residual stream needs. Xavier
         normal when omitted, as for any other weight.
+
+    Examples
+    --------
+    Attend over a sequence with several heads at once, taking ``(batch, time, n_embd)``. Set
+    ``n_kv_head`` below ``n_head`` for grouped-query attention, which shrinks the key/value cache that
+    dominates memory at inference:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, MultiheadAttention
+
+        X = Input("X", shape=(None, 128, 256))
+        attended = MultiheadAttention("attn", n_embd=256, n_head=8, n_kv_head=2)(X)
     """
 
     def __init__(
@@ -240,6 +271,18 @@ class CausalSelfAttention(MultiheadAttention):
         Include bias terms in the projections. Default is True.
     out_proj_initializer : Initializer, optional
         How the output projection's weight is drawn. See :class:`MultiheadAttention`.
+
+    Examples
+    --------
+    :class:`MultiheadAttention` with the causal mask always on, so no position sees a later one. This is
+    the decoder-side layer a language model stacks:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import CausalSelfAttention, Input
+
+        X = Input("X", shape=(None, 128, 256))
+        attended = CausalSelfAttention("attn", n_embd=256, n_head=8)(X)
     """
 
     def __init__(

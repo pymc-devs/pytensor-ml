@@ -194,6 +194,26 @@ class BatchNorm(Layer):
     be batched with. Compile prediction graphs with :func:`compile_predict`, which applies
     :func:`rewrite_for_prediction` to substitute the accumulated running statistics for the batch
     statistics.
+
+    Examples
+    --------
+    Normalize each feature over the batch, keeping running statistics so inference does not depend on which
+    other rows happen to share the batch. :meth:`~pytensor_ml.model.Model.predict` swaps in those running
+    statistics automatically, so the training and inference graphs differ here:
+
+    .. code-block:: python
+
+        from pytensor_ml.activations import ReLU
+        from pytensor_ml.layers import BatchNorm, Input, Linear, Sequential
+
+        X = Input("X", shape=(None, 64))
+        network = Sequential(
+            Linear("fc", n_in=64, n_out=32, bias=False),
+            BatchNorm("bn", n_in=32),
+            ReLU(),
+        )
+
+        activations = network(X)
     """
 
     def __init__(
@@ -334,6 +354,23 @@ class LayerNorm(Layer):
         factor to rescale a normalized activation by would defeat the layer.
     loc_initializer : Initializer, optional
         How :math:`\beta` is drawn. Zeros when omitted.
+
+    Examples
+    --------
+    Normalize each row over its own features, so no row depends on the others. That independence is why a
+    transformer uses it rather than :class:`BatchNorm`, and it needs no running statistics:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, LayerNorm, Linear, Sequential
+
+        X = Input("X", shape=(None, 128, 256))
+        network = Sequential(
+            LayerNorm("ln", n_in=256),
+            Linear("fc", n_in=256, n_out=256),
+        )
+
+        activations = network(X)
     """
 
     def __init__(

@@ -45,6 +45,19 @@ class FeedForward(Layer):
     fc_out_initializer : Initializer, optional
         How the second layer's weight is drawn. The hidden layer is unaffected. Xavier normal when omitted,
         as for any other weight.
+
+    Examples
+    --------
+    The position-wise MLP of a transformer block: widen by ``mlp_ratio``, apply a nonlinearity, project
+    back. Pass ``hidden_dim`` to set the width directly instead of as a multiple:
+
+    .. code-block:: python
+
+        from pytensor_ml.activations import GELU
+        from pytensor_ml.layers import FeedForward, Input
+
+        X = Input("X", shape=(None, 128, 256))
+        activations = FeedForward("ff", d_model=256, mlp_ratio=4, activation=GELU())(X)
     """
 
     def __init__(
@@ -128,6 +141,24 @@ class TransformerBlock(Layer):
         GPT-style initialization asks for: a residual stream accumulates one contribution per block, so those
         projections are scaled by :math:`1/\sqrt{2 n_\text{layer}}` while the rest are not. The depth is not
         known here, so the scaling belongs in the initializer the caller passes.
+
+    Examples
+    --------
+    Attention and feed-forward with their residual connections and norms, which is the unit a transformer
+    repeats. ``norm_first`` puts the norm inside the residual branch, the pre-norm arrangement that trains
+    stably without a warmup:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, Sequential, TransformerBlock
+
+        X = Input("X", shape=(None, 128, 256))
+        network = Sequential(
+            TransformerBlock("block1", d_model=256, n_head=8, norm_first=True),
+            TransformerBlock("block2", d_model=256, n_head=8, norm_first=True),
+        )
+
+        activations = network(X)
     """
 
     def __init__(

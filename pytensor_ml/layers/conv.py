@@ -830,6 +830,18 @@ class Conv1D(_ConvNd):
         How :math:`W` is drawn. Xavier normal when omitted, whose fans count the receptive field.
     bias_initializer : Initializer, optional
         How :math:`b` is drawn. Zeros when omitted.
+
+    Examples
+    --------
+    Slide a learned kernel along one spatial axis. The layout is channels-last, so a batch of sequences is
+    ``(batch, time, channels)``:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Conv1D, Input
+
+        X = Input("X", shape=(None, 128, 16))
+        features = Conv1D("conv", in_channels=16, out_channels=32, kernel_size=5, padding="same")(X)
     """
 
     n_spatial = 1
@@ -879,6 +891,25 @@ class Conv2D(_ConvNd):
         How :math:`W` is drawn. Xavier normal when omitted, whose fans count the receptive field.
     bias_initializer : Initializer, optional
         How :math:`b` is drawn. Zeros when omitted.
+
+    Examples
+    --------
+    The image workhorse, taking ``(batch, height, width, channels)``. Padding ``"valid"`` shrinks each
+    spatial extent by ``kernel_size - 1``; ``"same"`` holds it at ``ceil(extent / stride)``:
+
+    .. code-block:: python
+
+        from pytensor_ml.activations import ReLU
+        from pytensor_ml.layers import Conv2D, Input, Sequential
+
+        X = Input("X", shape=(None, 32, 32, 3))
+        network = Sequential(
+            Conv2D("conv1", in_channels=3, out_channels=16, kernel_size=3, padding="same"),
+            ReLU(),
+            Conv2D("conv2", in_channels=16, out_channels=32, kernel_size=3, stride=2),
+        )
+
+        features = network(X)
     """
 
     n_spatial = 2
@@ -1023,6 +1054,18 @@ class ConvTranspose1D(_ConvTransposeNd):
         How the kernel is drawn. Xavier normal when omitted.
     bias_initializer : Initializer, optional
         How the bias is drawn. Zeros when omitted.
+
+    Examples
+    --------
+    Run a convolution's gradient forwards, so the sequence grows rather than shrinks. A stride of 2 roughly
+    doubles the extent, which is what a decoder wants:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import ConvTranspose1D, Input
+
+        X = Input("X", shape=(None, 32, 16))
+        upsampled = ConvTranspose1D("up", in_channels=16, out_channels=8, kernel_size=4, stride=2)(X)
     """
 
     n_spatial = 1
@@ -1064,6 +1107,18 @@ class ConvTranspose2D(_ConvTransposeNd):
         How the kernel is drawn. Xavier normal when omitted.
     bias_initializer : Initializer, optional
         How the bias is drawn. Zeros when omitted.
+
+    Examples
+    --------
+    The upsampling half of an autoencoder or a generator: each input position paints a kernel-sized patch
+    into the output, so a stride of 2 roughly doubles both extents:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import ConvTranspose2D, Input
+
+        X = Input("X", shape=(None, 8, 8, 64))
+        upsampled = ConvTranspose2D("up", in_channels=64, out_channels=32, kernel_size=4, stride=2)(X)
     """
 
     n_spatial = 2
@@ -1141,6 +1196,23 @@ class MaxPool2D(_PoolNd):
     padding : {"valid", "same"}, int, or tuple of int, optional
         No padding, enough to leave each output extent at :math:`\lceil \text{extent} / s \rceil`, or
         an explicit number of elements on each side. Default is "valid".
+
+    Examples
+    --------
+    Downsample by keeping the largest activation in each window. Stride defaults to ``kernel_size``, so
+    windows tile without overlapping and a 2x2 pool halves both extents:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Conv2D, Input, MaxPool2D, Sequential
+
+        X = Input("X", shape=(None, 32, 32, 3))
+        network = Sequential(
+            Conv2D("conv", in_channels=3, out_channels=16, kernel_size=3, padding="same"),
+            MaxPool2D(kernel_size=2),
+        )
+
+        features = network(X)
     """
 
     n_spatial = 2
@@ -1148,7 +1220,25 @@ class MaxPool2D(_PoolNd):
 
 
 class MaxPool1D(_PoolNd):
-    """Downsample a sequence by taking the largest activation in each window; see :class:`MaxPool2D`."""
+    """
+    Downsample a sequence by taking the largest activation in each window; see :class:`MaxPool2D`.
+
+    Examples
+    --------
+    The one-dimensional pool, keeping the largest activation in each window along the time axis:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Conv1D, Input, MaxPool1D, Sequential
+
+        X = Input("X", shape=(None, 128, 16))
+        network = Sequential(
+            Conv1D("conv", in_channels=16, out_channels=32, kernel_size=5, padding="same"),
+            MaxPool1D(kernel_size=2),
+        )
+
+        features = network(X)
+    """
 
     n_spatial = 1
     reduction = "max"
@@ -1161,6 +1251,18 @@ class AvgPool2D(_PoolNd):
     Takes ``(batch, height, width, channels)`` and returns ``(batch, out_height, out_width, channels)``.
     Padded positions count toward the average as zeros, matching torch's ``count_include_pad``. See
     :class:`MaxPool2D` for the arguments, which are shared.
+
+    Examples
+    --------
+    Average each window instead of taking its maximum, which keeps every activation in the window rather
+    than routing the whole gradient to one of them:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import AvgPool2D, Input
+
+        X = Input("X", shape=(None, 32, 32, 16))
+        pooled = AvgPool2D(kernel_size=2)(X)
     """
 
     n_spatial = 2
@@ -1168,7 +1270,20 @@ class AvgPool2D(_PoolNd):
 
 
 class AvgPool1D(_PoolNd):
-    """Downsample a sequence by averaging each window; see :class:`AvgPool2D`."""
+    """
+    Downsample a sequence by averaging each window; see :class:`AvgPool2D`.
+
+    Examples
+    --------
+    The one-dimensional average pool, smoothing along the time axis rather than picking a winner per window:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import AvgPool1D, Input
+
+        X = Input("X", shape=(None, 128, 16))
+        pooled = AvgPool1D(kernel_size=2)(X)
+    """
 
     n_spatial = 1
     reduction = "mean"

@@ -17,8 +17,35 @@ def _check_input_rank(X: TensorVariable, name: str, n_spatial: int) -> None:
 
 
 class Layer(ABC):
-    """Base class for the objects that build layer graphs. Defined here, not in ``pytensor_ml.layers``, so
-    that ``pytensor_ml.activations`` can subclass it without a circular import."""
+    """
+    Base class for the objects that build layer graphs. Defined here, not in ``pytensor_ml.layers``, so
+    that ``pytensor_ml.activations`` can subclass it without a circular import.
+
+    Examples
+    --------
+    Subclass it when a layer owns parameters or needs a marker op of its own; for anything stateless a
+    plain function is enough. The constructor builds the parameters once, and ``__call__`` builds the graph:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.base import Layer
+        from pytensor_ml.layers import Input
+        from pytensor_ml.params import trainable
+        from pytensor_ml.state import ZeroInitializer
+
+
+        class Bias(Layer):
+            def __init__(self, name, n_in):
+                self.b = trainable(np.zeros(n_in), f"{name}_b", initializer=ZeroInitializer())
+
+            def __call__(self, X):
+                return X + self.b
+
+
+        activations = Bias("bias", n_in=4)(Input("X", shape=(None, 4)))
+    """
 
     @abstractmethod
     def __call__(self, x: pt.TensorLike) -> pt.TensorVariable: ...

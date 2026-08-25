@@ -36,6 +36,25 @@ class Dropout(Layer):
     generators : list of RandomGeneratorSharedVariable
         One generator per application of the layer, in the order they were applied. Set a value on these to
         steer or restore the masks.
+
+    Examples
+    --------
+    Zero a random share of activations during training, rescaling the survivors so the mean is unchanged.
+    :meth:`~pytensor_ml.model.Model.predict` drops the layer entirely, so inference is deterministic:
+
+    .. code-block:: python
+
+        from pytensor_ml.activations import ReLU
+        from pytensor_ml.layers import Dropout, Input, Linear, Sequential
+
+        X = Input("X", shape=(None, 64))
+        network = Sequential(
+            Linear("fc", n_in=64, n_out=32),
+            ReLU(),
+            Dropout(p=0.1, random_state=0),
+        )
+
+        activations = network(X)
     """
 
     def __init__(self, name: str | None = None, p: float = 0.5, random_state: Any | None = None):

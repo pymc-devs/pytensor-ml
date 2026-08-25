@@ -153,6 +153,22 @@ class ZeroPad1D(_PadNd):
     padding : int or pair of int, optional
         Elements added before and after the time axis, either shared by both ends or given as
         ``(before, after)``. Default is 0.
+
+    Examples
+    --------
+    Pad a sequence with zeros on both ends, most often to keep a convolution's output length:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Conv1D, Input, Sequential, ZeroPad1D
+
+        X = Input("X", shape=(None, 128, 16))
+        network = Sequential(
+            ZeroPad1D(padding=2),
+            Conv1D("conv", in_channels=16, out_channels=32, kernel_size=5),
+        )
+
+        features = network(X)
     """
 
     n_spatial = 1
@@ -175,6 +191,23 @@ class ZeroPad2D(_PadNd):
         The same amount on every side, one amount per axis, or an explicit ``(before, after)`` for
         each. Axes read in input order, so ``((top, bottom), (left, right))`` -- not torch's flat
         last-axis-first sequence. Default is 0.
+
+    Examples
+    --------
+    Surround an image with zeros so a following convolution keeps its extents. One number pads every
+    side equally; a pair per axis pads each side separately:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Conv2D, Input, Sequential, ZeroPad2D
+
+        X = Input("X", shape=(None, 32, 32, 3))
+        network = Sequential(
+            ZeroPad2D(padding=1),
+            Conv2D("conv", in_channels=3, out_channels=16, kernel_size=3),
+        )
+
+        features = network(X)
     """
 
     n_spatial = 2
@@ -191,6 +224,22 @@ class ConstantPad1D(_ConstantPadNd):
     ----------
     value : float, optional
         What the added elements hold. Default is 0.0, which makes this :class:`ZeroPad1D`.
+
+    Examples
+    --------
+    Pad a sequence with a chosen constant, for data where zero is a real value rather than absence:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Conv1D, Input, Sequential, ConstantPad1D
+
+        X = Input("X", shape=(None, 128, 16))
+        network = Sequential(
+            ConstantPad1D(padding=2, value=0.5),
+            Conv1D("conv", in_channels=16, out_channels=32, kernel_size=5),
+        )
+
+        features = network(X)
     """
 
     n_spatial = 1
@@ -206,6 +255,23 @@ class ConstantPad2D(_ConstantPadNd):
     ----------
     value : float, optional
         What the added elements hold. Default is 0.0, which makes this :class:`ZeroPad2D`.
+
+    Examples
+    --------
+    Pad with a value of your choosing rather than zero, which matters when zero is a meaningful level
+    in the data rather than a neutral one:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Conv2D, Input, Sequential, ConstantPad2D
+
+        X = Input("X", shape=(None, 32, 32, 3))
+        network = Sequential(
+            ConstantPad2D(padding=1, value=0.5),
+            Conv2D("conv", in_channels=3, out_channels=16, kernel_size=3),
+        )
+
+        features = network(X)
     """
 
     n_spatial = 2
@@ -228,6 +294,23 @@ class ReflectionPad1D(_PadNd):
         Elements added before and after the time axis. Padding wider than the axis keeps reflecting
         back and forth rather than failing, which is what numpy does and where torch raises.
         Default is 0.
+
+    Examples
+    --------
+    Mirror a sequence across its ends, so the padded region continues the signal rather than cutting it
+    to a constant:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Conv1D, Input, Sequential, ReflectionPad1D
+
+        X = Input("X", shape=(None, 128, 16))
+        network = Sequential(
+            ReflectionPad1D(padding=2),
+            Conv1D("conv", in_channels=16, out_channels=32, kernel_size=5),
+        )
+
+        features = network(X)
     """
 
     n_spatial = 1
@@ -248,6 +331,23 @@ class ReflectionPad2D(_PadNd):
     padding : int, pair of int, or pair of pair of int, optional
         Padding wider than the axis it reflects keeps reflecting back and forth rather than failing.
         Default is 0.
+
+    Examples
+    --------
+    Mirror the image across its edges instead of inventing a constant, which avoids the hard border a
+    zero pad introduces. The padding must be smaller than the extent it mirrors:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Conv2D, Input, Sequential, ReflectionPad2D
+
+        X = Input("X", shape=(None, 32, 32, 3))
+        network = Sequential(
+            ReflectionPad2D(padding=1),
+            Conv2D("conv", in_channels=3, out_channels=16, kernel_size=3),
+        )
+
+        features = network(X)
     """
 
     n_spatial = 2
@@ -268,6 +368,22 @@ class ReplicationPad1D(_PadNd):
         Name prefix for the layer's output. Defaults to the class name when None.
     padding : int or pair of int, optional
         Elements added before and after the time axis. Default is 0.
+
+    Examples
+    --------
+    Hold the first and last values of a sequence flat across the padded region:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Conv1D, Input, Sequential, ReplicationPad1D
+
+        X = Input("X", shape=(None, 128, 16))
+        network = Sequential(
+            ReplicationPad1D(padding=2),
+            Conv1D("conv", in_channels=16, out_channels=32, kernel_size=5),
+        )
+
+        features = network(X)
     """
 
     n_spatial = 1
@@ -287,6 +403,23 @@ class ReplicationPad2D(_PadNd):
         Name prefix for the layer's output. Defaults to the class name when None.
     padding : int, pair of int, or pair of pair of int, optional
         Default is 0.
+
+    Examples
+    --------
+    Repeat the edge pixel outwards. Like reflection it avoids a hard border, but it holds the boundary
+    value flat rather than folding the interior back:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Conv2D, Input, Sequential, ReplicationPad2D
+
+        X = Input("X", shape=(None, 32, 32, 3))
+        network = Sequential(
+            ReplicationPad2D(padding=1),
+            Conv2D("conv", in_channels=3, out_channels=16, kernel_size=3),
+        )
+
+        features = network(X)
     """
 
     n_spatial = 2

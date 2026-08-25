@@ -33,6 +33,18 @@ class Embedding(Layer):
         the vocabulary size in the denominator -- correct Xavier, and much tighter than the
         ``NormalInitializer(0.0, 0.02)`` that reference implementations of GPT-2 use, so this is the keyword
         to reach for when matching one.
+
+    Examples
+    --------
+    Look up a learned vector per integer token, which is how a vocabulary enters a network. The input
+    carries token ids, so it must be an integer tensor:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Embedding, Input
+
+        tokens = Input("tokens", shape=(None, 128), dtype="int64")
+        embedded = Embedding("embed", n_embeddings=50_000, n_features=256)(tokens)
     """
 
     def __init__(
