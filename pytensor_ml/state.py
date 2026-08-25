@@ -30,6 +30,33 @@ class Initializer(ABC):
     ``__props__`` names the constructor arguments that define the draw, borrowing pytensor's Op convention
     so the same encoder serves both. A subclass taking arguments must list them, or a saved network rebuilds
     it with the defaults rather than the values it was built with.
+
+    Examples
+    --------
+    Subclass it to describe a draw of your own, or reach for the :func:`initializer` decorator, which builds
+    the class from a sampling function. ``__props__`` is what a saved config records, so a parameter that is
+    reloaded is drawn the same way:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.state import Initializer
+
+
+        class ConstantInitializer(Initializer):
+            __props__ = ("value",)
+
+            def __init__(self, value=0.0):
+                self.value = value
+
+            def sample(self, shape, dtype, rng):
+                return np.full(shape, self.value, dtype=dtype)
+
+
+        layer = Linear("fc", n_in=64, n_out=32, weight_initializer=ConstantInitializer(0.5))
+        activations = layer(Input("X", shape=(None, 64)))
     """
 
     __props__: tuple[str, ...] = ()
@@ -64,16 +91,75 @@ class Initializer(ABC):
 
 
 class ZeroInitializer(Initializer):
+    """
+    Fill every element with zero, the right draw for a bias or any additive offset.
+
+    Examples
+    --------
+    Layers already draw their biases this way; pass it explicitly to zero a weight matrix that would
+    otherwise be drawn at random:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.model import Model
+        from pytensor_ml.state import ZeroInitializer
+
+        X = Input("X", shape=(None, 64))
+        layer = Linear("fc", n_in=64, n_out=32, weight_initializer=ZeroInitializer())
+
+        model = Model(X, layer(X)).initialize(seed=0)
+    """
+
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
         return np.zeros(shape, dtype=dtype)
 
 
 class OneInitializer(Initializer):
+    """
+    Fill every element with one, the right draw for a multiplicative scale.
+
+    Examples
+    --------
+    The draw a normalization scale wants, so the layer starts as the identity transform:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.model import Model
+        from pytensor_ml.state import OneInitializer
+
+        X = Input("X", shape=(None, 64))
+        layer = Linear("fc", n_in=64, n_out=32, weight_initializer=OneInitializer())
+
+        model = Model(X, layer(X)).initialize(seed=0)
+    """
+
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
         return np.ones(shape, dtype=dtype)
 
 
 class UnitUniformInitializer(Initializer):
+    r"""
+    Draw from :math:`\mathcal{U}(0, 1)`.
+
+    Examples
+    --------
+    Draws on the unit interval, which suits a parameter that is a probability or a fraction rather than
+    a weight:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.model import Model
+        from pytensor_ml.state import UnitUniformInitializer
+
+        X = Input("X", shape=(None, 64))
+        layer = Linear("fc", n_in=64, n_out=32, weight_initializer=UnitUniformInitializer())
+
+        model = Model(X, layer(X)).initialize(seed=0)
+    """
+
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
         return rng.uniform(0.0, 1.0, size=shape).astype(dtype)
 
@@ -92,6 +178,22 @@ class NormalInitializer(Initializer):
         Center of the distribution :math:`\mu`. Default 0.0.
     std : float
         Standard deviation :math:`\sigma`. Default 0.01.
+
+    Examples
+    --------
+    A fixed-width Gaussian, ignoring the parameter's shape. GPT-2 initializes this way at ``std=0.02``,
+    where a fan-scaled draw would widen as layers narrow:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.model import Model
+        from pytensor_ml.state import NormalInitializer
+
+        X = Input("X", shape=(None, 64))
+        layer = Linear("fc", n_in=64, n_out=32, weight_initializer=NormalInitializer(std=0.02))
+
+        model = Model(X, layer(X)).initialize(seed=0)
     """
 
     __props__ = ("mean", "std")
@@ -130,6 +232,19 @@ def fans(shape: tuple[int, ...]) -> tuple[int, int]:
         Units feeding one output position.
     fan_out : int
         Output positions one input feeds.
+
+    Examples
+    --------
+    Report how many units feed into and out of one position of a parameter, which is what a fan-scaled draw
+    needs. A convolution kernel folds its receptive field into both counts, so the answer is not simply the
+    last two dimensions:
+
+    .. code-block:: python
+
+        from pytensor_ml.state import fans
+
+        dense_fans = fans((64, 32))
+        kernel_fans = fans((3, 5, 8, 16))
     """
     if len(shape) < 2:
         raise ValueError(
@@ -152,6 +267,22 @@ class XavierUniformInitializer(Initializer):
     ----------
     .. [1] Glorot, X. and Bengio, Y. (2010). Understanding the difficulty of training deep feedforward
            neural networks. Proceedings of AISTATS, 249-256.
+
+    Examples
+    --------
+    The default for weight matrices: bounds chosen so activations neither grow nor shrink as they pass
+    through the layer. Only the sum of the fans enters, so the layout of the parameter cannot skew it:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.model import Model
+        from pytensor_ml.state import XavierUniformInitializer
+
+        X = Input("X", shape=(None, 64))
+        layer = Linear("fc", n_in=64, n_out=32, weight_initializer=XavierUniformInitializer())
+
+        model = Model(X, layer(X)).initialize(seed=0)
     """
 
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
@@ -170,6 +301,22 @@ class XavierNormalInitializer(Initializer):
     ----------
     .. [1] Glorot, X. and Bengio, Y. (2010). Understanding the difficulty of training deep feedforward
            neural networks. Proceedings of AISTATS, 249-256.
+
+    Examples
+    --------
+    Xavier's variance drawn from a Gaussian rather than a bounded interval, so a few weights start
+    larger than any uniform draw would allow:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.model import Model
+        from pytensor_ml.state import XavierNormalInitializer
+
+        X = Input("X", shape=(None, 64))
+        layer = Linear("fc", n_in=64, n_out=32, weight_initializer=XavierNormalInitializer())
+
+        model = Model(X, layer(X)).initialize(seed=0)
     """
 
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
@@ -196,6 +343,22 @@ class OrthogonalInitializer(Initializer):
     ----------
     .. [1] Saxe, A. M., McClelland, J. L., and Ganguli, S. (2014). Exact solutions to the nonlinear
            dynamics of learning in deep linear neural networks. Proceedings of ICLR.
+
+    Examples
+    --------
+    Draws a matrix whose rows stay orthogonal, preserving the norm of whatever passes through it. That
+    is what keeps a recurrent layer's repeated multiplications from exploding or vanishing:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.model import Model
+        from pytensor_ml.state import OrthogonalInitializer
+
+        X = Input("X", shape=(None, 64))
+        layer = Linear("fc", n_in=64, n_out=32, weight_initializer=OrthogonalInitializer(gain=1.0))
+
+        model = Model(X, layer(X)).initialize(seed=0)
     """
 
     __props__ = ("gain",)
@@ -292,14 +455,23 @@ def initializer(sample_fn: Callable[..., np.ndarray]) -> type[Initializer]:
 
     Examples
     --------
+    Decorate a sampling function to turn it into an initializer class a layer can take:
+
     .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Linear
+        from pytensor_ml.state import fans, initializer
+
 
         @initializer
         def he_normal(rng, shape):
             fan_in, _ = fans(shape)
             return rng.normal(0.0, np.sqrt(2.0 / fan_in), size=shape)
 
-        Linear("fc", 8, 8, weight_initializer=he_normal())
+
+        layer = Linear("fc", n_in=8, n_out=8, weight_initializer=he_normal())
     """
     parameters, defaults = _split_signature(sample_fn)
 
@@ -356,6 +528,22 @@ class UnrecordedInitializer(Initializer):
     ----------
     original : str
         Name of the initializer class the parameter was built with.
+
+    Examples
+    --------
+    What a parameter carries when its config named an initializer this build cannot resolve. It refuses to
+    draw, so a reloaded network reports the missing initializer rather than silently substituting one:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.params import trainable
+        from pytensor_ml.state import UnrecordedInitializer
+
+        parameter = trainable(
+            np.zeros((4, 4)), "W", initializer=UnrecordedInitializer("my_package.custom_draw")
+        )
     """
 
     __props__ = ("original",)
@@ -429,6 +617,23 @@ def initialize_params(
     -------
     values : list of ndarray
         Drawn values, matching the shapes and dtypes of ``params``.
+
+    Examples
+    --------
+    Draw fresh values for a list of parameters without touching them, which is what
+    :meth:`~pytensor_ml.model.Model.initialize` does before assigning. One seed reproduces the whole set:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.pytensorf import collect_trainable_params
+        from pytensor_ml.state import initialize_params
+
+        X = Input("X", shape=(None, 64))
+        activations = Linear("fc", n_in=64, n_out=32)(X)
+
+        parameters = collect_trainable_params(activations)
+        values = initialize_params(parameters, rng=0)
     """
     # Resolve once and share: a seed handed to each _sample_like call would repeat draws across parameters.
     rng = np.random.default_rng(rng)
