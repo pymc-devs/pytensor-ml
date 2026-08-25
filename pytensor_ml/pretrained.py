@@ -195,6 +195,22 @@ def save_network(
     inputs : sequence of Variable, optional
         The network's data inputs, in call order. Collected from ``outputs`` when omitted; pass explicitly
         when call order matters.
+
+    Examples
+    --------
+    Write the architecture alone, as JSON. The weights are not in it, so pair it with
+    :func:`~pytensor_ml.checkpoint.save_state` or use :func:`save_pretrained`, which writes both.
+    The destination directory has to exist already:
+
+    .. code-block:: python
+
+        from pytensor_ml import save_network
+        from pytensor_ml.layers import Input, Linear
+
+        X = Input("X", shape=(None, 64))
+        logits = Linear("logits", n_in=64, n_out=10)(X)
+
+        save_network(logits, "config.json")
     """
     output_list = as_output_list(outputs)
     data_inputs = list(inputs) if inputs is not None else collect_data_inputs(output_list)
@@ -236,6 +252,21 @@ def load_network(
         The network's data inputs, in call order.
     outputs : Variable or list of Variable
         The rebuilt output(s) -- a single variable when the network has one output, otherwise a list.
+
+    Examples
+    --------
+    Rebuild a saved architecture with freshly drawn weights, which is what you want when the values are
+    about to be trained or loaded separately:
+
+    .. code-block:: python
+
+        from pytensor_ml import load_network, save_network
+        from pytensor_ml.layers import Input, Linear
+
+        X = Input("X", shape=(None, 64))
+        save_network(Linear("logits", n_in=64, n_out=10)(X), "config.json")
+
+        inputs, outputs = load_network("config.json")
     """
     config = json.loads(Path(path).read_text())
     if config.get("format") != GRAPH_FORMAT:
@@ -283,6 +314,29 @@ def save_pretrained(
         Destination directory, created if needed.
     inputs : sequence of Variable, optional
         The network's data inputs, in call order. Collected from ``outputs`` when omitted.
+
+    Examples
+    --------
+    Write the architecture and the weights together, so the directory reloads into a runnable network
+    without the Python that defined it:
+
+    .. code-block:: python
+
+        from pytensor_ml import save_pretrained
+        from pytensor_ml.activations import ReLU
+        from pytensor_ml.layers import Input, Linear, Sequential
+        from pytensor_ml.model import Model
+
+        X = Input("X", shape=(None, 64))
+        network = Sequential(
+            Linear("fc", n_in=64, n_out=32),
+            ReLU(),
+            Linear("logits", n_in=32, n_out=10),
+        )
+        logits = network(X)
+        Model(X, logits).initialize(seed=0)
+
+        save_pretrained(logits, "artifacts/model")
     """
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
@@ -315,6 +369,28 @@ def from_pretrained(
         The network's data inputs, in call order.
     outputs : Variable or list of Variable
         The rebuilt, weight-filled output(s).
+
+    Examples
+    --------
+    Rebuild a saved network and fill its weights, returning the data inputs and the outputs. Nothing that
+    defined the network has to be importable:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml import from_pretrained, save_pretrained
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.model import Model
+        from pytensor_ml.pytensorf import function
+
+        X = Input("X", shape=(None, 64))
+        logits = Linear("logits", n_in=64, n_out=10)(X)
+        Model(X, logits).initialize(seed=0)
+        save_pretrained(logits, "artifacts/model")
+
+        inputs, outputs = from_pretrained("artifacts/model")
+        predictions = function(inputs, outputs)(np.zeros((4, 64)))
     """
     directory = Path(directory)
     if source_format == "auto":

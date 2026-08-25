@@ -40,6 +40,25 @@ def save_state(shared_variables: Sequence[SharedVariable], path: str | Path) -> 
         Variables whose values to save. Every variable must have a unique, non-``None`` name.
     path : str or pathlib.Path
         Destination archive, written verbatim.
+
+    Examples
+    --------
+    Write parameter values to safetensors, keyed by name. This is the checkpoint half of a run: it
+    saves what the parameters hold, not what built them. The destination directory has to exist
+    already:
+
+    .. code-block:: python
+
+        from pytensor_ml import save_state
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.model import Model
+        from pytensor_ml.pytensorf import collect_shared_variables
+
+        X = Input("X", shape=(None, 64))
+        logits = Linear("logits", n_in=64, n_out=10)(X)
+        Model(X, logits).initialize(seed=0)
+
+        save_state(collect_shared_variables(logits), "weights.safetensors")
     """
     indexed = _index_by_name(shared_variables)
     tensors = {
@@ -87,6 +106,26 @@ def load_state(
         Maps a variable's name to the archive key to read it from, for loading a checkpoint saved under
         different names (such as HuggingFace's). The mapping must be injective. Names absent from the map
         are matched directly.
+
+    Examples
+    --------
+    Fill an existing graph's parameters from a checkpoint, matching them by name. Build the same network
+    first -- this loads values into it rather than reconstructing it:
+
+    .. code-block:: python
+
+        from pytensor_ml import load_state, save_state
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.model import Model
+        from pytensor_ml.pytensorf import collect_shared_variables
+
+        X = Input("X", shape=(None, 64))
+        logits = Linear("logits", n_in=64, n_out=10)(X)
+        Model(X, logits).initialize(seed=0)
+
+        shared = collect_shared_variables(logits)
+        save_state(shared, "weights.safetensors")
+        load_state(shared, "weights.safetensors")
     """
     indexed = _index_by_name(shared_variables)
     name_map = name_map or {}
