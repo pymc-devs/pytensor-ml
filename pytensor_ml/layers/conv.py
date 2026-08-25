@@ -1118,11 +1118,11 @@ class _PoolNd(Layer):
 
 
 class MaxPool2D(_PoolNd):
-    """
+    r"""
     Downsample by taking the largest activation in each window, over two spatial axes.
 
     Takes ``(batch, height, width, channels)`` and returns ``(batch, out_height, out_width, channels)``.
-    Padding fills with :math:`-\\infty` so a padded position never wins a window, which zero-filling
+    Padding fills with :math:`-\infty` so a padded position never wins a window, which zero-filling
     would do wherever every real activation is negative. Where a window ties, the whole gradient goes
     to the earliest tap; a backend that pools with its own kernel may instead split the gradient
     between the tied taps, but every backend returns exactly the gradient the window received.
@@ -1139,7 +1139,7 @@ class MaxPool2D(_PoolNd):
     dilation : int or tuple of int, optional
         Spacing between the positions a window covers. Default is 1.
     padding : {"valid", "same"}, int, or tuple of int, optional
-        No padding, enough to leave each output extent at :math:`\\lceil \text{extent} / s \rceil`, or
+        No padding, enough to leave each output extent at :math:`\lceil \text{extent} / s \rceil`, or
         an explicit number of elements on each side. Default is "valid".
     """
 
