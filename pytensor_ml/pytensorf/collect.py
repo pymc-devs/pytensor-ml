@@ -13,7 +13,24 @@ from pytensor_ml.params import NonTrainableParameter, StepCounter, TrainablePara
 
 
 def as_output_list(outputs: Variable | Sequence[Variable]) -> list[Variable]:
-    """Normalize one output, or a sequence of them, to a list."""
+    """
+    Normalize one output, or a sequence of them, to a list.
+
+    Examples
+    --------
+    Normalize an output argument that may be one variable or a sequence of them, so the code after it has
+    one shape to handle:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.pytensorf import as_output_list
+
+        X = Input("X", shape=(None, 64))
+        activations = Linear("fc", n_in=64, n_out=32)(X)
+
+        outputs = as_output_list(activations)
+    """
     return [outputs] if isinstance(outputs, Variable) else list(outputs)
 
 
@@ -30,7 +47,33 @@ def _collect_inputs_of_type[T: Variable](
 
 
 def collect_graph_inputs(outputs: Variable | Sequence[Variable]) -> list[Variable]:
-    """Collect the graph inputs that carry data -- everything that is neither a Constant nor shared."""
+    """
+    Collect the graph inputs that carry data -- everything that is neither a Constant nor shared.
+
+    Examples
+    --------
+    The placeholders a caller has to supply, in the order the graph puts them. Weights, running
+    statistics and RNGs are shared, so they are left out -- the compiled function carries those itself.
+    :func:`collect_data_inputs` is the same function under the name the training and serialization
+    boundaries use:
+
+    .. code-block:: python
+
+        from pytensor_ml.activations import ReLU
+        from pytensor_ml.layers import BatchNorm, Dropout, Input, Linear, Sequential
+        from pytensor_ml.pytensorf import collect_graph_inputs
+
+        X = Input("X", shape=(None, 64))
+        network = Sequential(
+            Linear("fc", n_in=64, n_out=32),
+            BatchNorm("bn", n_in=32),
+            ReLU(),
+            Dropout(p=0.5, random_state=0),
+        )
+        activations = network(X)
+
+        inputs = collect_graph_inputs(activations)
+    """
     return [
         variable
         for variable in graph_inputs(as_output_list(outputs))
@@ -43,12 +86,60 @@ collect_data_inputs = collect_graph_inputs
 
 
 def collect_shared_variables(outputs: Variable | Sequence[Variable]) -> list[SharedVariable]:
-    """Collect every SharedVariable the graph reads, parameters and RNGs alike."""
+    """
+    Collect every SharedVariable the graph reads, parameters and RNGs alike.
+
+    Examples
+    --------
+    Every shared variable in the graph, whichever kind: parameters, running statistics, RNGs and
+    training clocks together. This is the set a checkpoint saves:
+
+    .. code-block:: python
+
+        from pytensor_ml.activations import ReLU
+        from pytensor_ml.layers import BatchNorm, Dropout, Input, Linear, Sequential
+        from pytensor_ml.pytensorf import collect_shared_variables
+
+        X = Input("X", shape=(None, 64))
+        network = Sequential(
+            Linear("fc", n_in=64, n_out=32),
+            BatchNorm("bn", n_in=32),
+            ReLU(),
+            Dropout(p=0.5, random_state=0),
+        )
+        activations = network(X)
+
+        shared = collect_shared_variables(activations)
+    """
     return _collect_inputs_of_type(outputs, SharedVariable)
 
 
 def collect_trainable_params(outputs: Variable | Sequence[Variable]) -> list[TrainableParameter]:
-    """Collect the parameters an optimizer should update."""
+    """
+    Collect the parameters an optimizer should update.
+
+    Examples
+    --------
+    The weights an optimizer is allowed to write. This is what a rule differentiates with respect to,
+    and what :meth:`~pytensor_ml.model.Model.initialize` redraws:
+
+    .. code-block:: python
+
+        from pytensor_ml.activations import ReLU
+        from pytensor_ml.layers import BatchNorm, Dropout, Input, Linear, Sequential
+        from pytensor_ml.pytensorf import collect_trainable_params
+
+        X = Input("X", shape=(None, 64))
+        network = Sequential(
+            Linear("fc", n_in=64, n_out=32),
+            BatchNorm("bn", n_in=32),
+            ReLU(),
+            Dropout(p=0.5, random_state=0),
+        )
+        activations = network(X)
+
+        parameters = collect_trainable_params(activations)
+    """
     return _collect_inputs_of_type(outputs, TrainableParameter)
 
 
@@ -77,6 +168,28 @@ def collect_differentiable_params(
     -------
     parameters : list of TrainableParameter
         The differentiable parameters, in graph-input order.
+
+    Examples
+    --------
+    The trainable parameters the loss actually depends on. A parameter reached only through a
+    non-differentiable path is left out, since asking for its gradient would raise:
+
+    .. code-block:: python
+
+        from pytensor_ml.activations import ReLU
+        from pytensor_ml.layers import BatchNorm, Dropout, Input, Linear, Sequential
+        from pytensor_ml.pytensorf import collect_differentiable_params
+
+        X = Input("X", shape=(None, 64))
+        network = Sequential(
+            Linear("fc", n_in=64, n_out=32),
+            BatchNorm("bn", n_in=32),
+            ReLU(),
+            Dropout(p=0.5, random_state=0),
+        )
+        activations = network(X)
+
+        parameters = collect_differentiable_params(activations)
     """
     output_list = as_output_list(outputs)
     stop_gradient_outputs = [
@@ -101,12 +214,60 @@ def collect_differentiable_params(
 def collect_non_trainable_params(
     outputs: Variable | Sequence[Variable],
 ) -> list[NonTrainableParameter]:
-    """Collect the state that training updates without gradients, such as batch-norm running statistics."""
+    """
+    Collect the state that training updates without gradients, such as batch-norm running statistics.
+
+    Examples
+    --------
+    State the model owns but no optimizer may write, such as a batch-norm running mean. The model
+    updates these from its own forward pass:
+
+    .. code-block:: python
+
+        from pytensor_ml.activations import ReLU
+        from pytensor_ml.layers import BatchNorm, Dropout, Input, Linear, Sequential
+        from pytensor_ml.pytensorf import collect_non_trainable_params
+
+        X = Input("X", shape=(None, 64))
+        network = Sequential(
+            Linear("fc", n_in=64, n_out=32),
+            BatchNorm("bn", n_in=32),
+            ReLU(),
+            Dropout(p=0.5, random_state=0),
+        )
+        activations = network(X)
+
+        statistics = collect_non_trainable_params(activations)
+    """
     return _collect_inputs_of_type(outputs, NonTrainableParameter)
 
 
 def collect_step_counters(outputs: Variable | Sequence[Variable]) -> list[StepCounter]:
-    """Collect the training clocks the graph reads."""
+    """
+    Collect the training clocks the graph reads.
+
+    Examples
+    --------
+    The training clocks the graph reads. Each counts steps for a schedule, and every one in a graph
+    counts the same steps:
+
+    .. code-block:: python
+
+        from pytensor_ml.activations import ReLU
+        from pytensor_ml.layers import BatchNorm, Dropout, Input, Linear, Sequential
+        from pytensor_ml.pytensorf import collect_step_counters
+
+        X = Input("X", shape=(None, 64))
+        network = Sequential(
+            Linear("fc", n_in=64, n_out=32),
+            BatchNorm("bn", n_in=32),
+            ReLU(),
+            Dropout(p=0.5, random_state=0),
+        )
+        activations = network(X)
+
+        clocks = collect_step_counters(activations)
+    """
     return _collect_inputs_of_type(outputs, StepCounter)
 
 
@@ -134,6 +295,27 @@ def collect_clock_updates(
     -------
     clock_updates : dict
         Mapping from each clock the graph reads to the expression for its next value.
+
+    Examples
+    --------
+    The one-step advance for each training clock in the graph, which is what makes a schedule move rather
+    than read step zero forever. :func:`function` threads these in automatically:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.optim import cosine_schedule, get_gradients, scale_by_schedule
+        from pytensor_ml.pytensorf import collect_clock_updates, collect_trainable_params
+
+        X = Input("X", shape=(None, 64))
+        activations = Linear("fc", n_in=64, n_out=32)(X)
+
+        parameters = collect_trainable_params(activations)
+        updates = scale_by_schedule(cosine_schedule(1e-3, 1_000))(
+            dict(zip(parameters, get_gradients(activations.sum(), parameters))), parameters
+        )
+
+        clock_updates = collect_clock_updates(list(updates.values()))
     """
     counters = [
         counter for counter in collect_step_counters(outputs) if counter not in already_written
@@ -165,6 +347,28 @@ def collect_non_trainable_updates(
     non_trainable_updates : dict
         Mapping from each NonTrainableParameter to its new value, for every update an op declares through
         :meth:`~pytensor_ml.base.StatefulOp.update_map`.
+
+    Examples
+    --------
+    The writes the model makes on its own, such as a batch-norm statistic, mapped to their next values.
+    :func:`~pytensor_ml.optim.train.compile_train` folds these in alongside the rule's own updates:
+
+    .. code-block:: python
+
+        from pytensor_ml.activations import ReLU
+        from pytensor_ml.layers import BatchNorm, Dropout, Input, Linear, Sequential
+        from pytensor_ml.pytensorf import collect_non_trainable_updates
+
+        X = Input("X", shape=(None, 64))
+        network = Sequential(
+            Linear("fc", n_in=64, n_out=32),
+            BatchNorm("bn", n_in=32),
+            ReLU(),
+            Dropout(p=0.5, random_state=0),
+        )
+        activations = network(X)
+
+        updates = collect_non_trainable_updates(activations)
     """
     updates: dict[NonTrainableParameter, TensorVariable] = {}
     for ancestor in ancestors(as_output_list(outputs)):

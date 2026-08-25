@@ -30,7 +30,24 @@ def atleast_list(x):
 # Scan, and OpFromGraph between inputs and outputs, so a compiled function advances its generators instead
 # of repeating draws.
 def find_rng_nodes(variables: Iterable[Variable]) -> list[RandomGeneratorSharedVariable]:
-    """Return the shared RNG variables in a graph."""
+    """
+    Return the shared RNG variables in a graph.
+
+    Examples
+    --------
+    Locate the random generators a graph draws from, which is what a dropout layer or any other sampling op
+    leaves behind:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Dropout, Input
+        from pytensor_ml.pytensorf import find_rng_nodes
+
+        X = Input("X", shape=(None, 64))
+        activations = Dropout(p=0.5, random_state=0)(X)
+
+        generators = find_rng_nodes([activations])
+    """
     return [
         node for node in graph_inputs(variables) if isinstance(node, RandomGeneratorSharedVariable)
     ]

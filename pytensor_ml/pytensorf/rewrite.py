@@ -35,6 +35,21 @@ def rewrite_pregrad(graph):
     ``graph`` still reaches ``grad``. Lifts a draw written inside a scan out of the loop, which
     :func:`grad` needs rather than merely tolerates: a draw inside the differentiated region leaves no
     fixed sample to take a gradient against, and scan reports it as an undefined gradient.
+
+    Examples
+    --------
+    Apply the rewrites that have to run before differentiation, which is what every rule does to a loss
+    before taking its gradient:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.pytensorf import rewrite_pregrad
+
+        X = Input("X", shape=(None, 64))
+        loss = Linear("fc", n_in=64, n_out=32)(X).sum()
+
+        prepared = rewrite_pregrad(loss)
     """
     simplified = rewrite_graph(
         graph, include=("canonicalize", "stabilize"), exclude=("local_view_op",)
@@ -57,6 +72,25 @@ def rewrite_for_prediction(graph):
     specialized_graph : FunctionGraph, Variable, or list of Variable
         The specialized graph, matching the form of ``graph``. A FunctionGraph is rewritten in place and
         returned; a Variable or sequence is rewritten on a clone, leaving the original untouched.
+
+    Examples
+    --------
+    Specialize a training graph for inference without compiling it, which is what :func:`compile_predict`
+    does first. A Variable or a sequence is rewritten on a clone, leaving the original untouched:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Dropout, Input, Linear, Sequential
+        from pytensor_ml.pytensorf import rewrite_for_prediction
+
+        X = Input("X", shape=(None, 64))
+        network = Sequential(
+            Linear("fc", n_in=64, n_out=32),
+            Dropout(p=0.5),
+        )
+        activations = network(X)
+
+        inference_graph = rewrite_for_prediction(activations)
     """
     # Local by design, matching pytensor's own op/rewrite pattern: the rewrites import the layer ops they
     # match on, so a module-scope import would tie this module to the whole layer surface.

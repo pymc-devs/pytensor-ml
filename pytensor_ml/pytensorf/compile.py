@@ -54,6 +54,29 @@ def function(
     -------
     compiled_function : Function
         The compiled function.
+
+    Examples
+    --------
+    Compile like ``pytensor.function``, with the RNG and training-clock updates threaded in, so repeated
+    calls advance their state instead of repeating the first draw. Pass ``random_seed`` to make the draws
+    reproducible:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Dropout, Input, Linear, Sequential
+        from pytensor_ml.pytensorf import function
+
+        X = Input("X", shape=(None, 64))
+        network = Sequential(
+            Linear("fc", n_in=64, n_out=32),
+            Dropout(p=0.5),
+        )
+        activations = network(X)
+
+        forward = function([X], activations, random_seed=0)
+        first, second = forward(np.zeros((4, 64))), forward(np.zeros((4, 64)))
     """
     updates = dict(kwargs.pop("updates", {}))
     input_variables = [inp.variable if isinstance(inp, pytensor.In) else inp for inp in inputs]
@@ -146,6 +169,33 @@ def compile_predict(
     -------
     predict_function : Function
         The compiled prediction function.
+
+    Examples
+    --------
+    Compile the inference pass: dropout is removed and batch norm reads its running statistics, so the
+    result is deterministic and independent of the rest of the batch:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.activations import ReLU
+        from pytensor_ml.layers import BatchNorm, Dropout, Input, Linear, Sequential
+        from pytensor_ml.model import Model
+        from pytensor_ml.pytensorf import compile_predict
+
+        X = Input("X", shape=(None, 64))
+        network = Sequential(
+            Linear("fc", n_in=64, n_out=32),
+            BatchNorm("bn", n_in=32),
+            ReLU(),
+            Dropout(p=0.5),
+        )
+        activations = network(X)
+        Model(X, activations).initialize(seed=0)
+
+        predict = compile_predict(activations, inputs=[X])
+        predictions = predict(np.zeros((4, 64)))
     """
     specialized = rewrite_for_prediction(prediction)
     if inputs is None:
