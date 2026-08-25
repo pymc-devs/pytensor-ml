@@ -77,3 +77,23 @@ def attribute_docstrings(module: types.ModuleType) -> list[tuple[str, str]]:
         if name and not name.startswith("_") and is_docstring:
             documented.append((f"{module.__name__}.{name}", following.value.value))
     return documented
+
+
+def all_docstrings() -> list[tuple[str, str]]:
+    """
+    Collect every public docstring in the package, wherever it is written.
+
+    Returns
+    -------
+    documented : list of tuple of str and str
+        Each qualified name paired with its docstring, covering objects that carry ``__doc__`` and
+        module attributes documented by a string literal beneath them.
+    """
+    documented = []
+    for qualified_name, obj in public_objects():
+        docstring = getattr(obj, "__doc__", None)
+        if docstring:
+            documented.append((qualified_name, docstring))
+        if isinstance(obj, types.ModuleType):
+            documented.extend(attribute_docstrings(obj))
+    return documented

@@ -1,9 +1,8 @@
 import textwrap
-import types
 
 import pytest
 
-from tests.public_api import attribute_docstrings, public_objects
+from tests.public_api import all_docstrings
 
 CODE_BLOCK_DIRECTIVE = ".. code-block:: python"
 
@@ -31,13 +30,9 @@ def _example_blocks(docstring: str) -> list[str]:
 
 def _collect_examples() -> list[tuple[str, str]]:
     examples = []
-    for qualified_name, obj in public_objects():
-        docstrings = [(qualified_name, obj.__doc__ or "")]
-        if isinstance(obj, types.ModuleType):
-            docstrings.extend(attribute_docstrings(obj))
-        for name, docstring in docstrings:
-            for position, block in enumerate(_example_blocks(docstring)):
-                examples.append((f"{name}[{position}]", block))
+    for qualified_name, docstring in all_docstrings():
+        for position, block in enumerate(_example_blocks(docstring)):
+            examples.append((f"{qualified_name}[{position}]", block))
     return examples
 
 
