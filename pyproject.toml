@@ -42,6 +42,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/pymc-devs/pytensor-ml"
+Documentation = "https://pytensor-ml.readthedocs.io"
 Source = "https://github.com/pymc-devs/pytensor-ml"
 Tracker = "https://github.com/pymc-devs/pytensor-ml/issues"
 

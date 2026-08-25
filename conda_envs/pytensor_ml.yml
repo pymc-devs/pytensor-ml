@@ -20,13 +20,6 @@ dependencies:
   - pytest-mock
   - pyyaml  # tests/test_workflow_groups.py reads the CI matrix
 
-  # For building docs
-  - sphinx
-  - sphinx_rtd_theme
-  - pygments
-  - pydot
-  - ipython
-
   # developer tools
   - pre-commit
   # Pinned rather than floated: a local run that disagrees with CI about the version is a local run

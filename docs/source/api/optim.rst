@@ -1,0 +1,101 @@
+Optimization
+============
+
+.. currentmodule:: pytensor_ml.optim
+
+Training
+--------
+
+.. autosummary::
+    :toctree: generated/
+
+    compile_train
+
+Update rules
+------------
+
+.. autosummary::
+    :toctree: generated/
+
+    sgd
+    adam
+    adamw
+    nadam
+    adamax
+    rmsprop
+    rprop
+    adagrad
+    adadelta
+
+Transforms
+----------
+
+.. autosummary::
+    :toctree: generated/
+
+    chain
+    scale
+    scale_by_schedule
+    add_weight_decay
+    trace
+    clip_by_global_norm
+    clip_by_value
+
+Guards and policies
+-------------------
+
+.. autosummary::
+    :toctree: generated/
+
+    skip_if
+    apply_if_finite
+    nonfinite
+    large_step
+    reduce_on_plateau
+    Decision
+    SkipCondition
+
+Schedules
+---------
+
+.. autosummary::
+    :toctree: generated/
+
+    constant_schedule
+    linear_schedule
+    cosine_schedule
+    exponential_schedule
+    polynomial_schedule
+    step_decay
+    join_schedules
+
+Building blocks
+---------------
+
+.. autosummary::
+    :toctree: generated/
+
+    UpdateRule
+    Transform
+    Schedule
+    Rate
+    LearningRate
+    get_gradients
+    scalar_state
+    to_floatx
+
+Low-level update functions
+--------------------------
+
+.. autosummary::
+    :toctree: generated/
+
+    sgd_updates
+    adam_updates
+    adamw_updates
+    nadam_updates
+    adamax_updates
+    rmsprop_updates
+    rprop_updates
+    adagrad_updates
+    adadelta_updates
