@@ -10,7 +10,8 @@ description = "A(nother) deep learning library, built on top of Pytensor"
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{name="Jesse Grabowski", email='jessegrabowski@gmail.com'}, {name="Ricardo Vieira"}]
-license = { file = "LICENSE" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 classifiers = [
   "Development Status :: 2 - Pre-Alpha",
   "Intended Audience :: Science/Research",
