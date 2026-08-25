@@ -165,7 +165,7 @@ class NotebookGenerator:
             )
 
 
-def discover_notebooks():
+def discover_notebooks() -> dict[tuple[str, str | None], list[Path]]:
     """
     Group every notebook under ``examples/`` by the page and section its path puts it in.
 
@@ -206,38 +206,30 @@ def _page_layout(grouped):
     known_pages = {page for page, _, _ in GALLERY_PAGES}
     ordering = {section: index for index, section in enumerate(SECTION_ORDER)}
 
+    def position(section: str | None) -> tuple[bool, int, str]:
+        # Unsectioned notebooks lead the page; the rest follow SECTION_ORDER, then alphabetically.
+        return section is not None, ordering.get(section, len(ordering)), section or ""
+
     layout = []
     for page, page_title, document in GALLERY_PAGES:
-        sections = [(key[1], paths) for key, paths in grouped.items() if key[0] == page]
-        if document == CATCH_ALL_PAGE:
-            sections += [
-                (key[1], paths) for key, paths in grouped.items() if key[0] not in known_pages
-            ]
-        if not sections:
+        # One entry per section, so two folders of the same name land under one heading rather than
+        # two headings competing for the same label.
+        merged: dict[str | None, list[Path]] = {}
+        for (notebook_page, section), paths in grouped.items():
+            on_this_page = notebook_page == page or (
+                document == CATCH_ALL_PAGE and notebook_page not in known_pages
+            )
+            if on_this_page:
+                merged.setdefault(section, []).extend(paths)
+
+        if not merged:
             continue
 
-        # Unsectioned notebooks lead the page; the rest follow SECTION_ORDER, then alphabetically.
-        sections.sort(
-            key=lambda item: (
-                item[0] is not None,
-                ordering.get(item[0], len(ordering)),
-                item[0] or "",
-            )
-        )
-        merged: dict[str | None, list[Path]] = {}
-        for section, paths in sections:
-            merged.setdefault(section, []).extend(paths)
-        sections = list(merged.items())
-        layout.append(
-            (
-                document,
-                page_title,
-                [
-                    (None if section is None else _section_title(section), paths)
-                    for section, paths in sections
-                ],
-            )
-        )
+        sections = [
+            (None if section is None else _section_title(section), merged[section])
+            for section in sorted(merged, key=position)
+        ]
+        layout.append((document, page_title, sections))
     return layout
 
 
