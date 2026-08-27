@@ -455,6 +455,34 @@ def reuses_state[**P, R](builds_updates: Callable[P, R]) -> Callable[P, R]:
     ----------
     builds_updates : callable
         A rule or transform to wrap. Its buffers live as long as the wrapper does.
+
+    Returns
+    -------
+    with_persistent_state : callable
+        ``builds_updates`` with a buffer scope of its own, matching its signature.
+
+    Examples
+    --------
+    Wrap a hand-written transform that allocates state, so two functions compiled from it drive the same
+    buffers rather than each getting fresh ones. :func:`chain` already does this for its own members:
+
+    .. code-block:: python
+
+        from pytensor_ml.optim import reuses_state, state_for, to_updates
+
+
+        def smooth(decay, namespace="smooth"):
+            @reuses_state
+            def transform(loss_gradients_or_updates, parameters):
+                updates = to_updates(loss_gradients_or_updates, parameters)
+                smoothed = updates.copy()
+                for parameter in parameters:
+                    velocity = state_for(parameter, f"{namespace}/velocity")
+                    smoothed[velocity] = decay * velocity + (updates[parameter] - parameter)
+                    smoothed[parameter] = parameter + smoothed[velocity]
+                return smoothed
+
+            return transform
     """
     buffers: dict[_StateKey, Parameter] = {}
 
@@ -501,6 +529,26 @@ def state_for(parameter: Parameter, slot: str, fill_value: float = 0.0) -> Param
         A short role tag for the slot, e.g. ``"adam/first_moment"`` or ``"trace/velocity"``.
     fill_value : float
         Constant to initialize the state with. Default 0.0.
+
+    Returns
+    -------
+    state : shared tensor variable
+        The buffer for this slot, allocated on the first claim and returned again on later ones.
+
+    Examples
+    --------
+    Allocate the buffer a stateful transform keeps between steps. The slot's namespace is what keeps two
+    transforms of the same kind from writing to one buffer:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.optim import state_for
+        from pytensor_ml.params import trainable
+
+        weight = trainable(np.zeros(4), name="fc/W")
+        velocity = state_for(weight, "trace/velocity")
     """
     if parameter.name is None:
         raise ValueError(
@@ -527,12 +575,35 @@ def state_for(parameter: Parameter, slot: str, fill_value: float = 0.0) -> Param
 
 
 def counter(name: str) -> Parameter:
-    """Return the training clock a rule counts its own steps on, reused across invocations of a rule wrapped
-    in :func:`reuses_state` so the count keeps advancing.
+    """
+    Return the training clock a component counts its own steps on.
 
-    A :class:`~pytensor_ml.params.StepCounter` rather than a plain shared variable, so a schedule can read
+    Reused across invocations of a rule wrapped in :func:`reuses_state`, so the count keeps advancing. A
+    :class:`~pytensor_ml.params.StepCounter` rather than a plain shared variable, so a schedule can read
     the same notion of time the rule uses, and :func:`~pytensor_ml.pytensorf.collect_clock_updates` advances
     it for a caller who does not write the advance themselves.
+
+    Parameters
+    ----------
+    name : str
+        Name of the clock, used to match it at serialization boundaries. Two components given the same
+        name share one clock, which is how a rule and the schedule driving it count the same steps.
+
+    Returns
+    -------
+    clock : StepCounter
+        The step counter under ``name``, allocated on first use and returned again after that.
+
+    Examples
+    --------
+    Read a schedule off a clock of your own, which is what a transform does when it applies a rate after
+    the rule rather than inside it:
+
+    .. code-block:: python
+
+        from pytensor_ml.optim import cosine_schedule, counter
+
+        rate = cosine_schedule(3e-4, total_steps=10_000)(counter("my_transform/step_count"))
     """
     return _reuse_or_allocate(name, lambda: step_counter(name))
 
