@@ -62,6 +62,7 @@ Schedules
 
     constant_schedule
     linear_schedule
+    linear_onecycle_schedule
     cosine_schedule
     exponential_schedule
     polynomial_schedule

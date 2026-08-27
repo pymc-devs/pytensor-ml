@@ -151,6 +151,99 @@ def linear_schedule(
     return schedule
 
 
+def linear_onecycle_schedule(
+    transition_steps: int,
+    peak_value: float,
+    pct_start: float = 0.3,
+    pct_final: float = 0.85,
+    div_factor: float = 25.0,
+    final_div_factor: float = 1e4,
+) -> Schedule:
+    r"""Move the learning rate through three linear phases over one cycle.
+
+    The rate rises from its initial value to ``peak_value`` during the first phase, returns to
+    the initial value during the second, and falls to its final value during the third.
+
+    For :math:`T =` ``transition_steps``, phase boundaries :math:`s_1` and :math:`s_2`, initial rate
+    :math:`\eta_0`, peak rate :math:`\eta_p`, and final rate :math:`\eta_f`, the schedule is
+
+    .. math::
+
+        \eta_t = \begin{cases}
+            \eta_0 + (\eta_p - \eta_0)t / s_1 & t \leq s_1 \\
+            \eta_p + (\eta_0 - \eta_p)(t - s_1) / (s_2 - s_1) & s_1 < t \leq s_2 \\
+            \eta_0 + (\eta_f - \eta_0)(t - s_2) / (T - s_2) & s_2 < t \leq T
+        \end{cases}
+
+    Parameters
+    ----------
+    transition_steps : int
+        Number of steps in the complete cycle. Must be positive and give every rounded phase at least
+        one step.
+    peak_value : float
+        Maximum learning rate, reached at the end of the first phase.
+    pct_start : float, optional
+        Fraction of the cycle spent increasing to ``peak_value``. Must be between zero and
+        ``pct_final``. Default 0.3.
+    pct_final : float, optional
+        Fraction of the cycle spent increasing and returning to the initial value. Must be between
+        ``pct_start`` and one. Default 0.85.
+    div_factor : float, optional
+        Positive factor by which ``peak_value`` is divided to obtain the initial value. Default 25.0.
+    final_div_factor : float, optional
+        Positive factor by which the initial value is divided to obtain the final value. Default
+        10000.0.
+
+    Returns
+    -------
+    schedule : Schedule
+        A callable mapping a symbolic step count to a scalar learning rate.
+
+    Examples
+    --------
+    Hand a one-cycle schedule directly to an optimizer:
+
+    .. code-block:: python
+
+        from pytensor_ml.optim import adam, linear_onecycle_schedule
+
+        rule = adam(learning_rate=linear_onecycle_schedule(10_000, peak_value=8e-3))
+    """
+    if transition_steps < 1:
+        raise ValueError(f"transition_steps must be at least 1, got {transition_steps}.")
+    if not 0 < pct_start < pct_final < 1:
+        raise ValueError(
+            "pct_start and pct_final must satisfy 0 < pct_start < pct_final < 1, "
+            f"got pct_start={pct_start} and pct_final={pct_final}."
+        )
+    if not div_factor > 0:
+        raise ValueError(f"div_factor must be positive, got {div_factor}.")
+    if not final_div_factor > 0:
+        raise ValueError(f"final_div_factor must be positive, got {final_div_factor}.")
+    peak_step = int(pct_start * transition_steps)
+    final_phase_step = int(pct_final * transition_steps)
+    phase_steps = (peak_step, final_phase_step - peak_step, transition_steps - final_phase_step)
+    if min(phase_steps) < 1:
+        raise ValueError(
+            "pct_start and pct_final must produce three phases of at least one step after rounding; "
+            f"got phase lengths {phase_steps} for transition_steps={transition_steps}."
+        )
+    initial_value = peak_value / div_factor
+
+    return join_schedules(
+        [
+            linear_schedule(initial_value, peak_step, peak_value),
+            linear_schedule(peak_value, final_phase_step - peak_step, initial_value),
+            linear_schedule(
+                initial_value,
+                transition_steps - final_phase_step,
+                initial_value / final_div_factor,
+            ),
+        ],
+        [peak_step, final_phase_step],
+    )
+
+
 def exponential_schedule(
     learning_rate: float,
     total_steps: int,
