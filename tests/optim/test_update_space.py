@@ -11,7 +11,10 @@ from pytensor_ml.optim import (
     Gradients,
     Steps,
     Updates,
+    adadelta,
+    adagrad,
     adam,
+    adamax,
     adamw,
     add_weight_decay,
     chain,
@@ -19,7 +22,10 @@ from pytensor_ml.optim import (
     clip_by_value,
     compile_train,
     cosine_schedule,
+    nadam,
     reduce_on_plateau,
+    rmsprop,
+    rprop,
     scalar_state,
     scale,
     scale_by_schedule,
@@ -119,13 +125,16 @@ def test_clipping_before_the_rule_matches_clipping_the_gradients_by_hand():
     ids=["bare", "wrapped", "before", "after", "both-sides", "gradient-momentum"],
 )
 def test_every_ordering_composes_and_trains(build_rule):
-    """Rules and transforms share one type, so any arrangement of them has to build and run."""
+    """Rules and transforms share one type, so any arrangement of them has to build, run, and descend."""
     parameter, gradient = spiking_problem()
     step = pytensor.function([], parameter, updates=build_rule()([gradient], [parameter]))
-    for _ in range(5):
-        value = step()
-    assert np.all(np.isfinite(value))
-    assert np.all(value < 0.0)  # a positive gradient moves a parameter down
+
+    trajectory = np.array([step() for _ in range(5)])
+
+    assert np.all(np.isfinite(trajectory))
+    # A constant positive gradient moves a parameter down by some amount on every step; a final sign
+    # alone would also be satisfied by a rule that moves once and then stalls.
+    assert np.all(np.diff(trajectory, axis=0) < 0.0)
 
 
 def test_a_chain_wrapping_a_rule_matches_the_bare_rule():
@@ -263,7 +272,8 @@ def test_a_transform_does_not_mutate_what_it_was_given(transform):
 
     transform(incoming, [parameter])
 
-    assert incoming == before
+    assert list(incoming) == list(before)
+    assert all(incoming[variable] is written for variable, written in before.items())
 
 
 def test_a_clip_ahead_of_a_rule_differentiates_the_loss_itself():
@@ -285,19 +295,24 @@ def test_a_clip_ahead_of_a_rule_differentiates_the_loss_itself():
     assert losses[-1] < losses[0]
 
 
-def test_weight_decay_pulls_towards_zero_from_either_side_of_the_rule():
+@pytest.mark.parametrize(
+    "build_rule",
+    [
+        lambda: chain(sgd(1.0), add_weight_decay(0.1)),
+        lambda: chain(add_weight_decay(0.1), sgd(1.0)),
+    ],
+    ids=["behind-the-rule", "ahead-of-the-rule"],
+)
+def test_weight_decay_pulls_towards_zero_from_either_side_of_the_rule(build_rule):
     """The decay term enters a gradient and a step with opposite signs, because a rule negates what it
     reads. Under a zero gradient the decay is the only thing moving the parameter, so its direction is
     unambiguous -- and getting the sign wrong in one position turns the penalty into unbounded growth."""
-    for rule in [
-        chain(sgd(1.0), add_weight_decay(0.1)),
-        chain(add_weight_decay(0.1), sgd(1.0)),
-    ]:
-        parameter = trainable(np.array([2.0], dtype=config.floatX), name="w")
-        zero_gradient = pytensor.shared(np.array([0.0], dtype=config.floatX), name="g")
-        step = pytensor.function([], parameter, updates=rule([zero_gradient], [parameter]))
-        step()
-        np.testing.assert_allclose(parameter.get_value(), [1.8], rtol=1e-6)
+    parameter = trainable(np.array([2.0], dtype=config.floatX), name="w")
+    zero_gradient = pytensor.shared(np.array([0.0], dtype=config.floatX), name="g")
+
+    pytensor.function([], parameter, updates=build_rule()([zero_gradient], [parameter]))()
+
+    np.testing.assert_allclose(parameter.get_value(), [1.8], rtol=1e-6)
 
 
 def test_a_chain_with_no_rule_in_it_is_refused():
@@ -427,3 +442,38 @@ def test_two_plateau_policies_coexist_under_distinct_namespaces():
 
     histories = {key.name for key in rule((parameter**2).sum(), [parameter]) if key.name}
     assert {"head/best_loss", "backbone/best_loss"} <= histories
+
+
+@pytest.mark.parametrize(
+    "build_rule",
+    [
+        lambda: sgd(0.1),
+        lambda: adam(1e-3),
+        lambda: adamw(1e-3),
+        lambda: nadam(1e-3),
+        lambda: adamax(1e-3),
+        lambda: adagrad(0.01),
+        lambda: rmsprop(1e-3),
+        lambda: adadelta(1.0),
+        lambda: rprop(1e-3),
+    ],
+    ids=["sgd", "adam", "adamw", "nadam", "adamax", "adagrad", "rmsprop", "adadelta", "rprop"],
+)
+def test_every_rule_returns_steps(build_rule):
+    """A rule that returned an unplaced mapping would disarm both checks that read the space -- the one
+    stopping a second rule behind it, and the one stopping a rule-less chain from compiling ascent."""
+    parameter = trainable(np.zeros(3, dtype=config.floatX), name="w")
+    gradient = pt.constant(np.ones(3, dtype=config.floatX))
+
+    assert isinstance(build_rule()([gradient], [parameter]), Steps)
+
+
+def test_a_plateau_policy_wrapping_a_rule_less_chain_is_refused():
+    """The policy relabels what it wraps, the same way compile_train does, so it needs the same check."""
+    parameter = trainable(np.array([2.0, 3.0], dtype=config.floatX), name="w")
+    rate = scalar_state("rate", fill_value=1e-3)
+
+    policy = reduce_on_plateau(chain(clip_by_value(-10.0, 10.0)), rate)
+
+    with pytest.raises(ValueError, match="uphill"):
+        policy((parameter**2).sum(), [parameter])
