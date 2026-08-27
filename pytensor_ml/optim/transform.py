@@ -29,7 +29,7 @@ def _reject_gradients(updates: Updates, what: str) -> None:
         )
 
 
-def trace(decay: float = 0.9, nesterov: bool = False) -> Transform:
+def trace(decay: float = 0.9, nesterov: bool = False, *, namespace: str = "trace") -> Transform:
     r"""
     Accumulate into a velocity buffer (classical or Nesterov momentum).
 
@@ -46,6 +46,10 @@ def trace(decay: float = 0.9, nesterov: bool = False) -> Transform:
         Momentum coefficient :math:`\rho`. Default 0.9.
     nesterov : bool
         Apply the Nesterov lookahead correction. Default False.
+    namespace : str
+        Prefix for the velocity this transform allocates, as ``"{parameter}/{namespace}/velocity"``. Give
+        two traces in one chain different namespaces so their velocities stay distinct at the
+        serialization boundary. Default ``"trace"``.
 
     Returns
     -------
@@ -71,6 +75,7 @@ def trace(decay: float = 0.9, nesterov: bool = False) -> Transform:
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
+    @reuses_state
     def transform(
         loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
     ) -> Updates:
@@ -78,7 +83,7 @@ def trace(decay: float = 0.9, nesterov: bool = False) -> Transform:
         next_updates = updates.copy()
         for parameter in parameters:
             step = updates[parameter] - parameter
-            velocity = state_for(parameter, "trace/velocity")
+            velocity = state_for(parameter, f"{namespace}/velocity")
             new_velocity = decay * velocity + step
             next_updates[velocity] = new_velocity
             next_updates[parameter] = parameter + (

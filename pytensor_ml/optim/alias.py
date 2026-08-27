@@ -77,15 +77,19 @@ def sgd(
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
+    # Built once here rather than per invocation, so the velocity it owns is the same buffer on every
+    # step compiled from this rule instead of a fresh one each time.
+    momentum_trace = trace(momentum, nesterov) if momentum else None
+
     @reuses_state
     def rule(
         loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
     ) -> Updates:
         def build_updates(rate: Rate) -> Updates:
-            if not momentum:
+            if momentum_trace is None:
                 return sgd_updates(loss_gradients_or_updates, parameters, learning_rate=rate)
             updates = sgd_updates(loss_gradients_or_updates, parameters, learning_rate=1.0)
-            updates = trace(momentum, nesterov)(updates, parameters)
+            updates = momentum_trace(updates, parameters)
             return scale(rate)(updates, parameters)
 
         return _at_learning_rate(learning_rate, "sgd", build_updates)

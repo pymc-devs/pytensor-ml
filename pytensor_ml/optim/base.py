@@ -93,7 +93,13 @@ Examples
 --------
 Write one as a plain function and :func:`chain` accepts it wherever a built-in transform goes. The
 updates dict also carries optimizer state and training clocks, so touch only the entries for
-``parameters`` -- rewriting the rest would halve a clock's advance as readily as a step.:
+``parameters`` -- rewriting the rest would halve a clock's advance as readily as a step.
+
+One that keeps state of its own allocates it with :func:`state_for` and takes a ``namespace``, so that
+two of them in one chain write to separate buffers rather than colliding at the serialization boundary.
+Wrap it in :func:`reuses_state` to hold those buffers across invocations when it is used outside a chain;
+:func:`chain` gives each of its own members a frame already.
+
 
 .. code-block:: python
 
@@ -422,6 +428,13 @@ _state_buffers: ContextVar[dict[_StateKey, Parameter] | None] = ContextVar(
     "optimizer_state_buffers", default=None
 )
 
+# The per-parameter slots claimed so far in the current invocation. Reuse *across* invocations is the
+# whole point of the buffers, but two claims on one slot within a single invocation are two components
+# allocating over each other, which is otherwise invisible.
+_claimed_slots: ContextVar[set[_StateKey] | None] = ContextVar(
+    "optimizer_claimed_slots", default=None
+)
+
 
 def reuses_state[**P, R](builds_updates: Callable[P, R]) -> Callable[P, R]:
     """
@@ -448,10 +461,12 @@ def reuses_state[**P, R](builds_updates: Callable[P, R]) -> Callable[P, R]:
     @wraps(builds_updates)
     def with_persistent_state(*args: P.args, **kwargs: P.kwargs) -> R:
         token = _state_buffers.set(buffers)
+        claimed_token = _claimed_slots.set(set())
         try:
             return builds_updates(*args, **kwargs)
         finally:
             _state_buffers.reset(token)
+            _claimed_slots.reset(claimed_token)
 
     return with_persistent_state
 
@@ -475,6 +490,8 @@ def state_for(parameter: Parameter, slot: str, fill_value: float = 0.0) -> Param
     get distinct buffers and collide loudly at save time rather than silently sharing.
 
     Allocates unless the enclosing rule was wrapped in :func:`reuses_state` and already holds this slot.
+    Within one invocation a slot belongs to one component: a second claim on it raises rather than handing
+    two components the same buffer, which only the later writer's updates would survive.
 
     Parameters
     ----------
@@ -491,11 +508,22 @@ def state_for(parameter: Parameter, slot: str, fill_value: float = 0.0) -> Param
             "parameter names to identify their state at serialization boundaries; give the parameter a name."
         )
 
+    key = (parameter, slot)
+    claimed = _claimed_slots.get()
+    if claimed is not None:
+        if key in claimed:
+            raise ValueError(
+                f"Two components asked for the {slot!r} state of {parameter.name!r} in one step, so the "
+                "second would allocate over the first and only its writes would survive. Give one of them "
+                "a `namespace` of its own, or wrap it in `reuses_state` so it keeps its own buffers."
+            )
+        claimed.add(key)
+
     def allocate() -> Parameter:
         value = parameter.get_value(borrow=True)
         return pytensor.shared(np.full_like(value, fill_value), name=f"{parameter.name}/{slot}")
 
-    return _reuse_or_allocate((parameter, slot), allocate)
+    return _reuse_or_allocate(key, allocate)
 
 
 def counter(name: str) -> Parameter:
@@ -558,8 +586,10 @@ def require_unique_state_names(updates: Updates) -> None:
             continue
         if name in seen:
             raise ValueError(
-                f"Two distinct shared variables share the name {name!r}. Optimizer state is matched by name "
-                "at serialization boundaries and would collide; ensure parameters have unique names."
+                f"Two distinct shared variables share the name {name!r}. Optimizer state is matched by "
+                "name at serialization boundaries, so the two would collide there. Two transforms of the "
+                "same kind in one chain are the usual cause: give one of them a `namespace` of its own. "
+                "Otherwise two parameters share a name, and one of them needs a different one."
             )
         seen.add(name)
 
@@ -624,12 +654,17 @@ def chain(*transforms: Transform) -> Transform:
     if not transforms:
         raise ValueError("chain needs at least one transform.")
 
+    # Each member gets a buffer frame of its own, made once here. Without it a transform that allocates
+    # state without wrapping itself falls through to the chain's frame, where a second such transform
+    # would claim the same slot and quietly take it over.
+    staged = tuple(reuses_state(transform) for transform in transforms)
+
     @reuses_state
     def combined(
         loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
     ) -> Updates:
-        updates = transforms[0](loss_gradients_or_updates, parameters)
-        for transform in transforms[1:]:
+        updates = staged[0](loss_gradients_or_updates, parameters)
+        for transform in staged[1:]:
             updates = transform(updates, parameters)
         return updates
 

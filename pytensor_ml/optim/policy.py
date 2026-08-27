@@ -26,6 +26,7 @@ def reduce_on_plateau(
     atol: float = 0.0,
     min_scale: float = 0.0,
     accumulation_size: int = 1,
+    namespace: str = "plateau",
 ) -> Transform:
     r"""
     Cut ``scale`` by ``factor`` once the loss has stopped improving.
@@ -68,6 +69,10 @@ def reduce_on_plateau(
     min_scale : float
         Floor the scale cannot go below. Without one a noisy loss cuts repeatedly and underflows to zero.
         Default 0.0.
+    namespace : str
+        Prefix for the history this policy allocates, as ``"{namespace}/best_loss"`` and so on. Give two
+        policies in one graph different namespaces so their histories stay distinct at the serialization
+        boundary. Default ``"plateau"``.
     accumulation_size : int
         Losses to average before deciding anything. Nothing advances mid-window -- not the count, not the
         cooldown, not the best seen. Default 1, which decides on every step from that step's loss.
@@ -137,11 +142,11 @@ def reduce_on_plateau(
             )
         updates = Steps(result)
 
-        best_loss = scalar_state("plateau/best_loss", fill_value=np.inf)
-        waited = scalar_state("plateau/wait")
-        cooling = scalar_state("plateau/cooldown")
-        observed = scalar_state("plateau/observed")
-        mean_loss = scalar_state("plateau/mean_loss")
+        best_loss = scalar_state(f"{namespace}/best_loss", fill_value=np.inf)
+        waited = scalar_state(f"{namespace}/wait")
+        cooling = scalar_state(f"{namespace}/cooldown")
+        observed = scalar_state(f"{namespace}/observed")
+        mean_loss = scalar_state(f"{namespace}/mean_loss")
 
         # Everything below is gated on `deciding`, so a window that is still filling advances nothing. At the
         # default size of one the window is a single step and the mean is that step's loss.

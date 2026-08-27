@@ -27,6 +27,7 @@ from pytensor_ml.optim import (
     to_updates,
     trace,
 )
+from pytensor_ml.optim.base import state_for
 from pytensor_ml.params import trainable
 from pytensor_ml.pytensorf import function
 
@@ -52,6 +53,23 @@ def run_after_spike(rule, n_steps=STEPS_AFTER_SPIKE + 1, spike=1e6):
     for _ in range(n_steps - 1):
         value = step()
     return value
+
+
+def stateful_transform(decay, slot="smooth/velocity"):
+    """A hand-written stateful transform, written the way the ``Transform`` docstring teaches: with
+    ``state_for`` and without ``reuses_state``, since nothing at the call site suggests the decorator."""
+
+    def transform(loss_gradients_or_updates, parameters):
+        updates = to_updates(loss_gradients_or_updates, parameters)
+        smoothed = updates.copy()
+        for parameter in parameters:
+            velocity = state_for(parameter, slot)
+            new_velocity = decay * velocity + (updates[parameter] - parameter)
+            smoothed[velocity] = new_velocity
+            smoothed[parameter] = parameter + new_velocity
+        return smoothed
+
+    return transform
 
 
 def test_clipping_before_adam_survives_a_gradient_spike():
@@ -311,3 +329,101 @@ def test_a_rule_behind_another_rule_is_refused(build_rule, named):
         ValueError, match=f"^{named} was given the step another rule already produced"
     ):
         compile_train(loss, build_rule(), parameters=[parameter])
+
+
+@pytest.mark.parametrize(
+    "build_rule",
+    [lambda: adam(1e-3), lambda: trace(0.9), lambda: sgd(0.1, momentum=0.9)],
+    ids=["adam", "trace", "momentum-sgd"],
+)
+def test_one_configured_transform_keeps_one_set_of_buffers(build_rule):
+    """Compiling two training functions from one configured transform is natural, and both have to drive
+    the same state: separate buffers under one derived name are wrong at runtime and collide only later,
+    when both are checkpointed together."""
+    parameter = trainable(np.zeros(3, dtype=config.floatX), name="w")
+    gradient = pt.constant(np.ones(3, dtype=config.floatX))
+    rule = build_rule()
+
+    first = {key for key in rule([gradient], [parameter]) if key is not parameter}
+    second = {key for key in rule([gradient], [parameter]) if key is not parameter}
+
+    assert first and first == second
+
+
+def test_a_hand_written_stateful_transform_owns_its_buffers_in_a_chain():
+    """A chain gives each member a frame of its own. Without one, a transform that allocates state falls
+    through to the chain's frame, where the next such transform takes the slot over."""
+    parameter = trainable(np.zeros(3, dtype=config.floatX), name="w")
+    loss = (parameter**2).sum()
+
+    updates = chain(
+        stateful_transform(0.9, "fast/velocity"),
+        stateful_transform(0.5, "slow/velocity"),
+        sgd(0.1),
+    )(loss, [parameter])
+
+    assert sorted(key.name for key in updates if key.name and "velocity" in key.name) == [
+        "w/fast/velocity",
+        "w/slow/velocity",
+    ]
+
+
+def test_a_hand_written_stateful_transform_keeps_its_buffers_across_invocations():
+    """Two training functions compiled from one chain must drive the same state, which is the whole reason
+    the buffers are held rather than reallocated."""
+    parameter = trainable(np.zeros(3, dtype=config.floatX), name="w")
+    loss = (parameter**2).sum()
+    rule = chain(stateful_transform(0.9))
+
+    first = {id(key) for key in rule(loss, [parameter]) if key.name and "velocity" in key.name}
+    again = {id(key) for key in rule(loss, [parameter]) if key.name and "velocity" in key.name}
+
+    assert first and first == again
+
+
+def test_two_claims_on_one_slot_in_a_single_step_are_refused():
+    """Reuse across invocations is the point of the buffers; two claims within one is two components
+    allocating over each other, and only the second one's writes would survive."""
+    parameter = trainable(np.zeros(3, dtype=config.floatX), name="w")
+
+    def claims_twice(loss_gradients_or_updates, parameters):
+        updates = to_updates(loss_gradients_or_updates, parameters)
+        for each in parameters:
+            state_for(each, "shared/velocity")
+            state_for(each, "shared/velocity")
+        return updates
+
+    with pytest.raises(ValueError, match="in one step"):
+        chain(claims_twice, sgd(0.1))((parameter**2).sum(), [parameter])
+
+
+def test_two_transforms_of_one_kind_need_distinct_namespaces():
+    """Same-kind transforms allocate under the same derived name, so they collide at the serialization
+    boundary until one is given a namespace -- and the error has to say that rather than blame parameters."""
+    parameter = trainable(np.zeros(3, dtype=config.floatX), name="w")
+    loss = (parameter**2).sum()
+
+    with pytest.raises(ValueError, match="give one of them a `namespace`"):
+        compile_train(loss, chain(trace(0.9), trace(0.5), sgd(0.1)), parameters=[parameter])
+
+    namespaced = chain(trace(0.9, namespace="fast"), trace(0.5, namespace="slow"), sgd(0.1))
+    updates = namespaced(loss, [parameter])
+    assert sorted(key.name for key in updates if key.name and "velocity" in key.name) == [
+        "w/fast/velocity",
+        "w/slow/velocity",
+    ]
+
+
+def test_two_plateau_policies_coexist_under_distinct_namespaces():
+    """One policy per rate is the reason to want two, so the history each keeps has to be separable."""
+    parameter = trainable(np.zeros(3, dtype=config.floatX), name="w")
+    head_rate, backbone_rate = scalar_state("head_rate", 1e-3), scalar_state("backbone_rate", 1.0)
+
+    rule = reduce_on_plateau(
+        reduce_on_plateau(adam(head_rate * backbone_rate), head_rate, namespace="head"),
+        backbone_rate,
+        namespace="backbone",
+    )
+
+    histories = {key.name for key in rule((parameter**2).sum(), [parameter]) if key.name}
+    assert {"head/best_loss", "backbone/best_loss"} <= histories
