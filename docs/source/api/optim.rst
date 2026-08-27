@@ -76,15 +76,19 @@ Building blocks
 
     get_gradients
     scalar_state
+    steps_of
     to_floatx
+    to_updates
 
 .. currentmodule:: pytensor_ml.optim.base
 
 .. autosummary::
     :toctree: generated/
 
-    UpdateRule
     Transform
+    Updates
+    Gradients
+    Steps
     Schedule
     Rate
     LearningRate

@@ -4,9 +4,11 @@ import numpy as np
 import pytensor.tensor as pt
 
 from pytensor_ml.optim.base import (
-    LossOrGradients,
+    Gradients,
+    LossGradientsOrUpdates,
     Parameter,
-    UpdateRule,
+    Steps,
+    Transform,
     Updates,
     reuses_state,
     scalar_state,
@@ -14,7 +16,7 @@ from pytensor_ml.optim.base import (
 
 
 def reduce_on_plateau(
-    rule: UpdateRule,
+    rule: Transform,
     scale: Parameter,
     *,
     factor: float = 0.1,
@@ -24,7 +26,7 @@ def reduce_on_plateau(
     atol: float = 0.0,
     min_scale: float = 0.0,
     accumulation_size: int = 1,
-) -> UpdateRule:
+) -> Transform:
     r"""
     Cut ``scale`` by ``factor`` once the loss has stopped improving.
 
@@ -41,9 +43,14 @@ def reduce_on_plateau(
     ``accumulation_size`` is the answer, deciding on the mean of a window rather than on one batch. Set it
     to the number of steps in an epoch to get torch's cadence, on a better estimate than a single batch.
 
+    It decides from the loss itself rather than from an updates dict, which is the one thing in this module
+    a :func:`~pytensor_ml.optim.base.chain` cannot hand along. So it wraps a chain rather than sitting
+    inside one -- ``reduce_on_plateau(chain(clip_by_global_norm(1.0), adam(rate)), rate)`` -- and raises
+    rather than deciding on something else if placed where the loss no longer reaches it.
+
     Parameters
     ----------
-    rule : UpdateRule
+    rule : Transform
         The rule to wrap. Its rate must be built from ``scale`` for the cuts to reach the step.
     scale : shared tensor variable
         The multiplier this policy owns. Nothing else may write it.
@@ -67,7 +74,7 @@ def reduce_on_plateau(
 
     Returns
     -------
-    wrapped_rule : UpdateRule
+    wrapped_rule : Transform
         The wrapped rule, which also writes the scale and the policy's own history.
 
     Examples
@@ -110,15 +117,25 @@ def reduce_on_plateau(
         )
 
     @reuses_state
-    def policy(loss_or_gradients: LossOrGradients, parameters: Sequence[Parameter]) -> Updates:
-        if isinstance(loss_or_gradients, list | tuple):
+    def policy(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
+        if isinstance(loss_gradients_or_updates, list | tuple | dict):
             raise ValueError(
                 "reduce_on_plateau decides from the loss, so it needs the loss graph rather than "
-                "precomputed gradients. Pass the scalar loss, or drop the policy."
+                "gradients or an updates dict. It therefore has to come first in a chain, where the loss "
+                "still reaches it -- wrap the whole chain in it instead of placing it inside one, or drop "
+                "the policy."
             )
 
-        loss = loss_or_gradients
-        updates = dict(rule(loss, parameters))
+        loss = loss_gradients_or_updates
+        result = rule(loss, parameters)
+        if isinstance(result, Gradients):
+            raise ValueError(
+                "The wrapped rule returned gradients rather than the steps to take, so every parameter "
+                "would move uphill. Put an optimizer such as `adam(rate)` inside the policy."
+            )
+        updates = Steps(result)
 
         best_loss = scalar_state("plateau/best_loss", fill_value=np.inf)
         waited = scalar_state("plateau/wait")

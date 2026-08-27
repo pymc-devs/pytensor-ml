@@ -8,19 +8,20 @@ from pytensor.tensor import TensorVariable
 
 from pytensor_ml.optim.base import (
     LearningRate,
-    LossOrGradients,
+    LossGradientsOrUpdates,
     Parameter,
     Rate,
+    Steps,
     Updates,
     counter,
-    get_gradients,
+    gradients_to_descend,
     state_for,
     to_floatx,
 )
 
 
 def sgd_updates(
-    loss_or_gradients: LossOrGradients,
+    loss_gradients_or_updates: LossGradientsOrUpdates,
     parameters: Sequence[Parameter],
     learning_rate: Rate = 1.0,
 ) -> Updates:
@@ -32,8 +33,9 @@ def sgd_updates(
 
     Parameters
     ----------
-    loss_or_gradients : TensorVariable or sequence of TensorVariable
-        Scalar loss to differentiate, or precomputed gradients.
+    loss_gradients_or_updates : TensorVariable, sequence of TensorVariable, or Updates
+        Scalar loss to differentiate, precomputed gradients, or the updates dict an earlier transform in
+        a chain produced.
     parameters : sequence of shared tensor variable
         Parameters to update.
     learning_rate : float or shared tensor variable
@@ -66,16 +68,18 @@ def sgd_updates(
         step = pytensor.function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
-    gradients = get_gradients(loss_or_gradients, parameters)
+    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "sgd")
     learning_rate = to_floatx(learning_rate)
-    return {
-        parameter: parameter - learning_rate * gradient
-        for parameter, gradient in zip(parameters, gradients)
-    }
+    return Steps(incoming).replacing(
+        {
+            parameter: parameter - learning_rate * gradient
+            for parameter, gradient in zip(parameters, gradients)
+        }
+    )
 
 
 def adam_updates(
-    loss_or_gradients: LossOrGradients,
+    loss_gradients_or_updates: LossGradientsOrUpdates,
     parameters: Sequence[Parameter],
     learning_rate: Rate = 1e-3,
     beta1: float = 0.9,
@@ -94,8 +98,9 @@ def adam_updates(
 
     Parameters
     ----------
-    loss_or_gradients : TensorVariable or sequence of TensorVariable
-        Scalar loss to differentiate, or precomputed gradients.
+    loss_gradients_or_updates : TensorVariable, sequence of TensorVariable, or Updates
+        Scalar loss to differentiate, precomputed gradients, or the updates dict an earlier transform in
+        a chain produced.
     parameters : sequence of shared tensor variable
         Parameters to update.
     learning_rate : float or shared tensor variable
@@ -138,7 +143,7 @@ def adam_updates(
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     return _adam_family_updates(
-        loss_or_gradients,
+        loss_gradients_or_updates,
         parameters,
         learning_rate=learning_rate,
         beta1=beta1,
@@ -150,7 +155,7 @@ def adam_updates(
 
 
 def _adam_family_updates(
-    loss_or_gradients: LossOrGradients,
+    loss_gradients_or_updates: LossGradientsOrUpdates,
     parameters: Sequence[Parameter],
     *,
     learning_rate: Rate,
@@ -175,7 +180,7 @@ def _adam_family_updates(
     mask : callable, optional
         Predicate selecting which parameters the decay reaches. Every parameter when omitted.
     """
-    gradients = get_gradients(loss_or_gradients, parameters)
+    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, namespace)
     learning_rate = to_floatx(learning_rate)
 
     step_count = counter(f"{namespace}/step_count")
@@ -184,7 +189,8 @@ def _adam_family_updates(
     first_moment_bias_correction = 1 - beta1**new_step_count_float
     second_moment_bias_correction = 1 - beta2**new_step_count_float
 
-    updates: Updates = {step_count: new_step_count}
+    updates: Updates = Steps(incoming)
+    updates[step_count] = new_step_count
     for parameter, gradient in zip(parameters, gradients):
         first_moment = state_for(parameter, f"{namespace}/first_moment")
         second_moment = state_for(parameter, f"{namespace}/second_moment")
@@ -238,7 +244,7 @@ def _running_max_second_moment(
 
 
 def adamw_updates(
-    loss_or_gradients: LossOrGradients,
+    loss_gradients_or_updates: LossGradientsOrUpdates,
     parameters: Sequence[Parameter],
     learning_rate: Rate = 1e-3,
     weight_decay: float = 0.01,
@@ -260,8 +266,9 @@ def adamw_updates(
 
     Parameters
     ----------
-    loss_or_gradients : TensorVariable or sequence of TensorVariable
-        Scalar loss to differentiate, or precomputed gradients.
+    loss_gradients_or_updates : TensorVariable, sequence of TensorVariable, or Updates
+        Scalar loss to differentiate, precomputed gradients, or the updates dict an earlier transform in
+        a chain produced.
     parameters : sequence of shared tensor variable
         Parameters to update.
     learning_rate : float or shared tensor variable
@@ -309,7 +316,7 @@ def adamw_updates(
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     return _adam_family_updates(
-        loss_or_gradients,
+        loss_gradients_or_updates,
         parameters,
         learning_rate=learning_rate,
         beta1=beta1,
@@ -323,7 +330,7 @@ def adamw_updates(
 
 
 def nadam_updates(
-    loss_or_gradients: LossOrGradients,
+    loss_gradients_or_updates: LossGradientsOrUpdates,
     parameters: Sequence[Parameter],
     learning_rate: Rate = 2e-3,
     beta1: float = 0.9,
@@ -343,8 +350,9 @@ def nadam_updates(
 
     Parameters
     ----------
-    loss_or_gradients : TensorVariable or sequence of TensorVariable
-        Scalar loss to differentiate, or precomputed gradients.
+    loss_gradients_or_updates : TensorVariable, sequence of TensorVariable, or Updates
+        Scalar loss to differentiate, precomputed gradients, or the updates dict an earlier transform in
+        a chain produced.
     parameters : sequence of shared tensor variable
         Parameters to update.
     learning_rate : float or shared tensor variable
@@ -383,7 +391,7 @@ def nadam_updates(
         step = pytensor.function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
-    gradients = get_gradients(loss_or_gradients, parameters)
+    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "nadam")
     learning_rate = to_floatx(learning_rate)
 
     step_count = counter("nadam/step_count")
@@ -392,7 +400,8 @@ def nadam_updates(
     first_moment_bias_correction = 1 - beta1**new_step_count_float
     second_moment_bias_correction = 1 - beta2**new_step_count_float
 
-    updates: Updates = {step_count: new_step_count}
+    updates: Updates = Steps(incoming)
+    updates[step_count] = new_step_count
     for parameter, gradient in zip(parameters, gradients):
         first_moment = state_for(parameter, "nadam/first_moment")
         second_moment = state_for(parameter, "nadam/second_moment")
@@ -415,7 +424,7 @@ def nadam_updates(
 
 
 def adamax_updates(
-    loss_or_gradients: LossOrGradients,
+    loss_gradients_or_updates: LossGradientsOrUpdates,
     parameters: Sequence[Parameter],
     learning_rate: Rate = 2e-3,
     beta1: float = 0.9,
@@ -434,8 +443,9 @@ def adamax_updates(
 
     Parameters
     ----------
-    loss_or_gradients : TensorVariable or sequence of TensorVariable
-        Scalar loss to differentiate, or precomputed gradients.
+    loss_gradients_or_updates : TensorVariable, sequence of TensorVariable, or Updates
+        Scalar loss to differentiate, precomputed gradients, or the updates dict an earlier transform in
+        a chain produced.
     parameters : sequence of shared tensor variable
         Parameters to update.
     learning_rate : float or shared tensor variable
@@ -474,7 +484,7 @@ def adamax_updates(
         step = pytensor.function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
-    gradients = get_gradients(loss_or_gradients, parameters)
+    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "adamax")
     learning_rate = to_floatx(learning_rate)
 
     step_count = counter("adamax/step_count")
@@ -482,7 +492,8 @@ def adamax_updates(
     new_step_count_float = new_step_count.astype(config.floatX)
     first_moment_bias_correction = 1 - beta1**new_step_count_float
 
-    updates: Updates = {step_count: new_step_count}
+    updates: Updates = Steps(incoming)
+    updates[step_count] = new_step_count
     for parameter, gradient in zip(parameters, gradients):
         first_moment = state_for(parameter, "adamax/first_moment")
         infinity_norm = state_for(parameter, "adamax/infinity_norm")
@@ -500,7 +511,7 @@ def adamax_updates(
 
 
 def adagrad_updates(
-    loss_or_gradients: LossOrGradients,
+    loss_gradients_or_updates: LossGradientsOrUpdates,
     parameters: Sequence[Parameter],
     learning_rate: Rate = 0.01,
     epsilon: float = 1e-8,
@@ -515,8 +526,9 @@ def adagrad_updates(
 
     Parameters
     ----------
-    loss_or_gradients : TensorVariable or sequence of TensorVariable
-        Scalar loss to differentiate, or precomputed gradients.
+    loss_gradients_or_updates : TensorVariable, sequence of TensorVariable, or Updates
+        Scalar loss to differentiate, precomputed gradients, or the updates dict an earlier transform in
+        a chain produced.
     parameters : sequence of shared tensor variable
         Parameters to update.
     learning_rate : float or shared tensor variable
@@ -551,10 +563,10 @@ def adagrad_updates(
         step = pytensor.function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
-    gradients = get_gradients(loss_or_gradients, parameters)
+    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "adagrad")
     learning_rate = to_floatx(learning_rate)
 
-    updates: Updates = {}
+    updates: Updates = Steps(incoming)
     for parameter, gradient in zip(parameters, gradients):
         sum_squared_gradients = state_for(parameter, "adagrad/sum_squared_gradients")
         new_sum_squared_gradients = sum_squared_gradients + gradient**2
@@ -567,7 +579,7 @@ def adagrad_updates(
 
 
 def rmsprop_updates(
-    loss_or_gradients: LossOrGradients,
+    loss_gradients_or_updates: LossGradientsOrUpdates,
     parameters: Sequence[Parameter],
     learning_rate: Rate = 1e-2,
     rho: float = 0.9,
@@ -589,8 +601,9 @@ def rmsprop_updates(
 
     Parameters
     ----------
-    loss_or_gradients : TensorVariable or sequence of TensorVariable
-        Scalar loss to differentiate, or precomputed gradients.
+    loss_gradients_or_updates : TensorVariable, sequence of TensorVariable, or Updates
+        Scalar loss to differentiate, precomputed gradients, or the updates dict an earlier transform in
+        a chain produced.
     parameters : sequence of shared tensor variable
         Parameters to update.
     learning_rate : float or shared tensor variable
@@ -631,10 +644,10 @@ def rmsprop_updates(
         step = pytensor.function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
-    gradients = get_gradients(loss_or_gradients, parameters)
+    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "rmsprop")
     learning_rate = to_floatx(learning_rate)
 
-    updates: Updates = {}
+    updates: Updates = Steps(incoming)
     for parameter, gradient in zip(parameters, gradients):
         mean_squared_gradient = state_for(parameter, "rmsprop/mean_squared_gradient")
         new_mean_squared_gradient = rho * mean_squared_gradient + (1 - rho) * gradient**2
@@ -661,7 +674,7 @@ def rmsprop_updates(
 
 
 def adadelta_updates(
-    loss_or_gradients: LossOrGradients,
+    loss_gradients_or_updates: LossGradientsOrUpdates,
     parameters: Sequence[Parameter],
     learning_rate: Rate = 1.0,
     rho: float = 0.9,
@@ -679,8 +692,9 @@ def adadelta_updates(
 
     Parameters
     ----------
-    loss_or_gradients : TensorVariable or sequence of TensorVariable
-        Scalar loss to differentiate, or precomputed gradients.
+    loss_gradients_or_updates : TensorVariable, sequence of TensorVariable, or Updates
+        Scalar loss to differentiate, precomputed gradients, or the updates dict an earlier transform in
+        a chain produced.
     parameters : sequence of shared tensor variable
         Parameters to update.
     learning_rate : float or shared tensor variable
@@ -717,10 +731,10 @@ def adadelta_updates(
         step = pytensor.function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
-    gradients = get_gradients(loss_or_gradients, parameters)
+    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "adadelta")
     learning_rate = to_floatx(learning_rate)
 
-    updates: Updates = {}
+    updates: Updates = Steps(incoming)
     for parameter, gradient in zip(parameters, gradients):
         accumulated_squared_gradient = state_for(parameter, "adadelta/accumulated_squared_gradient")
         accumulated_squared_update = state_for(parameter, "adadelta/accumulated_squared_update")
@@ -764,7 +778,7 @@ def _require_numeric_learning_rate(learning_rate: LearningRate) -> None:
 
 
 def rprop_updates(
-    loss_or_gradients: LossOrGradients,
+    loss_gradients_or_updates: LossGradientsOrUpdates,
     parameters: Sequence[Parameter],
     learning_rate: float = 1e-2,
     eta_minus: float = 0.5,
@@ -784,8 +798,9 @@ def rprop_updates(
 
     Parameters
     ----------
-    loss_or_gradients : TensorVariable or sequence of TensorVariable
-        Scalar loss to differentiate, or precomputed gradients.
+    loss_gradients_or_updates : TensorVariable, sequence of TensorVariable, or Updates
+        Scalar loss to differentiate, precomputed gradients, or the updates dict an earlier transform in
+        a chain produced.
     parameters : sequence of shared tensor variable
         Parameters to update.
     learning_rate : float
@@ -828,9 +843,9 @@ def rprop_updates(
     """
     _require_numeric_learning_rate(learning_rate)
 
-    gradients = get_gradients(loss_or_gradients, parameters)
+    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "rprop")
 
-    updates: Updates = {}
+    updates: Updates = Steps(incoming)
     for parameter, gradient in zip(parameters, gradients):
         previous_gradient = state_for(parameter, "rprop/previous_gradient")
         step_size = state_for(parameter, "rprop/step_size", fill_value=learning_rate)

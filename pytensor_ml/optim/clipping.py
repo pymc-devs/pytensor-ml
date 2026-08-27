@@ -2,16 +2,28 @@ from collections.abc import Sequence
 
 import pytensor.tensor as pt
 
-from pytensor_ml.optim.base import Parameter, Transform, Updates
+from pytensor_ml.optim.base import (
+    LossGradientsOrUpdates,
+    Parameter,
+    Transform,
+    Updates,
+    steps_of,
+    to_updates,
+)
 
 
 def clip_by_global_norm(max_norm: float = 1.0) -> Transform:
     r"""
-    Rescale all steps by a single factor so their global L2 norm does not exceed ``max_norm``.
+    Rescale everything by a single factor so its global L2 norm does not exceed ``max_norm``.
 
-    With :math:`\|s\|` the norm of the concatenated steps, every step is multiplied by
-    :math:`\min(1, \text{max\_norm} / (\|s\| + \epsilon))`, preserving the update direction while bounding its
+    With :math:`\|s\|` the norm of the concatenated values, every one is multiplied by
+    :math:`\min(1, \text{max\_norm} / (\|s\| + \epsilon))`, preserving the direction while bounding the
     magnitude.
+
+    Position in a :func:`~pytensor_ml.optim.base.chain` decides what is bounded. Ahead of a rule this
+    clips the gradients, so a spike never reaches the moment estimates; behind one it clips the step the
+    rule produced, which an adaptive rule has already normalized to roughly its learning rate however
+    large the gradient was. The first is what stops an exploding gradient.
 
     Parameters
     ----------
@@ -21,12 +33,12 @@ def clip_by_global_norm(max_norm: float = 1.0) -> Transform:
     Returns
     -------
     transform : Transform
-        A transform that clips the updates dict by global norm.
+        A transform that clips by global norm, in whichever space it is placed.
 
     Examples
     --------
-    Bound the whole update rather than each coordinate, so the direction of the step survives and only
-    its magnitude is capped:
+    Bound the gradient before the rule sees it, so one exploding batch cannot poison the moment estimates
+    for every step after it:
 
     .. code-block:: python
 
@@ -39,25 +51,39 @@ def clip_by_global_norm(max_norm: float = 1.0) -> Transform:
         X = Input("X", shape=(None, 4))
         loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
 
-        step = compile_train(loss, chain(adam(1e-3), clip_by_global_norm(1.0)))
+        step = compile_train(loss, chain(clip_by_global_norm(1.0), adam(1e-3)))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
+
+    Place it after the rule instead to cap how far a single step may move the parameters, whatever the
+    rule asked for:
+
+    .. code-block:: python
+
+        from pytensor_ml.optim import adam, chain, clip_by_global_norm
+
+        rule = chain(adam(1e-3), clip_by_global_norm(0.01))
     """
 
-    def transform(updates: Updates, parameters: Sequence[Parameter]) -> Updates:
-        steps = [updates[parameter] - parameter for parameter in parameters]
+    def transform(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
+        updates = to_updates(loss_gradients_or_updates, parameters)
+        steps = steps_of(updates, parameters)
         global_norm = pt.sqrt(sum(pt.sum(step**2) for step in steps))
         clip_scale = pt.minimum(1.0, max_norm / (global_norm + 1e-8))
-        next_updates = dict(updates)
-        for parameter, step in zip(parameters, steps):
-            next_updates[parameter] = parameter + clip_scale * step
-        return next_updates
+        return updates.replacing(
+            {parameter: parameter + clip_scale * step for parameter, step in zip(parameters, steps)}
+        )
 
     return transform
 
 
 def clip_by_value(min_value: float = -1.0, max_value: float = 1.0) -> Transform:
     """
-    Clamp each step element-wise into ``[min_value, max_value]``.
+    Clamp every value element-wise into ``[min_value, max_value]``.
+
+    Position in a :func:`~pytensor_ml.optim.base.chain` decides what is clamped: gradients ahead of a
+    rule, the rule's step behind it. See :func:`clip_by_global_norm` for what that choice costs.
 
     Parameters
     ----------
@@ -69,12 +95,12 @@ def clip_by_value(min_value: float = -1.0, max_value: float = 1.0) -> Transform:
     Returns
     -------
     transform : Transform
-        A transform that clips the updates dict element-wise.
+        A transform that clips element-wise, in whichever space it is placed.
 
     Examples
     --------
-    Clip each coordinate on its own, which bounds the step but tilts its direction whenever only some
-    coordinates are clipped:
+    Clip each coordinate on its own, which bounds the magnitude but tilts the direction whenever only
+    some coordinates are clipped:
 
     .. code-block:: python
 
@@ -87,16 +113,19 @@ def clip_by_value(min_value: float = -1.0, max_value: float = 1.0) -> Transform:
         X = Input("X", shape=(None, 4))
         loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
 
-        step = compile_train(loss, chain(adam(1e-3), clip_by_value(-0.1, 0.1)))
+        step = compile_train(loss, chain(clip_by_value(-1.0, 1.0), adam(1e-3)))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
-    def transform(updates: Updates, parameters: Sequence[Parameter]) -> Updates:
-        next_updates = dict(updates)
-        for parameter in parameters:
-            next_updates[parameter] = parameter + pt.clip(
-                updates[parameter] - parameter, min_value, max_value
-            )
-        return next_updates
+    def transform(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
+        updates = to_updates(loss_gradients_or_updates, parameters)
+        return updates.replacing(
+            {
+                parameter: parameter + pt.clip(step, min_value, max_value)
+                for parameter, step in zip(parameters, steps_of(updates, parameters))
+            }
+        )
 
     return transform

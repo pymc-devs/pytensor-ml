@@ -1,6 +1,10 @@
 from collections.abc import Callable, Sequence
 
+from pytensor.tensor import TensorVariable
+
 from pytensor_ml.optim.base import (
+    Gradients,
+    LossGradientsOrUpdates,
     Parameter,
     Rate,
     Schedule,
@@ -9,16 +13,32 @@ from pytensor_ml.optim.base import (
     counter,
     reuses_state,
     state_for,
+    steps_of,
+    to_updates,
 )
+
+
+def _reject_gradients(updates: Updates, what: str) -> None:
+    """Raise unless ``updates`` carries steps, for a transform that is a silent no-op on gradients."""
+    if isinstance(updates, Gradients):
+        raise ValueError(
+            f"{what} has no effect on gradients ahead of a scale-invariant rule such as adam, which "
+            "normalizes whatever magnitude it is given, so the chain would train as though it were absent. "
+            "Move it after the rule to scale the step, or pass the rate to the rule as its "
+            "`learning_rate`."
+        )
 
 
 def trace(decay: float = 0.9, nesterov: bool = False) -> Transform:
     r"""
-    Accumulate steps into a velocity buffer (classical or Nesterov momentum).
+    Accumulate into a velocity buffer (classical or Nesterov momentum).
 
-    Operating in step space (:math:`s = \text{updates}[p] - p`), the velocity is
-    :math:`v \leftarrow \rho v + s`, and the new step is :math:`v` (classical) or :math:`s + \rho v`
-    (Nesterov lookahead).
+    Reading :math:`s = \text{updates}[p] - p`, the velocity is :math:`v \leftarrow \rho v + s`, and the
+    new value is :math:`v` (classical) or :math:`s + \rho v` (Nesterov lookahead).
+
+    Position in a :func:`~pytensor_ml.optim.base.chain` decides what is accumulated. Ahead of a rule this
+    is momentum on the gradients, which is what heavy-ball descent means; behind one it smooths the step
+    a rule already decided on, on top of whatever momentum that rule keeps of its own.
 
     Parameters
     ----------
@@ -51,8 +71,11 @@ def trace(decay: float = 0.9, nesterov: bool = False) -> Transform:
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
-    def transform(updates: Updates, parameters: Sequence[Parameter]) -> Updates:
-        next_updates = dict(updates)
+    def transform(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
+        updates = to_updates(loss_gradients_or_updates, parameters)
+        next_updates = updates.copy()
         for parameter in parameters:
             step = updates[parameter] - parameter
             velocity = state_for(parameter, "trace/velocity")
@@ -71,6 +94,9 @@ def scale(factor: Rate) -> Transform:
     Scale each step by a constant factor.
 
     Typically the terminal transform in a chain, used to apply the learning rate after a unit-rate base rule.
+
+    Belongs behind a rule, and raises ahead of one: an adaptive rule normalizes whatever magnitude it is
+    handed, so scaling its input changes nothing about what it does.
 
     Parameters
     ----------
@@ -102,11 +128,17 @@ def scale(factor: Rate) -> Transform:
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
-    def transform(updates: Updates, parameters: Sequence[Parameter]) -> Updates:
-        next_updates = dict(updates)
-        for parameter in parameters:
-            next_updates[parameter] = parameter + factor * (updates[parameter] - parameter)
-        return next_updates
+    def transform(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
+        updates = to_updates(loss_gradients_or_updates, parameters)
+        _reject_gradients(updates, f"scale({factor})")
+        return updates.replacing(
+            {
+                parameter: parameter + factor * step
+                for parameter, step in zip(parameters, steps_of(updates, parameters))
+            }
+        )
 
     return transform
 
@@ -165,7 +197,11 @@ def scale_by_schedule(schedule: Schedule, *, namespace: str = "scale_by_schedule
     """
 
     @reuses_state
-    def transform(updates: Updates, parameters: Sequence[Parameter]) -> Updates:
+    def transform(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
+        updates = to_updates(loss_gradients_or_updates, parameters)
+        _reject_gradients(updates, "scale_by_schedule")
         return scale(schedule(counter(f"{namespace}/step_count")))(updates, parameters)
 
     return transform
@@ -176,11 +212,15 @@ def add_weight_decay(
     mask: Callable[[Parameter], bool] | None = None,
 ) -> Transform:
     r"""
-    Subtract a decoupled weight-decay term :math:`\lambda p` from each step.
+    Subtract a weight-decay term :math:`\lambda p`.
 
-    Place this before a terminal :func:`scale` so the final update is
+    Place this behind a rule and before a terminal :func:`scale` so the final update is
     :math:`p \leftarrow p + \eta (s - \lambda p)`, giving decay that scales with the learning rate but is
-    decoupled from any adaptive step rescaling earlier in the chain.
+    decoupled from any adaptive rescaling earlier in the chain -- the AdamW form.
+
+    Ahead of a rule it instead adds the term to the gradient, which is the coupled L2 penalty the decay
+    was named after. That form is a different optimizer, not a placement detail: an adaptive rule divides
+    it through by the second moment along with everything else.
 
     Parameters
     ----------
@@ -215,14 +255,25 @@ def add_weight_decay(
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
-    def transform(updates: Updates, parameters: Sequence[Parameter]) -> Updates:
-        next_updates = dict(updates)
-        for parameter in parameters:
-            step = updates[parameter] - parameter
-            decayed_step = (
-                step - weight_decay * parameter if (mask is None or mask(parameter)) else step
-            )
-            next_updates[parameter] = parameter + decayed_step
-        return next_updates
+    def transform(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
+        updates = to_updates(loss_gradients_or_updates, parameters)
+        in_gradient_space = isinstance(updates, Gradients)
+
+        def decayed(parameter: Parameter, step: TensorVariable) -> TensorVariable:
+            if mask is not None and not mask(parameter):
+                return step
+            penalty = weight_decay * parameter
+            # A rule negates what it reads, so the term that pulls a weight towards zero enters a
+            # gradient with the opposite sign to the one it enters a step with.
+            return (step + penalty) if in_gradient_space else (step - penalty)
+
+        return updates.replacing(
+            {
+                parameter: parameter + decayed(parameter, step)
+                for parameter, step in zip(parameters, steps_of(updates, parameters))
+            }
+        )
 
     return transform

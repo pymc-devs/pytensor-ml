@@ -10,16 +10,19 @@ from pytensor_ml.optim.alias import (
     sgd,
 )
 from pytensor_ml.optim.base import (
+    Gradients,
     LearningRate,
     Rate,
     Schedule,
+    Steps,
     Transform,
-    UpdateRule,
     Updates,
     chain,
     get_gradients,
     scalar_state,
+    steps_of,
     to_floatx,
+    to_updates,
 )
 from pytensor_ml.optim.clipping import clip_by_global_norm, clip_by_value
 from pytensor_ml.optim.guards import (
@@ -61,12 +64,13 @@ from pytensor_ml.optim.transform import (
 
 __all__ = [
     "Decision",
+    "Gradients",
     "LearningRate",
     "Rate",
     "Schedule",
     "SkipCondition",
+    "Steps",
     "Transform",
-    "UpdateRule",
     "Updates",
     "adadelta",
     "adadelta_updates",
@@ -107,6 +111,8 @@ __all__ = [
     "sgd_updates",
     "skip_if",
     "step_decay",
+    "steps_of",
     "to_floatx",
+    "to_updates",
     "trace",
 ]

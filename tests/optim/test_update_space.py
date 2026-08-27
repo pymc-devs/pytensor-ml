@@ -1,0 +1,313 @@
+import numpy as np
+import pytensor
+import pytensor.tensor as pt
+import pytest
+
+from pytensor import config
+
+from pytensor_ml.layers import Input, Linear
+from pytensor_ml.loss import SquaredError, supervised_loss
+from pytensor_ml.optim import (
+    Gradients,
+    Steps,
+    Updates,
+    adam,
+    adamw,
+    add_weight_decay,
+    chain,
+    clip_by_global_norm,
+    clip_by_value,
+    compile_train,
+    cosine_schedule,
+    reduce_on_plateau,
+    scalar_state,
+    scale,
+    scale_by_schedule,
+    sgd,
+    to_updates,
+    trace,
+)
+from pytensor_ml.params import trainable
+from pytensor_ml.pytensorf import function
+
+
+def spiking_problem():
+    """A parameter whose gradient is read straight off a shared variable, so a spike can be dialled in."""
+    parameter = trainable(np.zeros(3, dtype=config.floatX), name="w")
+    gradient = pytensor.shared(np.ones(3, dtype=config.floatX), name="g")
+    return parameter, gradient
+
+
+STEPS_AFTER_SPIKE = 19
+
+
+def run_after_spike(rule, n_steps=STEPS_AFTER_SPIKE + 1, spike=1e6):
+    """Take one exploding step, then ``n_steps - 1`` ordinary ones, and report where the parameter got to."""
+    parameter, gradient = spiking_problem()
+    step = pytensor.function([], parameter, updates=rule([gradient], [parameter]))
+
+    gradient.set_value(np.full(3, spike, dtype=config.floatX))
+    step()
+    gradient.set_value(np.ones(3, dtype=config.floatX))
+    for _ in range(n_steps - 1):
+        value = step()
+    return value
+
+
+def test_clipping_before_adam_survives_a_gradient_spike():
+    """The reason the two spaces are distinguished at all.
+
+    Adam normalizes its step to roughly the learning rate whatever the gradient was, so a clip behind it
+    never fires while the spike still lands in the moment estimates and stalls every step after it. The
+    same clip ahead of it bounds the gradient, and training proceeds at full speed.
+    """
+    clipped_gradient = run_after_spike(chain(clip_by_global_norm(1.0), adam(1e-3)))
+    clipped_step = run_after_spike(chain(adam(1e-3), clip_by_global_norm(1.0)))
+
+    np.testing.assert_allclose(clipped_gradient, np.full(3, -0.019), rtol=1e-3)
+    assert abs(clipped_gradient[0]) > 3 * abs(clipped_step[0])
+
+
+def test_clipping_before_the_rule_matches_clipping_the_gradients_by_hand():
+    """Handing a rule pre-clipped gradients is the workaround the chain replaces, so the two must agree."""
+    parameter, gradient = spiking_problem()
+    by_hand = pytensor.function(
+        [],
+        parameter,
+        updates=adam(1e-3)([pt.clip(gradient, -1.0, 1.0)], [parameter]),
+    )
+
+    gradient.set_value(np.full(3, 1e6, dtype=config.floatX))
+    by_hand()
+    gradient.set_value(np.ones(3, dtype=config.floatX))
+    for _ in range(STEPS_AFTER_SPIKE):
+        expected = by_hand()
+
+    np.testing.assert_allclose(
+        run_after_spike(chain(clip_by_value(-1.0, 1.0), adam(1e-3))), expected, rtol=1e-6
+    )
+
+
+@pytest.mark.parametrize(
+    "build_rule",
+    [
+        lambda: adam(1e-3),
+        lambda: chain(adam(1e-3)),
+        lambda: chain(clip_by_global_norm(1.0), adam(1e-3)),
+        lambda: chain(adam(1e-3), clip_by_global_norm(1.0)),
+        lambda: chain(clip_by_global_norm(1.0), adam(1e-3), scale(0.5)),
+        lambda: chain(clip_by_value(-1.0, 1.0), trace(0.9), adam(1e-3)),
+    ],
+    ids=["bare", "wrapped", "before", "after", "both-sides", "gradient-momentum"],
+)
+def test_every_ordering_composes_and_trains(build_rule):
+    """Rules and transforms share one type, so any arrangement of them has to build and run."""
+    parameter, gradient = spiking_problem()
+    step = pytensor.function([], parameter, updates=build_rule()([gradient], [parameter]))
+    for _ in range(5):
+        value = step()
+    assert np.all(np.isfinite(value))
+    assert np.all(value < 0.0)  # a positive gradient moves a parameter down
+
+
+def test_a_chain_wrapping_a_rule_matches_the_bare_rule():
+    """chain() of one transform is that transform, so the round trip through an updates dict is inert."""
+    np.testing.assert_allclose(
+        run_after_spike(chain(adam(1e-3))), run_after_spike(adam(1e-3)), rtol=1e-12
+    )
+
+
+def test_to_updates_seeds_gradients_recoverable_by_subtraction():
+    parameter = trainable(np.zeros(3, dtype=config.floatX), name="w")
+    gradient = pt.constant(np.array([1.0, 2.0, 3.0], dtype=config.floatX))
+
+    updates = to_updates([gradient], [parameter])
+
+    assert isinstance(updates, Gradients)
+    np.testing.assert_allclose(function([], updates[parameter] - parameter)(), [1.0, 2.0, 3.0])
+
+
+def test_to_updates_passes_an_updates_dict_through_unchanged():
+    parameter = trainable(np.zeros(2, dtype=config.floatX), name="w")
+    already = Steps({parameter: parameter + 1.0})
+
+    assert to_updates(already, [parameter]) is already
+
+
+def test_to_updates_leaves_a_plain_dict_unplaced():
+    """A hand-written transform may build a bare dict, which says nothing about where it sits. Guessing a
+    space for it would trip whichever check disagreed with the guess, so it stays unplaced and passes
+    both."""
+    parameter = trainable(np.zeros(2, dtype=config.floatX), name="w")
+
+    unplaced = to_updates({parameter: parameter + 1.0}, [parameter])
+
+    assert isinstance(unplaced, Updates)
+    assert not isinstance(unplaced, Gradients | Steps)
+
+
+def test_a_rule_turns_gradients_into_steps():
+    parameter = trainable(np.zeros(3, dtype=config.floatX), name="w")
+    gradient = pt.constant(np.ones(3, dtype=config.floatX))
+
+    assert isinstance(sgd(0.1)([gradient], [parameter]), Steps)
+
+
+def test_a_clip_keeps_whichever_space_it_was_given():
+    parameter = trainable(np.zeros(3, dtype=config.floatX), name="w")
+    gradient = pt.constant(np.ones(3, dtype=config.floatX))
+
+    clip = clip_by_global_norm(1.0)
+    assert isinstance(clip(Gradients({parameter: parameter + gradient}), [parameter]), Gradients)
+    assert isinstance(clip(Steps({parameter: parameter + gradient}), [parameter]), Steps)
+
+
+def test_writing_a_result_keeps_the_space():
+    """Every transform writes its result over what it was given, so a write that dropped the subclass would
+    silently widen the output back to an unplaced mapping and disarm every check downstream."""
+    parameter = trainable(np.zeros(2, dtype=config.floatX), name="w")
+    gradients = Gradients({parameter: parameter + 1.0})
+
+    assert isinstance(gradients.replacing({}), Gradients)
+    assert isinstance(gradients.copy(), Gradients)
+    # `|` is what would be reached for by habit, and is exactly what `replacing` exists to displace.
+    assert not isinstance(gradients | {}, Gradients)
+
+
+def test_replacing_overrides_only_the_named_entries():
+    parameter = trainable(np.zeros(2, dtype=config.floatX), name="w")
+    clock = pytensor.shared(np.array(0), name="clock")
+    updates = Steps({parameter: parameter + 1.0, clock: clock + 1})
+
+    rewritten = updates.replacing({parameter: parameter + 2.0})
+
+    assert rewritten[clock] is updates[clock]
+    np.testing.assert_allclose(function([], rewritten[parameter] - parameter)(), [2.0, 2.0])
+
+
+@pytest.mark.parametrize(
+    "transform",
+    [scale(0.5), scale_by_schedule(cosine_schedule(3e-4, 10))],
+    ids=["scale", "scale_by_schedule"],
+)
+def test_scaling_gradients_ahead_of_a_rule_is_refused(transform):
+    """Adam is scale-invariant, so a scale placed ahead of it trains exactly as though it were absent. That
+    is worse than an error, so it is one."""
+    parameter = trainable(np.zeros(2, dtype=config.floatX), name="w")
+    gradients = Gradients({parameter: parameter + 1.0})
+
+    with pytest.raises(ValueError, match="has no effect on gradients"):
+        transform(gradients, [parameter])
+
+
+def test_scaling_is_allowed_behind_a_rule():
+    np.testing.assert_allclose(
+        run_after_spike(chain(adam(1e-3), scale(0.5))),
+        0.5 * np.asarray(run_after_spike(chain(adam(1e-3)))),
+        rtol=1e-6,
+    )
+
+
+def test_reduce_on_plateau_names_the_fix_when_it_cannot_see_the_loss():
+    """It decides from the loss, so it has to come first; the error has to say so rather than KeyError."""
+    parameter = trainable(np.zeros(2, dtype=config.floatX), name="w")
+    rate = scalar_state("rate", fill_value=1e-3)
+    policy = reduce_on_plateau(adam(rate), rate, patience=1)
+
+    with pytest.raises(ValueError, match="wrap the whole chain in it"):
+        policy(Gradients({parameter: parameter + 1.0}), [parameter])
+
+
+def test_chain_of_nothing_is_refused():
+    with pytest.raises(ValueError, match="at least one transform"):
+        chain()
+
+
+@pytest.mark.parametrize(
+    "transform",
+    [
+        clip_by_global_norm(1.0),
+        clip_by_value(-0.5, 0.5),
+        trace(0.9),
+        add_weight_decay(0.01),
+        adam(1e-3),
+        sgd(0.1),
+    ],
+    ids=["clip_norm", "clip_value", "trace", "weight_decay", "adam", "sgd"],
+)
+def test_a_transform_does_not_mutate_what_it_was_given(transform):
+    """`to_updates` hands back the caller's own dict rather than a copy, so a transform that assigned into
+    it would reach back into the stage before it and rewrite a step already decided on."""
+    parameter = trainable(np.zeros(3, dtype=config.floatX), name="w")
+    clock = pytensor.shared(np.array(0), name="clock")
+    incoming = Gradients({parameter: parameter + 1.0, clock: clock + 1})
+    before = dict(incoming)
+
+    transform(incoming, [parameter])
+
+    assert incoming == before
+
+
+def test_a_clip_ahead_of_a_rule_differentiates_the_loss_itself():
+    """Every other case here hands the chain precomputed gradients. Here the clip is the stage that meets
+    the loss, so it is the one that has to differentiate it rather than assume a dict."""
+    X = Input("X", shape=(None, 4))
+    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+
+    step = compile_train(loss, chain(clip_by_global_norm(1.0), adam(1e-3)))
+
+    rng = np.random.default_rng(0)
+    batch = (
+        rng.normal(size=(16, 4)).astype(config.floatX),
+        rng.normal(size=(16, 1)).astype(config.floatX),
+    )
+    losses = [float(step(*batch)) for _ in range(20)]
+
+    assert np.all(np.isfinite(losses))
+    assert losses[-1] < losses[0]
+
+
+def test_weight_decay_pulls_towards_zero_from_either_side_of_the_rule():
+    """The decay term enters a gradient and a step with opposite signs, because a rule negates what it
+    reads. Under a zero gradient the decay is the only thing moving the parameter, so its direction is
+    unambiguous -- and getting the sign wrong in one position turns the penalty into unbounded growth."""
+    for rule in [
+        chain(sgd(1.0), add_weight_decay(0.1)),
+        chain(add_weight_decay(0.1), sgd(1.0)),
+    ]:
+        parameter = trainable(np.array([2.0], dtype=config.floatX), name="w")
+        zero_gradient = pytensor.shared(np.array([0.0], dtype=config.floatX), name="g")
+        step = pytensor.function([], parameter, updates=rule([zero_gradient], [parameter]))
+        step()
+        np.testing.assert_allclose(parameter.get_value(), [1.8], rtol=1e-6)
+
+
+def test_a_chain_with_no_rule_in_it_is_refused():
+    """Relabelling gradients as steps would compile `p <- p + g`, which walks uphill on every parameter."""
+    parameter = trainable(np.array([2.0, 3.0], dtype=config.floatX), name="w")
+    loss = (parameter**2).sum()
+
+    with pytest.raises(ValueError, match="uphill"):
+        compile_train(loss, clip_by_value(-10.0, 10.0), parameters=[parameter])
+
+
+@pytest.mark.parametrize(
+    "build_rule, named",
+    [
+        (lambda: chain(sgd(0.1), sgd(0.1)), "sgd"),
+        (lambda: chain(adam(1e-3), adam(1e-3)), "adam"),
+        (lambda: chain(adam(1e-3), adamw(1e-3)), "adamw"),
+    ],
+    ids=["sgd", "adam", "adamw"],
+)
+def test_a_rule_behind_another_rule_is_refused(build_rule, named):
+    """The second rule would read the first's step as a gradient and negate it, undoing the descent. The
+    error has to name the rule that was misplaced -- adam and adamw share an implementation, so reporting
+    the shared one would send a reader to the optimizer they did not write."""
+    parameter = trainable(np.array([2.0, 3.0], dtype=config.floatX), name="w")
+    loss = (parameter**2).sum()
+
+    with pytest.raises(
+        ValueError, match=f"^{named} was given the step another rule already produced"
+    ):
+        compile_train(loss, build_rule(), parameters=[parameter])

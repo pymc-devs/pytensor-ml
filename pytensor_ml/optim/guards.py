@@ -7,9 +7,9 @@ from pytensor.raise_op import CheckAndRaise
 from pytensor.tensor import TensorVariable
 
 from pytensor_ml.optim.base import (
-    LossOrGradients,
+    LossGradientsOrUpdates,
     Parameter,
-    UpdateRule,
+    Transform,
     Updates,
     reuses_state,
     scalar_state,
@@ -199,14 +199,14 @@ def _counter_or_new(given: Parameter | None, name: str) -> Parameter:
 
 
 def skip_if(
-    rule: UpdateRule,
+    rule: Transform,
     condition: SkipCondition | Decision | None = None,
     *,
     max_consecutive_skips: int | None = 5,
     consecutive_skips: Parameter | None = None,
     total_skips: Parameter | None = None,
     namespace: str = "skip_if",
-) -> UpdateRule:
+) -> Transform:
     """
     Throw away any step ``condition`` rejects, leaving the parameters and the optimizer state as they were.
 
@@ -225,7 +225,7 @@ def skip_if(
 
     Parameters
     ----------
-    rule : UpdateRule
+    rule : Transform
         The rule to guard, e.g. ``adam(1e-3)`` or a rule already wrapped in a policy.
     condition : SkipCondition or callable, optional
         What to throw a step away for, as a :class:`SkipCondition` such as :func:`nonfinite` or
@@ -249,7 +249,7 @@ def skip_if(
 
     Returns
     -------
-    guarded_rule : UpdateRule
+    guarded_rule : Transform
         The guarded rule, which also writes both skip counters.
 
     Examples
@@ -286,8 +286,10 @@ def skip_if(
         condition = SkipCondition(condition)
 
     @reuses_state
-    def guarded(loss_or_gradients: LossOrGradients, parameters: Sequence[Parameter]) -> Updates:
-        updates = dict(rule(loss_or_gradients, parameters))
+    def guarded(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
+        updates = rule(loss_gradients_or_updates, parameters).copy()
         # Snapshotted before the counters are added, since those are the one thing a skipped step still has
         # to write: freeze them along with everything else and the guard can never count its way to the
         # error, which is a silent failure rather than a loud one.
@@ -324,13 +326,13 @@ def skip_if(
 
 
 def apply_if_finite(
-    rule: UpdateRule,
+    rule: Transform,
     *,
     max_consecutive_skips: int | None = 5,
     consecutive_skips: Parameter | None = None,
     total_skips: Parameter | None = None,
     namespace: str = "skip_if",
-) -> UpdateRule:
+) -> Transform:
     """
     Skip any step that would write a non-finite parameter, leaving the parameters and the optimizer state
     as they were.

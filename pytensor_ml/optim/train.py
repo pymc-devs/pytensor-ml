@@ -5,7 +5,14 @@ from pytensor.compile.sharedvalue import SharedVariable
 from pytensor.graph.basic import Variable, equal_computations
 from pytensor.tensor import TensorVariable
 
-from pytensor_ml.optim.base import Parameter, UpdateRule, Updates, require_unique_state_names
+from pytensor_ml.optim.base import (
+    Gradients,
+    Parameter,
+    Steps,
+    Transform,
+    Updates,
+    require_unique_state_names,
+)
 from pytensor_ml.pytensorf import (
     collect_clock_updates,
     collect_data_inputs,
@@ -29,12 +36,12 @@ def _inconsistent_update(updates: Updates, variable: SharedVariable, new_value: 
 
 def compile_train(
     loss: TensorVariable,
-    rule: UpdateRule,
+    rule: Transform,
     *,
     parameters: Sequence[Parameter] | None = None,
     inputs: Sequence[Variable] | None = None,
     extra_outputs: Sequence[Variable] | None = None,
-    extra_updates: Updates | None = None,
+    extra_updates: dict[SharedVariable, TensorVariable] | None = None,
     compile_kwargs: dict | None = None,
 ) -> Function:
     """
@@ -49,8 +56,8 @@ def compile_train(
     ----------
     loss : TensorVariable
         Scalar loss to minimize.
-    rule : UpdateRule
-        A configured optimizer ``(loss_or_gradients, parameters) -> Updates``, e.g. ``adam(1e-3)``.
+    rule : Transform
+        A configured optimizer ``(loss_gradients_or_updates, parameters) -> Updates``, e.g. ``adam(1e-3)``.
     parameters : sequence of shared tensor variable, optional
         Parameters to optimize. Collected from ``loss`` with :func:`collect_differentiable_params` when
         omitted, so parameters the loss detaches with a stop-gradient are left alone. A detached parameter
@@ -125,7 +132,14 @@ def compile_train(
     if inputs is None:
         inputs = collect_data_inputs([loss, *extra_outputs, *extra_updates.values()])
 
-    updates: Updates = dict(rule(loss, parameters))
+    result = rule(loss, parameters)
+    if isinstance(result, Gradients):
+        raise ValueError(
+            "The rule returned gradients rather than the steps to take, so every parameter would move "
+            "along its gradient -- uphill, away from a minimum. Put an optimizer such as `adam(1e-3)` in "
+            "the chain, or `scale(-learning_rate)` to descend along the gradients yourself."
+        )
+    updates: Updates = Steps(result)
 
     # Assigned per key rather than merged: SupportsKeysAndGetItem is invariant in its key type, so
     # dict.update rejects the narrower NonTrainableParameter keys.

@@ -168,8 +168,8 @@ Every public entrypoint carries an ``Examples`` section. Three rules:
 
     Examples
     --------
-    Bound the whole update rather than each coordinate, so the direction of the step survives and
-    only its magnitude is capped:
+    Bound the gradient before the rule sees it, so one exploding batch cannot poison the moment
+    estimates for every step after it:
 
     .. code-block:: python
 
@@ -182,7 +182,7 @@ Every public entrypoint carries an ``Examples`` section. Three rules:
         X = Input("X", shape=(None, 4))
         loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
 
-        step = compile_train(loss, chain(adam(1e-3), clip_by_global_norm(1.0)))
+        step = compile_train(loss, chain(clip_by_global_norm(1.0), adam(1e-3)))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
 
 Modern Python

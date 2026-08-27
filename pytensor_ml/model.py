@@ -95,7 +95,7 @@ class Model:
 
     def compile_train(
         self,
-        rule: optim.UpdateRule,
+        rule: optim.Transform,
         loss_fn: Loss | None = None,
         ndim_out: int = 1,
         compile_kwargs: dict | None = None,
@@ -114,7 +114,7 @@ class Model:
 
         Parameters
         ----------
-        rule : UpdateRule
+        rule : Transform
             A configured optimizer, e.g. ``adam(1e-3)``.
         loss_fn : Loss, optional
             Callable ``(target, prediction) -> scalar loss``. Mutually exclusive with ``loss``.

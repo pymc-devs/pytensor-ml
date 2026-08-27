@@ -2,10 +2,10 @@ from collections.abc import Callable, Sequence
 
 from pytensor_ml.optim.base import (
     LearningRate,
-    LossOrGradients,
+    LossGradientsOrUpdates,
     Parameter,
     Rate,
-    UpdateRule,
+    Transform,
     Updates,
     counter,
     reuses_state,
@@ -41,7 +41,7 @@ def _at_learning_rate(
 
 def sgd(
     learning_rate: LearningRate = 0.01, momentum: float = 0.0, nesterov: bool = False
-) -> UpdateRule:
+) -> Transform:
     """
     Stochastic gradient descent, optionally with momentum.
 
@@ -78,11 +78,13 @@ def sgd(
     """
 
     @reuses_state
-    def rule(loss_or_gradients: LossOrGradients, parameters: Sequence[Parameter]) -> Updates:
+    def rule(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
         def build_updates(rate: Rate) -> Updates:
             if not momentum:
-                return sgd_updates(loss_or_gradients, parameters, learning_rate=rate)
-            updates = sgd_updates(loss_or_gradients, parameters, learning_rate=1.0)
+                return sgd_updates(loss_gradients_or_updates, parameters, learning_rate=rate)
+            updates = sgd_updates(loss_gradients_or_updates, parameters, learning_rate=1.0)
             updates = trace(momentum, nesterov)(updates, parameters)
             return scale(rate)(updates, parameters)
 
@@ -97,7 +99,7 @@ def adam(
     beta2: float = 0.999,
     epsilon: float = 1e-8,
     amsgrad: bool = False,
-) -> UpdateRule:
+) -> Transform:
     """
     Adam optimizer. See :func:`~pytensor_ml.optim.rules.adam_updates` for the update rule.
 
@@ -125,12 +127,14 @@ def adam(
     """
 
     @reuses_state
-    def rule(loss_or_gradients: LossOrGradients, parameters: Sequence[Parameter]) -> Updates:
+    def rule(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
         return _at_learning_rate(
             learning_rate,
             "adam",
             lambda rate: adam_updates(
-                loss_or_gradients,
+                loss_gradients_or_updates,
                 parameters,
                 learning_rate=rate,
                 beta1=beta1,
@@ -151,7 +155,7 @@ def adamw(
     epsilon: float = 1e-8,
     amsgrad: bool = False,
     mask: Callable[[Parameter], bool] | None = None,
-) -> UpdateRule:
+) -> Transform:
     """
     AdamW optimizer (Adam with decoupled weight decay). See
     :func:`~pytensor_ml.optim.rules.adamw_updates`.
@@ -180,12 +184,14 @@ def adamw(
     """
 
     @reuses_state
-    def rule(loss_or_gradients: LossOrGradients, parameters: Sequence[Parameter]) -> Updates:
+    def rule(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
         return _at_learning_rate(
             learning_rate,
             "adamw",
             lambda rate: adamw_updates(
-                loss_or_gradients,
+                loss_gradients_or_updates,
                 parameters,
                 learning_rate=rate,
                 weight_decay=weight_decay,
@@ -205,7 +211,7 @@ def nadam(
     beta1: float = 0.9,
     beta2: float = 0.999,
     epsilon: float = 1e-8,
-) -> UpdateRule:
+) -> Transform:
     """
     Nadam optimizer (Adam with Nesterov momentum). See
     :func:`~pytensor_ml.optim.rules.nadam_updates`.
@@ -234,12 +240,14 @@ def nadam(
     """
 
     @reuses_state
-    def rule(loss_or_gradients: LossOrGradients, parameters: Sequence[Parameter]) -> Updates:
+    def rule(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
         return _at_learning_rate(
             learning_rate,
             "nadam",
             lambda rate: nadam_updates(
-                loss_or_gradients,
+                loss_gradients_or_updates,
                 parameters,
                 learning_rate=rate,
                 beta1=beta1,
@@ -256,7 +264,7 @@ def adamax(
     beta1: float = 0.9,
     beta2: float = 0.999,
     epsilon: float = 1e-8,
-) -> UpdateRule:
+) -> Transform:
     """
     AdaMax optimizer (Adam with an infinity-norm denominator). See
     :func:`~pytensor_ml.optim.rules.adamax_updates`.
@@ -285,12 +293,14 @@ def adamax(
     """
 
     @reuses_state
-    def rule(loss_or_gradients: LossOrGradients, parameters: Sequence[Parameter]) -> Updates:
+    def rule(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
         return _at_learning_rate(
             learning_rate,
             "adamax",
             lambda rate: adamax_updates(
-                loss_or_gradients,
+                loss_gradients_or_updates,
                 parameters,
                 learning_rate=rate,
                 beta1=beta1,
@@ -308,7 +318,7 @@ def rprop(
     eta_plus: float = 1.2,
     step_min: float = 1e-6,
     step_max: float = 50.0,
-) -> UpdateRule:
+) -> Transform:
     """
     Rprop optimizer (resilient backpropagation). See :func:`~pytensor_ml.optim.rules.rprop_updates`.
 
@@ -337,9 +347,11 @@ def rprop(
     _require_numeric_learning_rate(learning_rate)
 
     @reuses_state
-    def rule(loss_or_gradients: LossOrGradients, parameters: Sequence[Parameter]) -> Updates:
+    def rule(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
         return rprop_updates(
-            loss_or_gradients,
+            loss_gradients_or_updates,
             parameters,
             learning_rate=learning_rate,
             eta_minus=eta_minus,
@@ -357,7 +369,7 @@ def rmsprop(
     momentum: float = 0.0,
     epsilon: float = 1e-8,
     centered: bool = False,
-) -> UpdateRule:
+) -> Transform:
     """
     RMSProp optimizer. See :func:`~pytensor_ml.optim.rules.rmsprop_updates`.
 
@@ -385,12 +397,14 @@ def rmsprop(
     """
 
     @reuses_state
-    def rule(loss_or_gradients: LossOrGradients, parameters: Sequence[Parameter]) -> Updates:
+    def rule(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
         return _at_learning_rate(
             learning_rate,
             "rmsprop",
             lambda rate: rmsprop_updates(
-                loss_or_gradients,
+                loss_gradients_or_updates,
                 parameters,
                 learning_rate=rate,
                 rho=rho,
@@ -403,7 +417,7 @@ def rmsprop(
     return rule
 
 
-def adagrad(learning_rate: LearningRate = 0.01, epsilon: float = 1e-8) -> UpdateRule:
+def adagrad(learning_rate: LearningRate = 0.01, epsilon: float = 1e-8) -> Transform:
     """
     AdaGrad optimizer. See :func:`~pytensor_ml.optim.rules.adagrad_updates`.
 
@@ -431,12 +445,14 @@ def adagrad(learning_rate: LearningRate = 0.01, epsilon: float = 1e-8) -> Update
     """
 
     @reuses_state
-    def rule(loss_or_gradients: LossOrGradients, parameters: Sequence[Parameter]) -> Updates:
+    def rule(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
         return _at_learning_rate(
             learning_rate,
             "adagrad",
             lambda rate: adagrad_updates(
-                loss_or_gradients, parameters, learning_rate=rate, epsilon=epsilon
+                loss_gradients_or_updates, parameters, learning_rate=rate, epsilon=epsilon
             ),
         )
 
@@ -445,7 +461,7 @@ def adagrad(learning_rate: LearningRate = 0.01, epsilon: float = 1e-8) -> Update
 
 def adadelta(
     learning_rate: LearningRate = 1.0, rho: float = 0.9, epsilon: float = 1e-8
-) -> UpdateRule:
+) -> Transform:
     """
     AdaDelta optimizer. See :func:`~pytensor_ml.optim.rules.adadelta_updates`.
 
@@ -473,12 +489,14 @@ def adadelta(
     """
 
     @reuses_state
-    def rule(loss_or_gradients: LossOrGradients, parameters: Sequence[Parameter]) -> Updates:
+    def rule(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
         return _at_learning_rate(
             learning_rate,
             "adadelta",
             lambda rate: adadelta_updates(
-                loss_or_gradients, parameters, learning_rate=rate, rho=rho, epsilon=epsilon
+                loss_gradients_or_updates, parameters, learning_rate=rate, rho=rho, epsilon=epsilon
             ),
         )
 

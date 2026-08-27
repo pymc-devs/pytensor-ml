@@ -1,7 +1,6 @@
 from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from functools import wraps
-from typing import overload
 
 import numpy as np
 import pytensor
@@ -21,22 +20,80 @@ type Parameter = TensorSharedVariable
 # What every rule accepts first: either a scalar loss to differentiate, or gradients already computed.
 type LossOrGradients = TensorVariable | Sequence[TensorVariable]
 
-# Pytensor's native `updates` contract, and the single currency every rule and transform here speaks: it
-# carries the next parameter values *and* the next optimizer-state values in one identity-keyed dict.
-Updates = dict[SharedVariable, TensorVariable]
 
-Transform = Callable[[Updates, Sequence[Parameter]], Updates]
+class Updates(dict[SharedVariable, TensorVariable]):
+    """
+    Pytensor's native ``updates`` contract, and the single currency every transform here speaks.
+
+    Carries the next parameter values *and* the next optimizer-state values in one identity-keyed
+    mapping, so a step and the momentum that produced it travel together. Every transform reads what it
+    needs as ``updates[parameter] - parameter`` and writes back a new value for the parameter, which is
+    what lets one be written without knowing what produced its input.
+
+    What that difference *means* depends on where in a chain the transform sits, so the two positions are
+    distinguished by :class:`Gradients` and :class:`Steps` rather than by a bare mapping. Write a result
+    with :meth:`replacing` rather than ``|``, which returns a bare ``dict`` and would silently widen a
+    transform's own output back to an unplaced mapping.
+    """
+
+    def replacing(self, changes: dict[SharedVariable, TensorVariable]) -> "Updates":
+        """
+        Return these updates with ``changes`` written over them, in the same space.
+
+        Parameters
+        ----------
+        changes : dict mapping shared variable to TensorVariable
+            New values to write, overriding any entry already present for the same variable.
+
+        Returns
+        -------
+        updates : Updates
+            A new updates dict of the same class, so a transform's output stays placed.
+        """
+        return type(self)({**self, **changes})
+
+    def copy(self) -> "Updates":
+        return type(self)(self)
+
+
+class Gradients(Updates):
+    r"""
+    Updates carrying gradients: ``updates[parameter] - parameter`` is the gradient :math:`g` itself.
+
+    What :func:`to_updates` produces from a loss, and what everything ahead of the first rule in a chain
+    sees. A clip placed here bounds the gradient itself, so a spike never reaches the moment estimates.
+    """
+
+
+class Steps(Updates):
+    """
+    Updates carrying steps: ``updates[parameter] - parameter`` is the move a rule decided on.
+
+    What every rule returns, and what everything after it in a chain sees. A clip placed here bounds the
+    step an adaptive rule already normalized, which is a different and usually weaker guarantee.
+    """
+
+
+# What every transform accepts first. A loss or gradients seed a fresh `Gradients`; an updates dict from
+# an earlier stage passes through as whatever it already is. A bare dict is admitted because a
+# hand-written transform is free to build one.
+type LossGradientsOrUpdates = LossOrGradients | dict[SharedVariable, TensorVariable]
+
+Transform = Callable[[LossGradientsOrUpdates, Sequence[Parameter]], Updates]
 """
-A chainable step transformer, reading an updates dict and returning a new one.
+What every optimizer, clip, and schedule in this module is: a callable taking a loss, gradients, or an
+updates dict, along with the parameters, and returning the updates dict that moves them.
 
-Transforms work in step space -- ``updates[parameter] - parameter`` -- so one can be written without
-knowing which rule produced the step it is adjusting.
+One type covers all of them: ``adam(1e-3)`` and ``clip_by_global_norm(1.0)`` share this signature and so
+compose in either order, and :func:`chain` folds them left to right. What distinguishes them is only what
+each does to the difference it reads, and position decides whether that difference is a gradient or a
+step.
 
 Examples
 --------
 Write one as a plain function and :func:`chain` accepts it wherever a built-in transform goes. The
 updates dict also carries optimizer state and training clocks, so touch only the entries for
-``parameters`` -- rewriting the rest would halve a clock's advance as readily as a step:
+``parameters`` -- rewriting the rest would halve a clock's advance as readily as a step.:
 
 .. code-block:: python
 
@@ -44,11 +101,12 @@ updates dict also carries optimizer state and training clocks, so touch only the
 
     from pytensor_ml.layers import Input, Linear
     from pytensor_ml.loss import SquaredError, supervised_loss
-    from pytensor_ml.optim import adam, chain, compile_train
+    from pytensor_ml.optim import adam, chain, compile_train, to_updates
 
 
-    def halve_every_step(updates, parameters):
-        halved = dict(updates)
+    def halve_every_step(loss_gradients_or_updates, parameters):
+        updates = to_updates(loss_gradients_or_updates, parameters)
+        halved = updates.copy()
         for parameter in parameters:
             halved[parameter] = parameter + 0.5 * (updates[parameter] - parameter)
         return halved
@@ -58,36 +116,6 @@ updates dict also carries optimizer state and training clocks, so touch only the
     loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
 
     step = compile_train(loss, chain(adam(1e-3), halve_every_step))
-    loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
-"""
-
-UpdateRule = Callable[[LossOrGradients, Sequence[Parameter]], Updates]
-"""
-What every optimizer is: a callable taking a loss (or gradients) and the parameters, returning the
-updates dict that moves them.
-
-Examples
---------
-Anything matching the signature is a rule, so a hand-written one composes with the rest of the module:
-
-.. code-block:: python
-
-    import numpy as np
-
-    from pytensor_ml.layers import Input, Linear
-    from pytensor_ml.loss import SquaredError, supervised_loss
-    from pytensor_ml.optim import chain, clip_by_global_norm, compile_train, get_gradients
-
-
-    def plain_descent(loss_or_gradients, parameters):
-        gradients = get_gradients(loss_or_gradients, parameters)
-        return {p: p - 0.01 * gradient for p, gradient in zip(parameters, gradients)}
-
-
-    X = Input("X", shape=(None, 4))
-    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
-
-    step = compile_train(loss, chain(plain_descent, clip_by_global_norm(1.0)))
     loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
 """
 
@@ -248,6 +276,130 @@ def get_gradients(
             "check that the loss is meant to depend on them: a term that differentiates away, such as an "
             "output bias under a second derivative, is the usual cause."
         ) from error
+
+
+def to_updates(
+    loss_gradients_or_updates: LossGradientsOrUpdates,
+    parameters: Sequence[Parameter],
+) -> Updates:
+    r"""
+    Return ``loss_gradients_or_updates`` as an updates dict, differentiating a loss if that is what it is.
+
+    The first line of every transform, which is what lets one accept a loss, gradients, or an earlier
+    stage's output through a single argument. A loss or a list of gradients seeds a fresh
+    :class:`Gradients` as :math:`\{p: p + g\}`, so the gradient :math:`g` is recoverable as
+    ``updates[parameter] - parameter`` by exactly the arithmetic a transform already does to read a step.
+
+    An updates dict is returned as the *same object*, not a copy, so a transform must write its result
+    with :meth:`Updates.replacing` or into a :meth:`Updates.copy` rather than assigning into what this
+    returns -- mutating it in place would reach back into the dict the previous stage still holds.
+
+    The sign is positive rather than negative so that a bound written for a step means the same thing
+    written for a gradient: ``clip_by_value(-0.1, 0.1)`` clips :math:`g` into that interval, not
+    :math:`-g`.
+
+    Parameters
+    ----------
+    loss_gradients_or_updates : TensorVariable, sequence of TensorVariable, or Updates
+        A scalar loss to differentiate, precomputed gradients one per parameter, or an updates dict an
+        earlier transform produced.
+    parameters : sequence of shared tensor variable
+        Parameters the updates are keyed by, in the order gradients are given in.
+
+    Returns
+    -------
+    updates : Updates
+        A loss or gradients as a new :class:`Gradients`, a bare dict as an unplaced :class:`Updates`, and
+        an updates dict as itself, keeping whichever space it already carries.
+
+    Examples
+    --------
+    Open a hand-written transform with it and the transform composes in any position, reading gradients
+    at the front of a chain and steps behind a rule, with no branch of its own:
+
+    .. code-block:: python
+
+        from pytensor_ml.optim import to_updates
+
+
+        def halve(loss_gradients_or_updates, parameters):
+            updates = to_updates(loss_gradients_or_updates, parameters)
+            halved = updates.copy()
+            for parameter in parameters:
+                halved[parameter] = parameter + 0.5 * (updates[parameter] - parameter)
+            return halved
+    """
+    if isinstance(loss_gradients_or_updates, Updates):
+        return loss_gradients_or_updates
+    if isinstance(loss_gradients_or_updates, dict):
+        # A hand-written transform is free to build a bare dict, which says nothing about where it sits.
+        # Leave it unplaced rather than guessing: the checks that read the space reject a definite mismatch
+        # only, so an unplaced mapping passes every one of them rather than tripping the wrong one.
+        return Updates(loss_gradients_or_updates)
+
+    gradients = get_gradients(loss_gradients_or_updates, parameters)
+    return Gradients(
+        {parameter: parameter + gradient for parameter, gradient in zip(parameters, gradients)}
+    )
+
+
+def gradients_to_descend(
+    loss_gradients_or_updates: LossGradientsOrUpdates,
+    parameters: Sequence[Parameter],
+    rule_name: str,
+) -> tuple[Updates, list[TensorVariable]]:
+    """
+    Return the updates a rule was handed and the gradients it descends along.
+
+    The opening line of every rule. Raises when handed :class:`Steps`, which a rule cannot use: it negates
+    what it reads, so descending along a step another rule already chose would move the parameters uphill.
+
+    Parameters
+    ----------
+    loss_gradients_or_updates : TensorVariable, sequence of TensorVariable, or Updates
+        Whatever the rule was called with.
+    parameters : sequence of shared tensor variable
+        Parameters to read gradients for, in the order the result is returned in.
+    rule_name : str
+        The rule's own name, used to say which one was misplaced.
+
+    Returns
+    -------
+    incoming : Updates
+        The input as an updates dict, carrying any optimizer state an earlier transform wrote.
+    gradients : list of TensorVariable
+        One gradient per parameter, in the order of ``parameters``.
+    """
+    incoming = to_updates(loss_gradients_or_updates, parameters)
+    if isinstance(incoming, Steps):
+        raise ValueError(
+            f"{rule_name} was given the step another rule already produced, rather than gradients. A rule "
+            "descends along what it reads, so it would negate that step and move the parameters uphill. "
+            "Keep one rule in a chain and shape its step with `scale`, `trace`, or a clip after it."
+        )
+    return incoming, steps_of(incoming, parameters)
+
+
+def steps_of(updates: Updates, parameters: Sequence[Parameter]) -> list[TensorVariable]:
+    """
+    Return the amount each parameter's entry moves it by.
+
+    A gradient or a step according to which space ``updates`` carries; see :class:`Gradients` and
+    :class:`Steps`.
+
+    Parameters
+    ----------
+    updates : Updates
+        The updates dict to read.
+    parameters : sequence of shared tensor variable
+        Parameters to read, in the order the result is returned in.
+
+    Returns
+    -------
+    steps : list of TensorVariable
+        ``updates[parameter] - parameter``, one per parameter.
+    """
+    return [updates[parameter] - parameter for parameter in parameters]
 
 
 def _unreachable_parameter_names(
@@ -412,51 +564,40 @@ def require_unique_state_names(updates: Updates) -> None:
         seen.add(name)
 
 
-@overload
-def chain(head: UpdateRule, *rest: Transform) -> UpdateRule: ...
-
-
-@overload
-def chain(head: Transform, *rest: Transform) -> Transform: ...
-
-
-def chain(head, *rest: Transform):
+def chain(*transforms: Transform) -> Transform:
     """
-    Compose an update rule or transform with the transforms that follow it, left to right.
+    Compose transforms left to right, each reading what the one before it produced.
 
-    The head decides what the result is. Given a rule, the result is a rule: it differentiates the loss and
-    threads the updates through each transform, so ``adam`` then a clip then a scale is one value to pass to
-    :func:`~pytensor_ml.optim.train.compile_train` or to wrap in a guard. Given a transform, the result is a
-    transform, composing in step space for a rule to be pointed at later.
+    Every argument has the same type, so a clip composes ahead of a rule as readily as behind it, and the
+    two mean different things. Ahead of the rule the clip sees gradients, so a spike is bounded before it
+    reaches the moment estimates; behind it the clip sees the step the rule already decided on, which an
+    adaptive rule has normalized to roughly its learning rate whatever the gradient was.
 
     .. code-block:: python
 
-        rule = chain(adam(1e-3), clip_by_global_norm(1.0), scale(0.5))
-        step = compile_train(loss, rule)
+        stop_the_spike = chain(clip_by_global_norm(1.0), adam(1e-3))
+        bound_the_move = chain(adam(1e-3), clip_by_global_norm(1.0))
 
-        post_process = chain(clip_by_global_norm(1.0), scale(0.5))
-        step = compile_train(loss, chain(adam(1e-3), post_process))
+    A chain is itself a transform, so one composes into another and the result is flat.
 
     The composed callable owns one set of optimizer-state buffers however many times it is invoked, so two
     training functions compiled from one chain share its momentum rather than each allocating their own.
 
     Parameters
     ----------
-    head : UpdateRule or Transform
-        What runs first, and what the result is. A rule such as ``adam(1e-3)`` reads a loss; a transform
-        reads an updates dict.
-    *rest : Transform
-        Transforms applied in order to whatever the head produces.
+    *transforms : Transform
+        Applied in order. The first reads whatever the chain is called with -- a loss, gradients, or an
+        updates dict -- and each one after it reads the previous one's output.
 
     Returns
     -------
-    chained : UpdateRule or Transform
-        A callable matching the head, applying every argument in sequence.
+    chained : Transform
+        A transform applying every argument in sequence.
 
     Examples
     --------
-    Compose a rule with the transforms that follow it. The head decides the result: given a rule, the
-    whole chain is a rule, applied left to right:
+    Clip the gradients before the rule sees them, which is what bounds an exploding gradient rather than
+    the step it produced:
 
     .. code-block:: python
 
@@ -464,19 +605,31 @@ def chain(head, *rest: Transform):
 
         from pytensor_ml.layers import Input, Linear
         from pytensor_ml.loss import SquaredError, supervised_loss
-        from pytensor_ml.optim import adam, chain, clip_by_global_norm, compile_train, scale
+        from pytensor_ml.optim import adam, chain, clip_by_global_norm, compile_train
 
         X = Input("X", shape=(None, 4))
         loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
 
-        step = compile_train(loss, chain(adam(1e-3), clip_by_global_norm(1.0), scale(0.5)))
+        step = compile_train(loss, chain(clip_by_global_norm(1.0), adam(1e-3)))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
+
+    Put a transform after the rule to act on the step instead, which is where a rate or a decay belongs:
+
+    .. code-block:: python
+
+        from pytensor_ml.optim import adam, chain, clip_by_global_norm, scale
+
+        rule = chain(clip_by_global_norm(1.0), adam(1.0), scale(1e-3))
     """
+    if not transforms:
+        raise ValueError("chain needs at least one transform.")
 
     @reuses_state
-    def combined(loss_gradients_or_updates, parameters: Sequence[Parameter]) -> Updates:
-        updates = head(loss_gradients_or_updates, parameters)
-        for transform in rest:
+    def combined(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
+        updates = transforms[0](loss_gradients_or_updates, parameters)
+        for transform in transforms[1:]:
             updates = transform(updates, parameters)
         return updates
 
