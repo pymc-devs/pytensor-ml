@@ -30,10 +30,10 @@ from pytensor_ml.optim import (
     scale,
     scale_by_schedule,
     sgd,
+    state_for,
     to_updates,
     trace,
 )
-from pytensor_ml.optim.base import state_for
 from pytensor_ml.params import trainable
 from pytensor_ml.pytensorf import function
 
