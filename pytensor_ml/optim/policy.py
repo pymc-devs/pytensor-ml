@@ -3,6 +3,8 @@ from collections.abc import Sequence
 import numpy as np
 import pytensor.tensor as pt
 
+from pytensor.tensor import TensorVariable
+
 from pytensor_ml.optim.base import (
     Gradients,
     LossGradientsOrUpdates,
@@ -13,6 +15,7 @@ from pytensor_ml.optim.base import (
     reuses_state,
     scalar_state,
 )
+from pytensor_ml.optim.checks import checked_scalar
 
 
 def reduce_on_plateau(
@@ -20,12 +23,12 @@ def reduce_on_plateau(
     scale: Parameter,
     *,
     factor: float = 0.1,
-    patience: int = 10,
-    cooldown: int = 0,
+    patience: int | TensorVariable = 10,
+    cooldown: int | TensorVariable = 0,
     rtol: float = 1e-4,
     atol: float = 0.0,
     min_scale: float = 0.0,
-    accumulation_size: int = 1,
+    accumulation_size: int | TensorVariable = 1,
     namespace: str = "plateau",
 ) -> Transform:
     r"""
@@ -43,6 +46,7 @@ def reduce_on_plateau(
     the loss it sees is whatever expression the rule is given. A per-batch loss is a noisy signal for it;
     ``accumulation_size`` is the answer, deciding on the mean of a window rather than on one batch. Set it
     to the number of steps in an epoch to get torch's cadence, on a better estimate than a single batch.
+    That count may be shape-derived, so ``X.shape[0]`` works as readily as a literal.
 
     It decides from the loss itself rather than from an updates dict, which is the one thing in this module
     a :func:`~pytensor_ml.optim.base.chain` cannot hand along. So it wraps a chain rather than sitting
@@ -57,9 +61,9 @@ def reduce_on_plateau(
         The multiplier this policy owns. Nothing else may write it.
     factor : float
         Multiplier applied on a cut, in the open interval (0, 1). Default 0.1.
-    patience : int
+    patience : int or TensorVariable
         Steps without improvement before a cut. Default 10.
-    cooldown : int
+    cooldown : int or TensorVariable
         Steps to wait after a cut before counting again, during which no step counts as bad. Without one,
         the counter resets on the cut and immediately starts toward the next. Default 0.
     rtol : float
@@ -73,7 +77,7 @@ def reduce_on_plateau(
         Prefix for the history this policy allocates, as ``"{namespace}/best_loss"`` and so on. Give two
         policies in one graph different namespaces so their histories stay distinct at the serialization
         boundary. Default ``"plateau"``.
-    accumulation_size : int
+    accumulation_size : int or TensorVariable
         Losses to average before deciding anything. Nothing advances mid-window -- not the count, not the
         cooldown, not the best seen. Default 1, which decides on every step from that step's loss.
 
@@ -111,15 +115,24 @@ def reduce_on_plateau(
         raise ValueError(f"rtol and atol must be non-negative, got rtol={rtol}, atol={atol}.")
     if rtol > 1.0:
         raise ValueError(f"rtol is a relative tolerance and must be at most 1.0, got {rtol}.")
-    if patience < 1:
-        raise ValueError(f"patience is a number of steps and must be at least 1, got {patience}.")
-    if cooldown < 0:
-        raise ValueError(f"cooldown is a number of steps and must be non-negative, got {cooldown}.")
-    if accumulation_size < 1:
-        raise ValueError(
-            f"accumulation_size is a number of losses to average and must be at least 1, got "
-            f"{accumulation_size}."
-        )
+    patience = checked_scalar(
+        pt.as_tensor_variable(patience),
+        name="patience",
+        complaint="is a number of steps and must be at least 1",
+        condition_fn=lambda value: value >= 1,
+    )
+    cooldown = checked_scalar(
+        pt.as_tensor_variable(cooldown),
+        name="cooldown",
+        complaint="is a number of steps and must be non-negative",
+        condition_fn=lambda value: value >= 0,
+    )
+    accumulation_size = checked_scalar(
+        pt.as_tensor_variable(accumulation_size),
+        name="accumulation_size",
+        complaint="is a number of losses to average and must be at least 1",
+        condition_fn=lambda value: value >= 1,
+    )
 
     @reuses_state
     def policy(

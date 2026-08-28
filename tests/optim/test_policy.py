@@ -224,3 +224,80 @@ def test_the_decision_is_made_on_the_window_mean_not_its_last_loss():
     # Deciding on the window's last loss would record 0.0 as the best seen, and every later window would
     # then have an unreachable target to beat.
     assert float(best_loss.get_value()) == pytest.approx(2.0, rel=RTOL)
+
+
+@pytest.mark.parametrize(
+    "kwargs, complaint",
+    [
+        ({"patience": 0}, "patience is a number of steps"),
+        ({"patience": pt.as_tensor_variable(2) * 0}, "patience is a number of steps"),
+        ({"cooldown": -1}, "cooldown is a number of steps"),
+        ({"accumulation_size": 0}, "accumulation_size is a number of losses"),
+    ],
+    ids=["patience", "patience-folded", "cooldown", "accumulation_size"],
+)
+def test_a_count_that_folds_to_a_constant_is_refused_at_build_time(kwargs, complaint):
+    """A count written as arithmetic on constants still folds, so it is checked like a bare one rather
+    than deferred to the graph."""
+    with pytest.raises(ValueError, match=complaint):
+        reduce_on_plateau(adam(1e-3), scalar_state("scale", fill_value=1.0), **kwargs)
+
+
+def test_a_count_taken_from_a_shape_behaves_like_its_literal_equivalent():
+    """A count is naturally written as arithmetic on a shape -- ``10 * X.shape[0]`` for ten epochs --
+    which has no value until the function runs. It has to reach the graph rather than be refused for
+    failing a comparison that cannot be made yet."""
+    X = pt.matrix("X")
+    batch = np.zeros((1, 3), dtype=config.floatX)
+
+    scales = []
+    for patience in (2, 2 * X.shape[0]):
+        parameter = trainable(np.zeros(3, dtype=config.floatX), name="w")
+        scale = scalar_state(f"scale_{patience}", fill_value=1.0)
+        rule = reduce_on_plateau(adam(scale * 1e-3), scale, patience=patience, factor=0.1)
+        step = compile_train(((parameter - X.sum()) ** 2).sum(), rule, inputs=[X])
+        for _ in range(9):
+            step(batch)
+        scales.append(float(scale.get_value()))
+
+    assert scales[0] == scales[1]
+
+
+@pytest.mark.parametrize(
+    ("count_name", "count_of", "complaint"),
+    [
+        ("patience", lambda X: X.shape[0], "patience is a number of steps"),
+        ("cooldown", lambda X: X.shape[0] - 1, "cooldown is a number of steps"),
+        ("accumulation_size", lambda X: X.shape[0], "accumulation_size is a number of losses"),
+    ],
+    ids=["patience", "cooldown", "accumulation_size"],
+)
+def test_a_shape_derived_count_is_checked_when_the_step_runs(count_name, count_of, complaint):
+    """The build-time check cannot fire on a count with no value yet, so it travels with the graph. The
+    jax backend drops assertions, which is why this is the best that can be offered rather than a
+    guarantee."""
+    X = pt.matrix("X")
+    parameter = trainable(np.zeros(3, dtype=config.floatX), name="w")
+    scale = scalar_state(f"runtime_scale_{count_name}", fill_value=1.0)
+    rule = reduce_on_plateau(adam(scale * 1e-3), scale, factor=0.1, **{count_name: count_of(X)})
+    step = compile_train(((parameter - X.sum()) ** 2).sum(), rule, inputs=[X])
+
+    with pytest.raises(ValueError, match=complaint):
+        step(np.zeros((0, 3), dtype=config.floatX))
+
+
+@pytest.mark.parametrize(
+    "patience",
+    [
+        pt.matrix("X").shape,
+        pt.vector("v", dtype="int64"),
+        np.array([2, 3]),
+        pt.matrix("m", dtype="int64"),
+    ],
+    ids=["shape-tuple", "vector", "numpy-array", "matrix"],
+)
+def test_a_count_that_is_not_a_single_number_is_refused(patience):
+    """``X.shape`` for ``X.shape[0]`` is the easy slip. Left to the graph it surfaces as a bare
+    ``AssertionError`` from a scalar conversion, naming neither the argument nor the mistake."""
+    with pytest.raises(ValueError, match="patience must be a single number"):
+        reduce_on_plateau(adam(1e-3), scalar_state("scale", fill_value=1.0), patience=patience)
