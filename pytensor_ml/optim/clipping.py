@@ -2,6 +2,8 @@ from collections.abc import Sequence
 
 import pytensor.tensor as pt
 
+from pytensor.tensor import TensorVariable
+
 from pytensor_ml.optim.base import (
     LossGradientsOrUpdates,
     Parameter,
@@ -10,9 +12,10 @@ from pytensor_ml.optim.base import (
     steps_of,
     to_updates,
 )
+from pytensor_ml.optim.checks import checked_scalar
 
 
-def clip_by_global_norm(max_norm: float = 1.0) -> Transform:
+def clip_by_global_norm(max_norm: float | TensorVariable = 1.0) -> Transform:
     r"""
     Rescale everything by a single factor so its global L2 norm does not exceed ``max_norm``.
 
@@ -27,7 +30,7 @@ def clip_by_global_norm(max_norm: float = 1.0) -> Transform:
 
     Parameters
     ----------
-    max_norm : float
+    max_norm : float or TensorVariable
         Maximum allowed global norm. Default 1.0.
 
     Returns
@@ -64,13 +67,20 @@ def clip_by_global_norm(max_norm: float = 1.0) -> Transform:
         rule = chain(adam(1e-3), clip_by_global_norm(0.01))
     """
 
+    bound = checked_scalar(
+        pt.as_tensor_variable(max_norm),
+        name="max_norm",
+        complaint="is a norm to clip to and must be positive",
+        condition_fn=lambda value: value > 0.0,
+    )
+
     def transform(
         loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
     ) -> Updates:
         updates = to_updates(loss_gradients_or_updates, parameters)
         steps = steps_of(updates, parameters)
         global_norm = pt.sqrt(sum(pt.sum(step**2) for step in steps))
-        clip_scale = pt.minimum(1.0, max_norm / (global_norm + 1e-8))
+        clip_scale = pt.minimum(1.0, bound / (global_norm + 1e-8))
         return updates.replacing(
             {parameter: parameter + clip_scale * step for parameter, step in zip(parameters, steps)}
         )
@@ -78,7 +88,9 @@ def clip_by_global_norm(max_norm: float = 1.0) -> Transform:
     return transform
 
 
-def clip_by_value(min_value: float = -1.0, max_value: float = 1.0) -> Transform:
+def clip_by_value(
+    min_value: float | TensorVariable = -1.0, max_value: float | TensorVariable = 1.0
+) -> Transform:
     """
     Clamp every value element-wise into ``[min_value, max_value]``.
 
@@ -87,9 +99,9 @@ def clip_by_value(min_value: float = -1.0, max_value: float = 1.0) -> Transform:
 
     Parameters
     ----------
-    min_value : float
+    min_value : float or TensorVariable
         Lower bound. Default -1.0.
-    max_value : float
+    max_value : float or TensorVariable
         Upper bound. Default 1.0.
 
     Returns
@@ -117,13 +129,23 @@ def clip_by_value(min_value: float = -1.0, max_value: float = 1.0) -> Transform:
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
 
+    # The lower bound is established as a scalar first, because comparing the two while either could
+    # still be an array gives the ordering check a non-scalar condition to carry.
+    lower = checked_scalar(pt.as_tensor_variable(min_value), name="min_value")
+    upper = checked_scalar(
+        pt.as_tensor_variable(max_value),
+        name="max_value",
+        complaint="is the upper bound and must not be below min_value",
+        condition_fn=lambda value: value >= lower,
+    )
+
     def transform(
         loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
     ) -> Updates:
         updates = to_updates(loss_gradients_or_updates, parameters)
         return updates.replacing(
             {
-                parameter: parameter + pt.clip(step, min_value, max_value)
+                parameter: parameter + pt.clip(step, lower, upper)
                 for parameter, step in zip(parameters, steps_of(updates, parameters))
             }
         )
