@@ -57,6 +57,16 @@ Guards and policies
 Schedules
 ---------
 
+Every step count a schedule takes -- ``total_steps``, ``transition_begin``, ``decay_every``, and the
+``boundaries`` of :func:`join_schedules` -- accepts a symbolic value as readily as a literal one, so a
+horizon can be written in terms of the data it will run over: ``total_steps=10 * X.shape[0]`` for ten
+epochs. The same holds for the ``patience``, ``cooldown``, and ``accumulation_size`` of
+:func:`reduce_on_plateau` and the ``max_norm`` of :func:`large_step` and
+:func:`clip_by_global_norm`, and the bounds of :func:`clip_by_value`. A count whose value is not known
+when the graph is built carries its check into the graph instead. That check rides on the value, so it
+runs wherever the value does: not under jax, which drops assertions, and not where a rewrite has
+eliminated the value's last consumer.
+
 .. autosummary::
     :toctree: generated/
 
