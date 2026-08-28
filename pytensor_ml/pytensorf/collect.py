@@ -362,7 +362,8 @@ def collect_non_trainable_updates(
     Examples
     --------
     The writes the model makes on its own, such as a batch-norm statistic, mapped to their next values.
-    :func:`~pytensor_ml.optim.train.compile_train` folds these in alongside the rule's own updates:
+    :func:`function` threads these into every step it compiles, so reach for this directly only when
+    assembling updates for something else:
 
     .. code-block:: python
 
@@ -384,14 +385,12 @@ def collect_non_trainable_updates(
     updates: dict[NonTrainableParameter, TensorVariable] = {}
     for ancestor in ancestors(as_output_list(outputs)):
         node = ancestor.owner
-        if node is not None and isinstance(node.op, StatefulOp):
-            for output_index, input_index in node.op.update_map().items():
-                old_value = node.inputs[input_index]
-                if (
-                    isinstance(old_value, NonTrainableParameter)
-                    and old_value not in already_written
-                ):
-                    updates[old_value] = node.outputs[output_index]
+        if node is None or not isinstance(node.op, StatefulOp):
+            continue
+        for output_index, input_index in node.op.update_map().items():
+            old_value = node.inputs[input_index]
+            if isinstance(old_value, NonTrainableParameter) and old_value not in already_written:
+                updates[old_value] = node.outputs[output_index]
 
     return updates
 
