@@ -454,18 +454,22 @@ def test_a_statistic_reached_only_by_an_output_is_observed_not_advanced():
 
 def test_the_callers_own_statistic_update_wins():
     """The threaded write-back is a default, not a rule: a caller who writes the statistic themselves has
-    said what it holds, which is how a warm-up pass pins one with ``updates={stat: stat}``."""
+    said what it holds, which is how a warm-up pass pins one with ``updates={stat: stat}``. Two things
+    guarantee that today -- the collector skips it and the merge puts the caller's updates last -- so this
+    pins the behavior rather than either mechanism."""
     x = pt.matrix("x")
     normalized = BatchNorm("bn", 4)(Linear("fc", n_in=4, n_out=4)(x))
-    parameter = shared(np.zeros(()), name="w")
     running_mean = next(
         p for p in collect_non_trainable_params(normalized) if "running_mean" in p.name
     )
+    # Something has to be written from an expression that reaches the batch norm, or the collector finds
+    # nothing to skip and the test passes whatever the code does.
+    trained = shared(np.zeros(()), name="w")
 
     step = function(
         [x],
-        parameter,
-        updates={parameter: parameter + normalized.sum(), running_mean: running_mean},
+        trained,
+        updates={trained: trained + normalized.sum(), running_mean: running_mean},
     )
     step(np.random.default_rng(0).normal(size=(16, 4)).astype(config.floatX))
 
@@ -486,3 +490,28 @@ def test_a_prediction_graph_writes_no_statistic():
     score(features, targets)
 
     np.testing.assert_allclose(running_mean.get_value(), before)
+
+
+def test_one_step_advances_every_kind_of_state():
+    """`function` merges three separate collections into one updates dict: generator draws, clock advances
+    and the model's own write-backs. A merge that let one shadow another would leave a step that trains
+    but silently freezes whichever lost."""
+    x = pt.matrix("x")
+    clock = step_counter(name="clock")
+    network = Sequential(Linear("fc", 4, 4), BatchNorm("bn", 4), Dropout(p=0.5, random_state=0))
+    activations = network(x)
+    running_mean = next(
+        p for p in collect_non_trainable_params(activations) if "running_mean" in p.name
+    )
+    before = running_mean.get_value().copy()
+
+    # The clock and the generator are read by the outputs; the statistic is written only because an
+    # update expression reaches the batch norm, which is the asymmetry between the three collections.
+    trained = shared(np.zeros(()), name="w")
+    step = function([x], [activations.sum(), clock], updates={trained: trained + activations.sum()})
+    batch = (np.random.default_rng(0).normal(size=(16, 4)) * 5.0).astype(config.floatX)
+    draws, counts = zip(*(step(batch) for _ in range(3)))
+
+    assert [int(count) for count in counts] == [0, 1, 2]
+    assert len(set(float(draw) for draw in draws)) == 3
+    assert not np.allclose(running_mean.get_value(), before)
