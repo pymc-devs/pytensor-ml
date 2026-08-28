@@ -301,3 +301,56 @@ def test_rejects_a_non_positive_norm():
 def test_rejects_a_rule_with_nothing_to_check():
     with pytest.raises(ValueError, match="no floating-point parameters"):
         nonfinite()({}, [])
+
+
+def bounded_problem(max_norm_of):
+    """A problem whose sgd step is outsized but finite, with its bound built from the batch so a caller
+    can hand in either a literal or a shape-derived one."""
+    x = pt.vector("x")
+    p = trainable(np.ones(2, dtype=config.floatX), name="w")
+    total = scalar_state("skip_if/total_skips")
+    step = compile_train(
+        ((p * x) ** 2).sum(),
+        skip_if(
+            sgd(0.1), large_step(max_norm_of(x)), max_consecutive_skips=None, total_skips=total
+        ),
+        inputs=[x],
+    )
+    return p, total, step
+
+
+# sgd(0.1) on a gradient of 2 * p * x**2 = 2 gives a step of norm 0.2 * sqrt(2) ~ 0.283, which the first
+# two bounds sit under and the third sits over.
+@pytest.mark.parametrize(
+    ("max_norm_of", "skipped"),
+    [
+        (lambda x: 0.1, True),
+        (lambda x: x.shape[0] * 0.05, True),
+        (lambda x: x.shape[0] * 1.0, False),
+    ],
+    ids=["literal-under", "shape-derived-under", "shape-derived-over"],
+)
+def test_a_shape_derived_bound_decides_like_its_literal_equivalent(max_norm_of, skipped):
+    """A bound written as arithmetic on a shape has no value until the step runs, so it has to reach the
+    graph rather than be refused for failing a comparison that cannot be made yet."""
+    p, total, step = bounded_problem(max_norm_of)
+    weights = p.get_value().copy()
+    step(GOOD)
+
+    assert float(total.get_value()) == (1.0 if skipped else 0.0)
+    assert np.allclose(p.get_value(), weights) == skipped
+
+
+def test_a_shape_derived_bound_is_checked_when_the_step_runs():
+    """The build-time check cannot fire on a bound with no value yet, so it travels with the graph. The
+    jax backend drops assertions, which is why this is the best that can be offered rather than a
+    guarantee."""
+    _, _, step = bounded_problem(lambda x: x.shape[0] * 0.0)
+
+    with pytest.raises(ValueError, match="max_norm is a norm to compare against"):
+        step(GOOD)
+
+
+def test_a_bound_that_is_not_a_single_number_is_refused():
+    with pytest.raises(ValueError, match="max_norm must be a single number"):
+        large_step(pt.matrix("X").shape)

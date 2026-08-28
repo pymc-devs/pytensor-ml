@@ -14,6 +14,7 @@ from pytensor_ml.optim.base import (
     reuses_state,
     scalar_state,
 )
+from pytensor_ml.optim.checks import checked_scalar
 from pytensor_ml.params import StepCounter
 
 type Decision = Callable[[Updates, Sequence[Parameter]], TensorVariable]
@@ -141,7 +142,7 @@ def nonfinite() -> SkipCondition:
     return SkipCondition(decide, "produced non-finite updates")
 
 
-def large_step(max_norm: float) -> SkipCondition:
+def large_step(max_norm: float | TensorVariable) -> SkipCondition:
     r"""
     Throw the step away when the global L2 norm of the steps reaches ``max_norm``.
 
@@ -156,7 +157,7 @@ def large_step(max_norm: float) -> SkipCondition:
 
     Parameters
     ----------
-    max_norm : float
+    max_norm : float or TensorVariable
         Norm at which a step is thrown away rather than applied.
 
     Examples
@@ -178,19 +179,22 @@ def large_step(max_norm: float) -> SkipCondition:
         step = compile_train(loss, skip_if(adam(1e-3), large_step(10.0)))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
-    if max_norm <= 0.0:
-        raise ValueError(
-            f"max_norm is a norm to compare against and must be positive, got {max_norm}."
-        )
+    bound = checked_scalar(
+        pt.as_tensor_variable(max_norm),
+        name="max_norm",
+        complaint="is a norm to compare against and must be positive",
+        condition_fn=lambda value: value > 0.0,
+    )
 
     def decide(updates: Updates, parameters: Sequence[Parameter]) -> TensorVariable:
         steps = [updates[parameter] - parameter for parameter in parameters]
         global_norm = pt.sqrt(sum(pt.sum(step**2) for step in steps))
         # Negated `<` rather than `>=`: every comparison against a NaN is False, so this throws away a NaN
         # norm where `>=` would apply it.
-        return ~(global_norm < max_norm)
+        return ~(global_norm < bound)
 
-    return SkipCondition(decide, f"produced a step whose global norm reached {max_norm}")
+    described = max_norm if isinstance(max_norm, int | float) else "its max_norm bound"
+    return SkipCondition(decide, f"produced a step whose global norm reached {described}")
 
 
 def _counter_or_new(given: Parameter | None, name: str) -> Parameter:
