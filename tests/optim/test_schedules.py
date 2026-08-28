@@ -2,7 +2,8 @@ import numpy as np
 import pytest
 
 from pytensor import config
-from pytensor.tensor import lscalar
+from pytensor.raise_op import CheckAndRaise
+from pytensor.tensor import lscalar, matrix, vector
 
 from pytensor_ml.optim import (
     chain,
@@ -386,3 +387,143 @@ def test_step_decay_rejects_a_non_positive_interval(decay_every):
 def test_step_decay_rejects_a_factor_outside_the_unit_interval(decay_factor):
     with pytest.raises(ValueError, match=r"decay_factor must be in \(0, 1]"):
         step_decay(1.0, decay_every=3, decay_factor=decay_factor)
+
+
+SHAPE_SOURCE = matrix("shape_source")
+HORIZON = 10
+HORIZON_STEPS = [0, 3, 7, 10, 20]
+
+
+# A horizon is naturally written as arithmetic on a shape -- `X.shape[0]` for one epoch -- which has no
+# value until the function runs, so it has to reach the graph rather than be refused for failing a
+# comparison that cannot be made yet.
+def compile_shape_derived_schedule(schedule):
+    # `on_unused_input`: a schedule whose count folds away leaves SHAPE_SOURCE unconsumed, and the
+    # resulting UnusedInputError would look nothing like the mistake that caused it.
+    step_count = lscalar("step_count")
+    return function([step_count, SHAPE_SOURCE], schedule(step_count), on_unused_input="ignore")
+
+
+def evaluate_shape_derived_schedule(schedule, steps, rows):
+    rate_at = compile_shape_derived_schedule(schedule)
+    batch = np.zeros((rows, 2), dtype=config.floatX)
+    return np.array([rate_at(step, batch) for step in steps])
+
+
+@pytest.mark.parametrize("schedule_factory", SCHEDULES)
+def test_shape_derived_horizon_matches_its_literal_equivalent(schedule_factory):
+    literal = evaluate_schedule(
+        schedule_factory(0.5, HORIZON, final_learning_rate=0.05), HORIZON_STEPS
+    )
+    symbolic = evaluate_shape_derived_schedule(
+        schedule_factory(0.5, SHAPE_SOURCE.shape[0], final_learning_rate=0.05),
+        HORIZON_STEPS,
+        rows=HORIZON,
+    )
+    np.testing.assert_allclose(literal, symbolic, rtol=1e-6)
+    # Both sides come from the same code path, so a rate that never moves would match itself.
+    assert np.ptp(symbolic) > 0.0
+
+
+def test_shape_derived_transition_begin_matches_its_literal_equivalent():
+    literal = evaluate_schedule(
+        linear_schedule(0.5, HORIZON, final_learning_rate=0.05, transition_begin=3), HORIZON_STEPS
+    )
+    symbolic = evaluate_shape_derived_schedule(
+        linear_schedule(
+            0.5, HORIZON, final_learning_rate=0.05, transition_begin=SHAPE_SOURCE.shape[0] - 7
+        ),
+        HORIZON_STEPS,
+        rows=HORIZON,
+    )
+    np.testing.assert_allclose(literal, symbolic, rtol=1e-6)
+
+
+def test_shape_derived_decay_interval_matches_its_literal_equivalent():
+    literal = evaluate_schedule(
+        step_decay(1.0, decay_every=HORIZON, decay_factor=0.5), HORIZON_STEPS
+    )
+    symbolic = evaluate_shape_derived_schedule(
+        step_decay(1.0, decay_every=SHAPE_SOURCE.shape[0], decay_factor=0.5),
+        HORIZON_STEPS,
+        rows=HORIZON,
+    )
+    np.testing.assert_allclose(literal, symbolic, rtol=1e-6)
+
+
+def test_shape_derived_boundary_matches_its_literal_equivalent():
+    segments = [constant_schedule(1.0), constant_schedule(0.25)]
+    literal = evaluate_schedule(join_schedules(segments, boundaries=[HORIZON]), HORIZON_STEPS)
+    symbolic = evaluate_shape_derived_schedule(
+        join_schedules(segments, boundaries=[SHAPE_SOURCE.shape[0]]), HORIZON_STEPS, rows=HORIZON
+    )
+    np.testing.assert_allclose(literal, symbolic, rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("build_schedule", "rows", "message"),
+    [
+        (lambda: linear_schedule(0.5, SHAPE_SOURCE.shape[0]), 0, "total_steps must be at least 1"),
+        (
+            lambda: linear_schedule(0.5, 10, transition_begin=SHAPE_SOURCE.shape[0] - 5),
+            0,
+            "transition_begin must not be negative",
+        ),
+        (
+            lambda: step_decay(1.0, decay_every=SHAPE_SOURCE.shape[0]),
+            0,
+            "decay_every must be at least 1",
+        ),
+        (
+            lambda: join_schedules(
+                [constant_schedule(1.0), constant_schedule(0.25)],
+                boundaries=[SHAPE_SOURCE.shape[0]],
+            ),
+            0,
+            r"boundaries\[0\] must be positive",
+        ),
+        (
+            lambda: join_schedules(
+                [constant_schedule(1.0), constant_schedule(0.5), constant_schedule(0.25)],
+                boundaries=[5, SHAPE_SOURCE.shape[0]],
+            ),
+            2,
+            "boundaries must be strictly increasing",
+        ),
+    ],
+    ids=["total_steps", "transition_begin", "decay_every", "boundary_sign", "boundary_order"],
+)
+def test_a_shape_derived_count_is_checked_when_the_schedule_runs(build_schedule, rows, message):
+    """The build-time check cannot fire on a count with no value yet, so it travels with the graph. The
+    jax backend drops assertions, which is why this is the best that can be offered rather than a
+    guarantee."""
+    schedule = (
+        build_schedule()
+    )  # Built outside the block: a build-time raise is not what is claimed.
+
+    with pytest.raises(ValueError, match=message):
+        evaluate_shape_derived_schedule(schedule, [3], rows=rows)
+
+
+@pytest.mark.parametrize(
+    "total_steps",
+    [matrix("X").shape, vector("v", dtype="int64"), np.array([2, 3])],
+    ids=["shape-tuple", "vector", "numpy-array"],
+)
+def test_a_horizon_that_is_not_a_single_number_is_refused(total_steps):
+    """``X.shape`` for ``X.shape[0]`` is the easy slip, and left to the graph it surfaces as a bare
+    ``AssertionError`` naming neither the argument nor the mistake."""
+    with pytest.raises(ValueError, match="total_steps must be a single number"):
+        linear_schedule(0.5, total_steps)
+
+
+def test_a_literal_horizon_leaves_no_runtime_check_in_the_graph():
+    """Folding the comparison at build time is what keeps a literal schedule as cheap to compile as it
+    was; a check attached unconditionally would burden every graph that never needed one."""
+
+    def carries_a_check(schedule):
+        compiled = compile_shape_derived_schedule(schedule)
+        return any(isinstance(node.op, CheckAndRaise) for node in compiled.maker.fgraph.apply_nodes)
+
+    assert not carries_a_check(linear_schedule(0.5, HORIZON))
+    assert carries_a_check(linear_schedule(0.5, SHAPE_SOURCE.shape[0]))

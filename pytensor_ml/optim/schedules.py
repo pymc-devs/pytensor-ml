@@ -8,30 +8,45 @@ from pytensor import config
 from pytensor.tensor import TensorVariable
 
 from pytensor_ml.optim.base import Schedule
+from pytensor_ml.optim.checks import checked_scalar
 
 
-def _validate_horizon(total_steps: int, transition_begin: int = 0) -> None:
-    """Raise ``ValueError`` unless the horizon is usable."""
-    if total_steps < 1:
-        raise ValueError(f"total_steps must be at least 1, got {total_steps}.")
-    if transition_begin < 0:
-        raise ValueError(f"transition_begin must not be negative, got {transition_begin}.")
+def _checked_total_steps(total_steps: int | TensorVariable) -> TensorVariable:
+    """Return the horizon length, refusing an empty one wherever that can be established."""
+    return checked_scalar(
+        pt.as_tensor_variable(total_steps),
+        name="total_steps",
+        complaint="must be at least 1",
+        condition_fn=lambda value: value >= 1,
+    )
+
+
+def _checked_transition_begin(transition_begin: int | TensorVariable) -> TensorVariable:
+    """Return the step the horizon starts at, refusing a negative one wherever that can be established."""
+    return checked_scalar(
+        pt.as_tensor_variable(transition_begin),
+        name="transition_begin",
+        complaint="must not be negative",
+        condition_fn=lambda value: value >= 0,
+    )
 
 
 def _clamped_progress(
-    step_count: TensorVariable, total_steps: int, transition_begin: int = 0
+    step_count: TensorVariable,
+    total_steps: TensorVariable,
+    transition_begin: TensorVariable | int = 0,
 ) -> TensorVariable:
     """Return the fraction of the horizon completed at ``step_count``, held at 0 before it starts and 1
     after it ends, so every schedule flattens outside its horizon rather than running past it."""
     floatX = config.floatX
-    step_limit = np.asarray(total_steps, dtype=floatX)
-    begin = np.asarray(transition_begin, dtype=floatX)
+    step_limit = total_steps.astype(floatX)
+    begin = pt.as_tensor_variable(transition_begin).astype(floatX)
     return pt.clip(step_count.astype(floatX) - begin, 0.0, step_limit) / step_limit
 
 
 def cosine_schedule(
     learning_rate: float,
-    total_steps: int,
+    total_steps: int | TensorVariable,
     final_learning_rate: float = 0.0,
 ) -> Schedule:
     r"""
@@ -52,7 +67,7 @@ def cosine_schedule(
     ----------
     learning_rate : float
         Initial rate :math:`\eta_0`, returned at step zero.
-    total_steps : int
+    total_steps : int or TensorVariable
         Number of steps :math:`T` over which the rate reaches its endpoint. Must be at least one.
     final_learning_rate : float, optional
         Endpoint :math:`\eta_f` reached at step ``total_steps``, above or below ``learning_rate``.
@@ -74,7 +89,7 @@ def cosine_schedule(
 
         rule = adam(learning_rate=cosine_schedule(3e-4, 10_000))
     """
-    _validate_horizon(total_steps)
+    total_steps = _checked_total_steps(total_steps)
 
     def schedule(step_count: TensorVariable) -> TensorVariable:
         floatX = config.floatX
@@ -92,9 +107,9 @@ def cosine_schedule(
 
 def linear_schedule(
     learning_rate: float,
-    total_steps: int,
+    total_steps: int | TensorVariable,
     final_learning_rate: float = 0.0,
-    transition_begin: int = 0,
+    transition_begin: int | TensorVariable = 0,
 ) -> Schedule:
     r"""
     Move the learning rate from ``learning_rate`` to ``final_learning_rate`` at a constant rate.
@@ -113,12 +128,12 @@ def linear_schedule(
     ----------
     learning_rate : float
         Initial rate :math:`\eta_0`, returned at every step up to ``transition_begin``.
-    total_steps : int
+    total_steps : int or TensorVariable
         Number of steps :math:`T` the decay itself spans. Must be at least one.
     final_learning_rate : float, optional
         Endpoint :math:`\eta_f` reached at step ``transition_begin + total_steps``, above or below
         ``learning_rate``. Default 0.0.
-    transition_begin : int, optional
+    transition_begin : int or TensorVariable, optional
         Number of steps :math:`B` to hold the initial rate before decaying. Must not be negative.
         Default 0.
 
@@ -138,7 +153,8 @@ def linear_schedule(
 
         rule = adam(learning_rate=linear_schedule(3e-4, total_steps=10_000, final_learning_rate=1e-5))
     """
-    _validate_horizon(total_steps, transition_begin)
+    total_steps = _checked_total_steps(total_steps)
+    transition_begin = _checked_transition_begin(transition_begin)
 
     def schedule(step_count: TensorVariable) -> TensorVariable:
         floatX = config.floatX
@@ -153,9 +169,9 @@ def linear_schedule(
 
 def exponential_schedule(
     learning_rate: float,
-    total_steps: int,
+    total_steps: int | TensorVariable,
     final_learning_rate: float,
-    transition_begin: int = 0,
+    transition_begin: int | TensorVariable = 0,
 ) -> Schedule:
     r"""
     Move the learning rate from ``learning_rate`` to ``final_learning_rate`` by a constant factor per step.
@@ -177,12 +193,12 @@ def exponential_schedule(
     ----------
     learning_rate : float
         Initial rate :math:`\eta_0`, returned at every step up to ``transition_begin``. Must be positive.
-    total_steps : int
+    total_steps : int or TensorVariable
         Number of steps :math:`T` the decay itself spans. Must be at least one.
     final_learning_rate : float
         Endpoint :math:`\eta_f` reached at step ``transition_begin + total_steps``. Must be positive,
         and may be above ``learning_rate`` to ramp up geometrically.
-    transition_begin : int, optional
+    transition_begin : int or TensorVariable, optional
         Number of steps :math:`B` to hold the initial rate before decaying. Must not be negative.
         Default 0.
 
@@ -203,7 +219,8 @@ def exponential_schedule(
 
         rule = adam(learning_rate=exponential_schedule(3e-4, total_steps=10_000, final_learning_rate=1e-6))
     """
-    _validate_horizon(total_steps, transition_begin)
+    total_steps = _checked_total_steps(total_steps)
+    transition_begin = _checked_transition_begin(transition_begin)
     if final_learning_rate <= 0.0 or learning_rate <= 0.0:
         raise ValueError(
             f"exponential_schedule needs positive rates, got learning_rate={learning_rate} and "
@@ -225,9 +242,9 @@ def exponential_schedule(
 
 def polynomial_schedule(
     learning_rate: float,
-    total_steps: int,
+    total_steps: int | TensorVariable,
     final_learning_rate: float = 0.0,
-    transition_begin: int = 0,
+    transition_begin: int | TensorVariable = 0,
     power: float = 1.0,
 ) -> Schedule:
     r"""
@@ -248,12 +265,12 @@ def polynomial_schedule(
     ----------
     learning_rate : float
         Initial rate :math:`\eta_0`, returned at every step up to ``transition_begin``.
-    total_steps : int
+    total_steps : int or TensorVariable
         Number of steps :math:`T` the decay itself spans. Must be at least one.
     final_learning_rate : float, optional
         Endpoint :math:`\eta_f` reached at step ``transition_begin + total_steps``, above or below
         ``learning_rate``. Default 0.0.
-    transition_begin : int, optional
+    transition_begin : int or TensorVariable, optional
         Number of steps :math:`B` to hold the initial rate before decaying. Must not be negative.
         Default 0.
     power : float, optional
@@ -277,7 +294,8 @@ def polynomial_schedule(
 
         rule = adam(learning_rate=polynomial_schedule(3e-4, total_steps=10_000, power=2.0))
     """
-    _validate_horizon(total_steps, transition_begin)
+    total_steps = _checked_total_steps(total_steps)
+    transition_begin = _checked_transition_begin(transition_begin)
     if power <= 0.0:
         raise ValueError(f"power must be positive, got {power}.")
 
@@ -297,10 +315,10 @@ def polynomial_schedule(
 def step_decay(
     learning_rate: float,
     *,
-    decay_every: int,
+    decay_every: int | TensorVariable,
     decay_factor: float = 0.1,
     min_learning_rate: float = 0.0,
-    transition_begin: int = 0,
+    transition_begin: int | TensorVariable = 0,
 ) -> Schedule:
     r"""
     Multiply the learning rate by ``decay_factor`` every ``decay_every`` steps.
@@ -319,13 +337,13 @@ def step_decay(
     ----------
     learning_rate : float
         Initial rate :math:`\eta_0`, returned until the first drop.
-    decay_every : int
+    decay_every : int or TensorVariable
         Number of steps :math:`E` between drops. Must be at least one.
     decay_factor : float, optional
         Multiplier :math:`\gamma` applied at each drop. Must be in ``(0, 1]``. Default 0.1.
     min_learning_rate : float, optional
         Floor :math:`\eta_{\min}` the staircase never goes below. Default 0.0.
-    transition_begin : int, optional
+    transition_begin : int or TensorVariable, optional
         Number of steps :math:`B` to hold the initial rate before the first drop can occur. Must not be
         negative. Default 0.
 
@@ -346,12 +364,15 @@ def step_decay(
 
         rule = adam(learning_rate=step_decay(3e-4, decay_every=2_000, decay_factor=0.5))
     """
-    if decay_every < 1:
-        raise ValueError(f"decay_every must be at least 1, got {decay_every}.")
     if not 0.0 < decay_factor <= 1.0:
         raise ValueError(f"decay_factor must be in (0, 1], got {decay_factor}.")
-    if transition_begin < 0:
-        raise ValueError(f"transition_begin must not be negative, got {transition_begin}.")
+    decay_every = checked_scalar(
+        pt.as_tensor_variable(decay_every),
+        name="decay_every",
+        complaint="must be at least 1",
+        condition_fn=lambda value: value >= 1,
+    )
+    transition_begin = _checked_transition_begin(transition_begin)
 
     def schedule(step_count: TensorVariable) -> TensorVariable:
         floatX = config.floatX
@@ -405,7 +426,9 @@ def constant_schedule(learning_rate: float) -> Schedule:
     return schedule
 
 
-def join_schedules(schedules: Sequence[Schedule], boundaries: Sequence[int]) -> Schedule:
+def join_schedules(
+    schedules: Sequence[Schedule], boundaries: Sequence[int | TensorVariable]
+) -> Schedule:
     r"""
     Run ``schedules`` one after another, switching at ``boundaries``.
 
@@ -421,7 +444,7 @@ def join_schedules(schedules: Sequence[Schedule], boundaries: Sequence[int]) -> 
     ----------
     schedules : sequence of Schedule
         The schedules to run in order. Must not be empty.
-    boundaries : sequence of int
+    boundaries : sequence of int or TensorVariable
         Steps at which to hand over to the next schedule, one fewer than ``schedules``, strictly
         increasing and positive.
 
@@ -452,14 +475,28 @@ def join_schedules(schedules: Sequence[Schedule], boundaries: Sequence[int]) -> 
             f"join_schedules needs one fewer boundary than schedules, got {len(boundaries)} "
             f"boundaries for {len(schedules)} schedules."
         )
-    if any(boundary < 1 for boundary in boundaries):
-        raise ValueError(f"boundaries must be positive, got {list(boundaries)}.")
-    if any(later <= earlier for earlier, later in pairwise(boundaries)):
-        raise ValueError(f"boundaries must be strictly increasing, got {list(boundaries)}.")
+    positive_boundaries = [
+        checked_scalar(
+            pt.as_tensor_variable(boundary),
+            name=f"boundaries[{index}]",
+            complaint="must be positive",
+            condition_fn=lambda value: value >= 1,
+        )
+        for index, boundary in enumerate(boundaries)
+    ]
+    checked_boundaries = positive_boundaries[:1] + [
+        checked_scalar(
+            later,
+            name="boundaries",
+            complaint="must be strictly increasing",
+            condition_fn=lambda value: value > earlier,
+        )
+        for earlier, later in pairwise(positive_boundaries)
+    ]
 
     def schedule(step_count: TensorVariable) -> TensorVariable:
         rate = schedules[0](step_count)
-        for boundary, next_schedule in zip(boundaries, schedules[1:]):
+        for boundary, next_schedule in zip(checked_boundaries, schedules[1:]):
             rate = pt.where(step_count < boundary, rate, next_schedule(step_count - boundary))
         return rate
 
