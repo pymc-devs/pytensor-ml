@@ -48,24 +48,23 @@ def sgd_updates(
 
     Examples
     --------
-    The update function behind :func:`sgd`, for driving a bare ``pytensor.function`` yourself rather
+    The update function behind :func:`sgd`, for compiling the step yourself rather
     than going through :func:`~pytensor_ml.optim.train.compile_train`. It returns the updates dict directly, and its rate defaults to 1.0 rather than the alias's 0.01:
 
     .. code-block:: python
 
         import numpy as np
-        import pytensor
 
         from pytensor_ml.layers import Input, Linear
         from pytensor_ml.loss import SquaredError, supervised_loss
         from pytensor_ml.optim import sgd_updates
-        from pytensor_ml.pytensorf import collect_trainable_params
+        from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
         loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
 
         updates = sgd_updates(loss, collect_trainable_params(loss), learning_rate=0.1)
-        step = pytensor.function([X, target], loss, updates=updates)
+        step = function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "sgd")
@@ -122,24 +121,23 @@ def adam_updates(
 
     Examples
     --------
-    The update function behind :func:`adam`, for driving a bare ``pytensor.function`` yourself rather
+    The update function behind :func:`adam`, for compiling the step yourself rather
     than going through :func:`~pytensor_ml.optim.train.compile_train`. It returns the updates dict directly:
 
     .. code-block:: python
 
         import numpy as np
-        import pytensor
 
         from pytensor_ml.layers import Input, Linear
         from pytensor_ml.loss import SquaredError, supervised_loss
         from pytensor_ml.optim import adam_updates
-        from pytensor_ml.pytensorf import collect_trainable_params
+        from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
         loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
 
         updates = adam_updates(loss, collect_trainable_params(loss), learning_rate=1e-3)
-        step = pytensor.function([X, target], loss, updates=updates)
+        step = function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     return _adam_family_updates(
@@ -295,24 +293,23 @@ def adamw_updates(
 
     Examples
     --------
-    The update function behind :func:`adamw`, for driving a bare ``pytensor.function`` yourself rather
+    The update function behind :func:`adamw`, for compiling the step yourself rather
     than going through :func:`~pytensor_ml.optim.train.compile_train`. It returns the updates dict directly, decoupling the weight decay from the adaptive rate:
 
     .. code-block:: python
 
         import numpy as np
-        import pytensor
 
         from pytensor_ml.layers import Input, Linear
         from pytensor_ml.loss import SquaredError, supervised_loss
         from pytensor_ml.optim import adamw_updates
-        from pytensor_ml.pytensorf import collect_trainable_params
+        from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
         loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
 
         updates = adamw_updates(loss, collect_trainable_params(loss), learning_rate=1e-3, weight_decay=0.01)
-        step = pytensor.function([X, target], loss, updates=updates)
+        step = function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     return _adam_family_updates(
@@ -371,24 +368,23 @@ def nadam_updates(
 
     Examples
     --------
-    The update function behind :func:`nadam`, for driving a bare ``pytensor.function`` yourself rather
+    The update function behind :func:`nadam`, for compiling the step yourself rather
     than going through :func:`~pytensor_ml.optim.train.compile_train`. It returns the updates dict directly:
 
     .. code-block:: python
 
         import numpy as np
-        import pytensor
 
         from pytensor_ml.layers import Input, Linear
         from pytensor_ml.loss import SquaredError, supervised_loss
         from pytensor_ml.optim import nadam_updates
-        from pytensor_ml.pytensorf import collect_trainable_params
+        from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
         loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
 
         updates = nadam_updates(loss, collect_trainable_params(loss), learning_rate=2e-3)
-        step = pytensor.function([X, target], loss, updates=updates)
+        step = function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "nadam")
@@ -464,24 +460,23 @@ def adamax_updates(
 
     Examples
     --------
-    The update function behind :func:`adamax`, for driving a bare ``pytensor.function`` yourself rather
+    The update function behind :func:`adamax`, for compiling the step yourself rather
     than going through :func:`~pytensor_ml.optim.train.compile_train`. It returns the updates dict directly:
 
     .. code-block:: python
 
         import numpy as np
-        import pytensor
 
         from pytensor_ml.layers import Input, Linear
         from pytensor_ml.loss import SquaredError, supervised_loss
         from pytensor_ml.optim import adamax_updates
-        from pytensor_ml.pytensorf import collect_trainable_params
+        from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
         loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
 
         updates = adamax_updates(loss, collect_trainable_params(loss), learning_rate=2e-3)
-        step = pytensor.function([X, target], loss, updates=updates)
+        step = function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "adamax")
@@ -543,24 +538,23 @@ def adagrad_updates(
 
     Examples
     --------
-    The update function behind :func:`adagrad`, for driving a bare ``pytensor.function`` yourself rather
+    The update function behind :func:`adagrad`, for compiling the step yourself rather
     than going through :func:`~pytensor_ml.optim.train.compile_train`. It returns the updates dict directly:
 
     .. code-block:: python
 
         import numpy as np
-        import pytensor
 
         from pytensor_ml.layers import Input, Linear
         from pytensor_ml.loss import SquaredError, supervised_loss
         from pytensor_ml.optim import adagrad_updates
-        from pytensor_ml.pytensorf import collect_trainable_params
+        from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
         loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
 
         updates = adagrad_updates(loss, collect_trainable_params(loss), learning_rate=1e-2)
-        step = pytensor.function([X, target], loss, updates=updates)
+        step = function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "adagrad")
@@ -624,24 +618,23 @@ def rmsprop_updates(
 
     Examples
     --------
-    The update function behind :func:`rmsprop`, for driving a bare ``pytensor.function`` yourself rather
+    The update function behind :func:`rmsprop`, for compiling the step yourself rather
     than going through :func:`~pytensor_ml.optim.train.compile_train`. It returns the updates dict directly:
 
     .. code-block:: python
 
         import numpy as np
-        import pytensor
 
         from pytensor_ml.layers import Input, Linear
         from pytensor_ml.loss import SquaredError, supervised_loss
         from pytensor_ml.optim import rmsprop_updates
-        from pytensor_ml.pytensorf import collect_trainable_params
+        from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
         loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
 
         updates = rmsprop_updates(loss, collect_trainable_params(loss), learning_rate=1e-2)
-        step = pytensor.function([X, target], loss, updates=updates)
+        step = function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "rmsprop")
@@ -711,24 +704,23 @@ def adadelta_updates(
 
     Examples
     --------
-    The update function behind :func:`adadelta`, for driving a bare ``pytensor.function`` yourself rather
+    The update function behind :func:`adadelta`, for compiling the step yourself rather
     than going through :func:`~pytensor_ml.optim.train.compile_train`. It returns the updates dict directly, needing no learning rate of its own:
 
     .. code-block:: python
 
         import numpy as np
-        import pytensor
 
         from pytensor_ml.layers import Input, Linear
         from pytensor_ml.loss import SquaredError, supervised_loss
         from pytensor_ml.optim import adadelta_updates
-        from pytensor_ml.pytensorf import collect_trainable_params
+        from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
         loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
 
         updates = adadelta_updates(loss, collect_trainable_params(loss))
-        step = pytensor.function([X, target], loss, updates=updates)
+        step = function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "adadelta")
@@ -821,24 +813,23 @@ def rprop_updates(
 
     Examples
     --------
-    The update function behind :func:`rprop`, for driving a bare ``pytensor.function`` yourself rather
+    The update function behind :func:`rprop`, for compiling the step yourself rather
     than going through :func:`~pytensor_ml.optim.train.compile_train`. It returns the updates dict directly, stepping by gradient sign alone:
 
     .. code-block:: python
 
         import numpy as np
-        import pytensor
 
         from pytensor_ml.layers import Input, Linear
         from pytensor_ml.loss import SquaredError, supervised_loss
         from pytensor_ml.optim import rprop_updates
-        from pytensor_ml.pytensorf import collect_trainable_params
+        from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
         loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
 
         updates = rprop_updates(loss, collect_trainable_params(loss), learning_rate=1e-2)
-        step = pytensor.function([X, target], loss, updates=updates)
+        step = function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
     _require_numeric_learning_rate(learning_rate)
