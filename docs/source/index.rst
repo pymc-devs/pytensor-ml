@@ -75,6 +75,7 @@ walkthroughs.
    :titlesonly:
 
    install
+   sharp_edges
    examples/gallery
    api
    dev/index
