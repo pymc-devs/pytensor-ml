@@ -243,24 +243,37 @@ def test_a_count_that_folds_to_a_constant_is_refused_at_build_time(kwargs, compl
         reduce_on_plateau(adam(1e-3), scalar_state("scale", fill_value=1.0), **kwargs)
 
 
-def test_a_count_taken_from_a_shape_behaves_like_its_literal_equivalent():
-    """A count is naturally written as arithmetic on a shape -- ``10 * X.shape[0]`` for ten epochs --
-    which has no value until the function runs. It has to reach the graph rather than be refused for
-    failing a comparison that cannot be made yet."""
+@pytest.mark.parametrize(
+    ("count_name", "literal", "training_steps"),
+    [("patience", 2, 9), ("accumulation_size", 4, 20)],
+    ids=["patience", "accumulation_size"],
+)
+def test_a_count_taken_from_a_shape_behaves_like_its_literal_equivalent(
+    count_name, literal, training_steps
+):
+    """A count is naturally written as arithmetic on a shape, which has no value until the function
+    runs. Reaching the graph is not enough: it then has to decide exactly as the number it stands
+    for."""
     X = pt.matrix("X")
-    batch = np.zeros((1, 3), dtype=config.floatX)
+    batch = np.zeros(
+        (1, 3), dtype=config.floatX
+    )  # One row, so `literal * X.shape[0]` is `literal`.
 
     scales = []
-    for patience in (2, 2 * X.shape[0]):
+    for label, count in (("literal", literal), ("symbolic", literal * X.shape[0])):
         parameter = trainable(np.zeros(3, dtype=config.floatX), name="w")
-        scale = scalar_state(f"scale_{patience}", fill_value=1.0)
-        rule = reduce_on_plateau(adam(scale * 1e-3), scale, patience=patience, factor=0.1)
+        scale = scalar_state(f"{count_name}_{label}", fill_value=1.0)
+        settings = {"factor": 0.1, "patience": 2}
+        settings[count_name] = count
+        rule = reduce_on_plateau(adam(scale * 1e-3), scale, **settings)
         step = compile_train(((parameter - X.sum()) ** 2).sum(), rule, inputs=[X])
-        for _ in range(9):
+        for _ in range(training_steps):
             step(batch)
         scales.append(float(scale.get_value()))
 
     assert scales[0] == scales[1]
+    # Two runs that never cut would match each other while proving nothing about the count.
+    assert scales[0] < 1.0
 
 
 @pytest.mark.parametrize(

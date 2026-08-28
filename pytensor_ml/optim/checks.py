@@ -17,8 +17,8 @@ def checked_scalar(
     """
     Return a hyperparameter, refusing an invalid one wherever that can be established.
 
-    A hyperparameter is often written as arithmetic on a shape, such as ``10 * X.shape[0]`` for ten
-    epochs, which has no value until the function runs. Fold the comparison where it folds and refuse a
+    A hyperparameter is often written as arithmetic on a shape, such as ``10 * X.shape[0]``, which
+    has no value until the function runs. Fold the comparison where it folds and refuse a
     bad value outright; otherwise attach the check to the graph. That check rides on the value, so it
     runs wherever the value does -- not under jax, which drops assertions, and not where a rewrite
     has eliminated the value's last consumer.
