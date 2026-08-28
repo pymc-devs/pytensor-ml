@@ -8,7 +8,11 @@ from pytensor import Mode
 from pytensor.compile import Function, get_mode
 from pytensor.tensor.variable import Variable
 
-from pytensor_ml.pytensorf.collect import collect_clock_updates, collect_graph_inputs
+from pytensor_ml.pytensorf.collect import (
+    collect_clock_updates,
+    collect_graph_inputs,
+    collect_non_trainable_updates,
+)
 from pytensor_ml.pytensorf.rewrite import hoist_scan_draws, rewrite_for_prediction
 from pytensor_ml.pytensorf.rng import (
     SeedSequenceSeed,
@@ -127,6 +131,11 @@ def function(
     # threaded rather than reported.
     clock_updates = collect_clock_updates(read_variables, already_written=updates)
 
+    # Likewise for a statistic the model writes itself: leaving it unwritten trains against batch
+    # statistics and then predicts against the values the model started with. Traced from the update
+    # expressions rather than the outputs, so an op reached only by an output is observed and not advanced.
+    model_updates = collect_non_trainable_updates(list(updates.values()), already_written=updates)
+
     base_mode = get_mode(mode)
     mode = Mode(
         linker=base_mode.linker,
@@ -136,7 +145,7 @@ def function(
     return pytensor.function(
         inputs,
         outputs,
-        updates={**rng_updates, **clock_updates, **updates},
+        updates={**rng_updates, **clock_updates, **model_updates, **updates},
         mode=mode,
         **kwargs,
     )

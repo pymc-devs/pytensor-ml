@@ -333,14 +333,25 @@ def collect_clock_updates(
 
 def collect_non_trainable_updates(
     outputs: Variable | Sequence[Variable],
+    already_written: Container[SharedVariable] = (),
 ) -> dict[NonTrainableParameter, TensorVariable]:
     """
     Collect the write-backs that stateful ops declare, ready to pass as a function's ``updates``.
+
+    A batch-norm statistic is written by the op rather than by any rule, so a graph that reads one has to
+    write it back or the model trains against batch statistics and then predicts against the initial ones.
+    :func:`function` threads these in automatically; a graph specialized by
+    :func:`~pytensor_ml.pytensorf.rewrite.rewrite_for_prediction` no longer holds the op and so declares
+    nothing to write.
 
     Parameters
     ----------
     outputs
         One or more graph outputs to trace back from.
+    already_written : container of shared variable, optional
+        The variables the caller writes themselves, typically the ``updates`` mapping itself. Any of them
+        is left out of the result, so a caller who pins a statistic keeps their own expression for it.
+        Default is empty, which collects every write-back the graph declares.
 
     Returns
     -------
@@ -376,7 +387,10 @@ def collect_non_trainable_updates(
         if node is not None and isinstance(node.op, StatefulOp):
             for output_index, input_index in node.op.update_map().items():
                 old_value = node.inputs[input_index]
-                if isinstance(old_value, NonTrainableParameter):
+                if (
+                    isinstance(old_value, NonTrainableParameter)
+                    and old_value not in already_written
+                ):
                     updates[old_value] = node.outputs[output_index]
 
     return updates

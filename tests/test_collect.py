@@ -140,6 +140,17 @@ class TestCollectNonTrainableUpdates:
         _, y = network_with_dropout
         assert collect_non_trainable_updates(y) == {}
 
+    def test_an_already_written_statistic_is_left_out_of_the_result(self, network_with_batchnorm):
+        _, y = network_with_batchnorm
+        running_mean = next(
+            stat for stat in collect_non_trainable_updates(y) if "running_mean" in stat.name
+        )
+
+        collected = collect_non_trainable_updates(y, already_written=[running_mean])
+
+        assert running_mean not in collected
+        assert names(collected) == BN_RUNNING_STATS - {running_mean.name}
+
 
 def test_collect_data_inputs_excludes_every_shared_variable(network_with_batchnorm):
     X, y = network_with_batchnorm

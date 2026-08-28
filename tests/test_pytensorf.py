@@ -15,9 +15,11 @@ from pytensor.graph.traversal import ancestors
 from pytensor.scan import scan
 from pytensor.tensor import random as ptr
 
-from pytensor_ml.layers import Dropout, DropoutLayer, Linear, Sequential
+from pytensor_ml.layers import BatchNorm, Dropout, DropoutLayer, Linear, Sequential
+from pytensor_ml.optim import adam
 from pytensor_ml.params import step_counter
 from pytensor_ml.pytensorf import (
+    collect_non_trainable_params,
     collect_trainable_params,
     compile_predict,
     function,
@@ -403,3 +405,84 @@ def test_pinned_clocks_are_exempt_from_the_agreeing_count_check():
 
     assert [int(read()) for _ in range(2)] == [7, 7]
     assert (int(restored.get_value()), int(fresh.get_value())) == (7, 0)
+
+
+def batch_norm_regression():
+    """A network whose batch norm sits on the gradient path, with data far off unit scale so frozen
+    statistics show up as a large prediction error rather than a small one."""
+    x, y = pt.matrix("x"), pt.vector("y")
+    network = Sequential(Linear("fc1", 3, 4), BatchNorm("bn", 4), Linear("fc2", 4, 1))
+    prediction = network(x)[:, 0]
+    initialize_params(collect_trainable_params(prediction), rng=np.random.default_rng(0))
+
+    rng = np.random.default_rng(0)
+    features = rng.normal(size=(64, 3)) * 10.0 + 5.0
+    return x, y, prediction, features, features @ np.arange(3.0)
+
+
+def test_a_statistic_the_model_writes_advances_under_hand_assembled_updates():
+    """The write-back is the op's own output, not a rule's, so a caller who assembles their own updates
+    has nothing to write it with. Left uncollected, the network trains against batch statistics and then
+    predicts against the ones it started with, which is a silent six-order-of-magnitude error."""
+    x, y, prediction, features, targets = batch_norm_regression()
+    parameters = collect_trainable_params(prediction)
+    loss = pt.mean((prediction - y) ** 2)
+
+    step = function([x, y], loss, updates=adam(1e-1)(loss, parameters))
+    for _ in range(200):
+        step(features, targets)
+
+    predict = compile_predict(prediction, inputs=[x])
+    assert float(np.mean((predict(features) - targets) ** 2)) < 1e-3
+
+
+def test_a_statistic_reached_only_by_an_output_is_observed_not_advanced():
+    """Reading a statistic to monitor it must not train it, so the write-back is traced from what feeds
+    the updates rather than from everything the function returns."""
+    x = pt.matrix("x")
+    monitor = BatchNorm("bn", 4)(Linear("fc", n_in=4, n_out=4)(x))
+    running_mean = next(
+        p for p in collect_non_trainable_params(monitor) if "running_mean" in p.name
+    )
+    before = running_mean.get_value().copy()
+
+    read = function([x], monitor.mean())
+    read(np.random.default_rng(0).normal(size=(16, 4)).astype(config.floatX))
+
+    np.testing.assert_allclose(running_mean.get_value(), before)
+
+
+def test_the_callers_own_statistic_update_wins():
+    """The threaded write-back is a default, not a rule: a caller who writes the statistic themselves has
+    said what it holds, which is how a warm-up pass pins one with ``updates={stat: stat}``."""
+    x = pt.matrix("x")
+    normalized = BatchNorm("bn", 4)(Linear("fc", n_in=4, n_out=4)(x))
+    parameter = shared(np.zeros(()), name="w")
+    running_mean = next(
+        p for p in collect_non_trainable_params(normalized) if "running_mean" in p.name
+    )
+
+    step = function(
+        [x],
+        parameter,
+        updates={parameter: parameter + normalized.sum(), running_mean: running_mean},
+    )
+    step(np.random.default_rng(0).normal(size=(16, 4)).astype(config.floatX))
+
+    np.testing.assert_allclose(running_mean.get_value(), np.zeros(4, dtype=config.floatX))
+
+
+def test_a_prediction_graph_writes_no_statistic():
+    """The inference rewrite drops the stateful op, so specializing a graph is what makes scoring free of
+    side effects -- on a loss as much as on a prediction."""
+    x, y, prediction, features, targets = batch_norm_regression()
+    loss = pt.mean((prediction - y) ** 2)
+    running_mean = next(
+        p for p in collect_non_trainable_params(prediction) if "running_mean" in p.name
+    )
+    before = running_mean.get_value().copy()
+
+    score = function([x, y], rewrite_for_prediction(loss))
+    score(features, targets)
+
+    np.testing.assert_allclose(running_mean.get_value(), before)
