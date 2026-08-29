@@ -290,6 +290,41 @@ def test_a_layer_name_that_is_not_a_prefix_falls_back_to_trailing_numbers(tmp_pa
     assert sorted(load_file(tmp_path / "m.safetensors")) == ["weight_1", "weight_2"]
 
 
+def test_unnamed_layers_round_trip_with_their_optimizer_state(tmp_path):
+    """A checkpoint is parameters and optimizer state together, and the state's names are derived from
+    the parameters', so an unnamed stack has to key both apart to restore a run mid-training."""
+    X = pt.tensor("X", shape=(None, 4))
+    prediction = Sequential(Linear(n_in=4, n_out=8), Linear(n_in=8, n_out=2))(X)
+    parameters = collect_trainable_params(prediction)
+    rng = np.random.default_rng(0)
+    for parameter, value in zip(parameters, initialize_params(parameters, rng=rng)):
+        parameter.set_value(value)
+
+    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    updates = adam(learning_rate=1e-2)(loss, parameters)
+    state = [variable for variable in updates if variable not in set(parameters)]
+    step = function([X, target], loss, updates=updates)
+    step(rng.normal(size=(16, 4)).astype(floatX), rng.normal(size=(16, 2)).astype(floatX))
+
+    everything = [*parameters, *state]
+    saved = [variable.get_value().copy() for variable in everything]
+    path = tmp_path / "m.safetensors"
+    save_state(everything, path)
+
+    # The two layers have different shapes, so a moment filed under the wrong layer shows up here.
+    archive = load_file(path)
+    for ordinal in (1, 2):
+        weight = archive[f"Linear_{ordinal}_W"]
+        assert archive[f"Linear_{ordinal}_W/adam/first_moment"].shape == weight.shape
+        assert archive[f"Linear_{ordinal}_W/adam/second_moment"].shape == weight.shape
+
+    for variable in everything:
+        variable.set_value(np.zeros_like(variable.get_value()))
+    load_state(everything, path)
+    for before, variable in zip(saved, everything):
+        np.testing.assert_array_equal(before, variable.get_value())
+
+
 def test_numbering_follows_the_order_the_variables_are_passed(tmp_path):
     """The keys are a function of the sequence, not of anything intrinsic to the variables, which is
     why a checkpoint only reloads when it is collected the same way at save and at load."""

@@ -512,10 +512,10 @@ def state_for(parameter: Parameter, slot: str, fill_value: float = 0.0) -> Param
     """
     Return the optimizer-state shared variable shaped and typed like ``parameter``.
 
-    The variable is named ``"{parameter.name}/{slot}"`` so it can be matched by name at serialization
-    boundaries. The name is never used to *find* the variable at runtime — callers hold the returned object
-    directly, and reuse within a rule is keyed on the parameter object, so two same-named parameters still
-    get distinct buffers and collide loudly at save time rather than silently sharing.
+    The variable is named ``"{parameter.name}/{slot}"`` and carries the parameter's layer, so a checkpoint
+    numbers it where it numbers the parameter. The name is never used to *find* the variable at runtime --
+    callers hold the returned object directly, and reuse within a rule is keyed on the parameter object, so
+    two same-named parameters still get distinct buffers rather than silently sharing one.
 
     Allocates unless the enclosing rule was wrapped in :func:`reuses_state` and already holds this slot.
     Within one invocation a slot belongs to one component: a second claim on it raises rather than handing
@@ -569,7 +569,10 @@ def state_for(parameter: Parameter, slot: str, fill_value: float = 0.0) -> Param
 
     def allocate() -> Parameter:
         value = parameter.get_value(borrow=True)
-        return pytensor.shared(np.full_like(value, fill_value), name=f"{parameter.name}/{slot}")
+        state = pytensor.shared(np.full_like(value, fill_value), name=f"{parameter.name}/{slot}")
+        # Keeps `Linear_1_W` and `Linear_1_W/adam/first_moment` numbered onto the same layer.
+        state.layer_name = getattr(parameter, "layer_name", None)
+        return state
 
     return _reuse_or_allocate(key, allocate)
 
