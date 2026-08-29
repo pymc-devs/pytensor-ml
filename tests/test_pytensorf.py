@@ -411,7 +411,9 @@ def batch_norm_regression():
     """A network whose batch norm sits on the gradient path, with data far off unit scale so frozen
     statistics show up as a large prediction error rather than a small one."""
     x, y = pt.matrix("x"), pt.vector("y")
-    network = Sequential(Linear("fc1", 3, 4), BatchNorm("bn", n_in=4), Linear("fc2", 4, 1))
+    network = Sequential(
+        Linear("fc1", n_in=3, n_out=4), BatchNorm("bn", n_in=4), Linear("fc2", n_in=4, n_out=1)
+    )
     prediction = network(x)[:, 0]
     initialize_params(collect_trainable_params(prediction), rng=np.random.default_rng(0))
 
@@ -499,7 +501,7 @@ def test_one_step_advances_every_kind_of_state():
     x = pt.matrix("x")
     clock = step_counter(name="clock")
     network = Sequential(
-        Linear("fc", 4, 4), BatchNorm("bn", n_in=4), Dropout(p=0.5, random_state=0)
+        Linear("fc", n_in=4, n_out=4), BatchNorm("bn", n_in=4), Dropout(p=0.5, random_state=0)
     )
     activations = network(x)
     running_mean = next(

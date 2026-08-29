@@ -155,7 +155,7 @@ def set_random_weights(layer, rng):
 
 def test_multihead_attention_shape_and_value(rng):
     n_embd, n_head = 12, 3
-    mha = MultiheadAttention("mha", n_embd, n_head)
+    mha = MultiheadAttention("mha", n_embd=n_embd, n_head=n_head)
     set_random_weights(mha, rng)
 
     X = pt.tensor("X", shape=(None, None, n_embd))
@@ -185,7 +185,7 @@ def test_multihead_attention_shape_and_value(rng):
 
 
 def test_causal_self_attention_is_causal(rng):
-    csa = CausalSelfAttention("csa", 12, 3)
+    csa = CausalSelfAttention("csa", n_embd=12, n_head=3)
     assert csa.is_causal is True
     out = csa(pt.tensor("X", shape=(2, 5, 12)))
     attn_ops = [
@@ -199,7 +199,7 @@ def test_causal_self_attention_is_causal(rng):
 
 def test_attention_gradient_flows_to_all_projections(rng):
     n_embd, n_head = 8, 2
-    csa = CausalSelfAttention("csa", n_embd, n_head)
+    csa = CausalSelfAttention("csa", n_embd=n_embd, n_head=n_head)
     set_random_weights(csa, rng)
 
     X = pt.tensor("X", shape=(2, 4, n_embd))
@@ -214,7 +214,7 @@ def test_attention_gradient_flows_to_all_projections(rng):
 def test_attention_vectorizes_over_independent_inputs(rng):
     """vectorize_graph adds a leading batch of independent forward passes (multi-prediction)."""
     n_embd, n_head = 8, 2
-    mha = MultiheadAttention("mha", n_embd, n_head, is_causal=True)
+    mha = MultiheadAttention("mha", n_embd=n_embd, n_head=n_head, is_causal=True)
     set_random_weights(mha, rng)
 
     X = pt.tensor("X", shape=(2, 4, n_embd))

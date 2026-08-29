@@ -80,7 +80,9 @@ class TestModelInitialize:
     def test_leaves_a_norm_layer_at_the_identity_transform(self, norm_layer):
         X = pt.tensor("X", shape=(None, 8))
         norm = norm_layer("norm", n_in=4)
-        y = Sequential(Linear("fc1", 8, 4), norm, ReLU(), Linear("fc2", 4, 2))(X)
+        y = Sequential(
+            Linear("fc1", n_in=8, n_out=4), norm, ReLU(), Linear("fc2", n_in=4, n_out=2)
+        )(X)
 
         Model(X, y).initialize(seed=0)
 
@@ -89,8 +91,8 @@ class TestModelInitialize:
 
     def test_draws_weight_matrices_and_leaves_biases_at_zero(self):
         X = pt.tensor("X", shape=(None, 8))
-        fc1 = Linear("fc1", 8, 4)
-        y = Sequential(fc1, ReLU(), Linear("fc2", 4, 2))(X)
+        fc1 = Linear("fc1", n_in=8, n_out=4)
+        y = Sequential(fc1, ReLU(), Linear("fc2", n_in=4, n_out=2))(X)
 
         Model(X, y).initialize(seed=0)
 
@@ -104,7 +106,9 @@ class TestModelInitialize:
 
         def values_for(seed):
             X = pt.tensor("X", shape=(None, 8))
-            y = Sequential(Linear("fc1", 8, 4), ReLU(), Linear("fc2", 4, 2))(X)
+            y = Sequential(Linear("fc1", n_in=8, n_out=4), ReLU(), Linear("fc2", n_in=4, n_out=2))(
+                X
+            )
             model = Model(X, y).initialize(seed=seed)
             return {p.name: p.get_value() for p in model.weights}
 
@@ -121,7 +125,9 @@ class TestModelInitialize:
         rng = np.random.default_rng(0)
         X = pt.tensor("X", shape=(None, 8))
         norm = BatchNorm("norm", n_in=4)
-        y = Sequential(Linear("fc1", 8, 4), norm, ReLU(), Linear("fc2", 4, 2))(X)
+        y = Sequential(
+            Linear("fc1", n_in=8, n_out=4), norm, ReLU(), Linear("fc2", n_in=4, n_out=2)
+        )(X)
         model = Model(X, y).initialize(seed=0)
 
         target = pt.matrix("target")
@@ -172,8 +178,8 @@ def test_a_layer_keyword_survives_a_redraw():
     """A zeroed output head is a real technique, and the constructor keyword is how it is asked for. The
     redraw has to honor it rather than treat every weight matrix as a fresh Xavier draw."""
     X = pt.tensor("X", shape=(None, 8))
-    first = Linear("fc1", 8, 4)
-    head = Linear("head", 4, 2, weight_initializer=ZeroInitializer())
+    first = Linear("fc1", n_in=8, n_out=4)
+    head = Linear("head", n_in=4, n_out=2, weight_initializer=ZeroInitializer())
     y = Sequential(first, ReLU(), head)(X)
 
     Model(X, y).initialize(seed=0)
@@ -186,9 +192,9 @@ def test_initialize_takes_per_parameter_initializers():
     """The model-level entry point a user actually calls. Reaching a parameter through the layer that owns
     it is what makes a bias inside a composed layer addressable, since no constructor keyword exposes one."""
     X = pt.tensor("X", shape=(None, 8))
-    fc1 = Linear("fc1", 8, 4)
+    fc1 = Linear("fc1", n_in=8, n_out=4)
     norm = BatchNorm("norm", n_in=4)
-    y = Sequential(fc1, norm, ReLU(), Linear("fc2", 4, 2))(X)
+    y = Sequential(fc1, norm, ReLU(), Linear("fc2", n_in=4, n_out=2))(X)
     drawn = constant(value=7.0)
 
     Model(X, y).initialize(seed=0, initializers={fc1.b: drawn, norm.scale: drawn})
@@ -203,8 +209,8 @@ def test_a_constant_reaches_one_parameter_through_initializers():
     """The same zeroed head as above, asked for at initialize time rather than at construction -- the route
     for a parameter whose layer you did not build, such as one inside a loaded network."""
     X = pt.tensor("X", shape=(None, 8))
-    first = Linear("fc1", 8, 4)
-    head = Linear("head", 4, 2)
+    first = Linear("fc1", n_in=8, n_out=4)
+    head = Linear("head", n_in=4, n_out=2)
     y = Sequential(first, ReLU(), head)(X)
 
     Model(X, y).initialize(seed=0, initializers={head.W: ZeroInitializer()})

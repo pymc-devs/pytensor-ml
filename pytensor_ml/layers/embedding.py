@@ -1,6 +1,6 @@
 import pytensor.tensor as pt
 
-from pytensor_ml.base import Layer, UnaryLayerOp
+from pytensor_ml.base import Layer, UnaryLayerOp, _resolve_layer_name
 from pytensor_ml.params import trainable
 from pytensor_ml.state import Initializer, XavierNormalInitializer
 
@@ -50,12 +50,12 @@ class Embedding(Layer):
     def __init__(
         self,
         name: str | None,
+        *,
         n_embeddings: int,
         n_features: int,
-        *,
         weight_initializer: Initializer | None = None,
     ):
-        self.name = name if name else "Embedding"
+        self.name = _resolve_layer_name(name, type(self).__name__, "n_embeddings")
         self.n_embeddings = n_embeddings
         self.n_features = n_features
 

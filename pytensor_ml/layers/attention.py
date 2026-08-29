@@ -4,7 +4,7 @@ import pytensor.tensor as pt
 from pytensor import config
 from pytensor.tensor.variable import TensorVariable
 
-from pytensor_ml.base import Layer, UnaryLayerOp
+from pytensor_ml.base import Layer, UnaryLayerOp, _resolve_layer_name
 from pytensor_ml.layers.linear import Linear
 from pytensor_ml.state import Initializer
 
@@ -193,12 +193,12 @@ class MultiheadAttention(Layer):
     def __init__(
         self,
         name: str | None,
+        *,
         n_embd: int,
         n_head: int,
         n_kv_head: int | None = None,
         bias: bool = True,
         is_causal: bool = False,
-        *,
         out_proj_initializer: Initializer | None = None,
     ):
         if n_embd % n_head != 0:
@@ -207,21 +207,27 @@ class MultiheadAttention(Layer):
         if n_head % n_kv_head != 0:
             raise ValueError(f"n_head ({n_head}) must be divisible by n_kv_head ({n_kv_head})")
 
-        self.name = name if name else "MultiheadAttention"
+        self.name = _resolve_layer_name(name, type(self).__name__, "n_embd")
         self.n_embd = n_embd
         self.n_head = n_head
         self.n_kv_head = n_kv_head
         self.head_dim = n_embd // n_head
         self.is_causal = is_causal
 
-        self.q_proj = Linear(f"{self.name}_q_proj", n_embd, n_head * self.head_dim, bias)
-        self.k_proj = Linear(f"{self.name}_k_proj", n_embd, n_kv_head * self.head_dim, bias)
-        self.v_proj = Linear(f"{self.name}_v_proj", n_embd, n_kv_head * self.head_dim, bias)
+        self.q_proj = Linear(
+            f"{self.name}_q_proj", n_in=n_embd, n_out=n_head * self.head_dim, bias=bias
+        )
+        self.k_proj = Linear(
+            f"{self.name}_k_proj", n_in=n_embd, n_out=n_kv_head * self.head_dim, bias=bias
+        )
+        self.v_proj = Linear(
+            f"{self.name}_v_proj", n_in=n_embd, n_out=n_kv_head * self.head_dim, bias=bias
+        )
         self.out_proj = Linear(
             f"{self.name}_out_proj",
-            n_head * self.head_dim,
-            n_embd,
-            bias,
+            n_in=n_head * self.head_dim,
+            n_out=n_embd,
+            bias=bias,
             weight_initializer=out_proj_initializer,
         )
 
@@ -288,17 +294,17 @@ class CausalSelfAttention(MultiheadAttention):
     def __init__(
         self,
         name: str | None,
+        *,
         n_embd: int,
         n_head: int,
         n_kv_head: int | None = None,
         bias: bool = True,
-        *,
         out_proj_initializer: Initializer | None = None,
     ):
         super().__init__(
-            name if name else "CausalSelfAttention",
-            n_embd,
-            n_head,
+            name,
+            n_embd=n_embd,
+            n_head=n_head,
             n_kv_head=n_kv_head,
             bias=bias,
             is_causal=True,

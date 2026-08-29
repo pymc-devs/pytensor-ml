@@ -1,4 +1,5 @@
 import importlib
+import inspect
 
 import numpy as np
 import pytensor
@@ -10,6 +11,7 @@ from pytensor.graph.replace import vectorize_graph
 import pytensor_ml.layers
 
 from pytensor_ml.activations import ReLU
+from pytensor_ml.base import Layer
 from pytensor_ml.layers import (
     BatchNorm,
     Conv2D,
@@ -22,6 +24,7 @@ from pytensor_ml.layers import (
     MaxPool2D,
     Sequential,
 )
+from pytensor_ml.layers.recurrent import RecurrentCell
 from pytensor_ml.pytensorf import (
     collect_non_trainable_updates,
     collect_trainable_params,
@@ -123,7 +126,7 @@ def test_input_accepts_a_varying_dimension():
     """One compiled graph has to serve batches of different sizes, which is what an unknown dimension is
     for -- asserting the declared type alone would pass even if the batch axis were pinned."""
     X = Input("X", (None, 64))
-    forward = pytensor.function([X], Linear("fc", 64, 8)(X))
+    forward = pytensor.function([X], Linear("fc", n_in=64, n_out=8)(X))
 
     assert X.type.shape == (None, 64)
     assert forward(np.zeros((3, 64), dtype=floatX)).shape == (3, 8)
@@ -132,7 +135,7 @@ def test_input_accepts_a_varying_dimension():
 
 def test_embedding_forward(rng):
     n_embeddings, n_features = 10, 4
-    embedding = Embedding("emb", n_embeddings, n_features)
+    embedding = Embedding("emb", n_embeddings=n_embeddings, n_features=n_features)
     W_np = rng.normal(size=(n_embeddings, n_features)).astype(floatX)
     embedding.W.set_value(W_np)
 
@@ -223,7 +226,12 @@ def test_vectorize_graph_batches_independent_predictions(rng):
     # A model built for a single sample must vectorize over a batch through the OpFromGraph-based
     # layers (Linear, LayerNorm); the batched result must match looping the single-sample graph.
     x = pt.vector("x", shape=(4,))
-    net = Sequential(Linear("fc1", 4, 8), ReLU(), LayerNorm("ln", n_in=8), Linear("fc2", 8, 3))
+    net = Sequential(
+        Linear("fc1", n_in=4, n_out=8),
+        ReLU(),
+        LayerNorm("ln", n_in=8),
+        Linear("fc2", n_in=8, n_out=3),
+    )
     out = net(x)
     for parameter in collect_trainable_params(out):
         parameter.set_value(rng.normal(size=parameter.get_value().shape).astype(floatX))
@@ -514,7 +522,7 @@ def test_construction_draws_do_not_leak_into_a_seeded_initialize():
 
     def seeded_values():
         X = pt.tensor("features", shape=(None, 4), dtype=floatX)
-        prediction = Sequential(Linear("fc1", 4, 4), Linear("fc2", 4, 4))(X)
+        prediction = Sequential(Linear("fc1", n_in=4, n_out=4), Linear("fc2", n_in=4, n_out=4))(X)
         params = collect_trainable_params(prediction)
         return dict(zip((p.name for p in params), initialize_params(params, rng=0)))
 
@@ -773,3 +781,54 @@ def test_name_defaults_to_the_class_name(layer_name):
     layer = getattr(pytensor_ml.layers, layer_name)
     assert layer().name == layer_name
     assert layer(None).name == layer_name
+
+
+def test_no_layer_takes_a_hyperparameter_positionally():
+    """A layer added with a positional hyperparameter reopens the slot torch and keras calls land
+    in, so the rule is checked over the whole exported surface rather than a fixed list."""
+    operands = {"Recurrent": ("cell",), "Bidirectional": ("forward", "backward")}
+    offenders = {}
+    for layer_name in pytensor_ml.layers.__all__:
+        layer = getattr(pytensor_ml.layers, layer_name)
+        if not inspect.isclass(layer) or not issubclass(layer, (Layer, RecurrentCell)):
+            continue
+        if layer.__init__ is object.__init__:  # a container taking its layers as *args
+            continue
+        parameters = list(inspect.signature(layer.__init__).parameters.values())[1:]
+        positional = tuple(
+            p.name for p in parameters if p.kind in (p.POSITIONAL_OR_KEYWORD, p.VAR_POSITIONAL)
+        )
+        expected = (*operands.get(layer_name, ()), "name")
+        if positional != expected:
+            offenders[layer_name] = positional
+    assert not offenders, f"layers taking more than a name positionally: {offenders}"
+
+
+def test_a_layer_with_required_hyperparameters_rejects_a_number_in_the_name_slot():
+    """``Linear(4)`` fails as a missing argument rather than a bad name, so the check is only
+    reachable once the hyperparameters it needs are supplied."""
+    with pytest.raises(TypeError, match=r"Linear\(n_in="):
+        Linear(4, n_in=4, n_out=4)
+
+
+def test_a_layer_with_no_displaceable_hyperparameter_suggests_nothing():
+    """``Recurrent`` takes its cell first and has no hyperparameter a name could displace, so the
+    error reports the bad name without inventing a parameter to blame for it."""
+    cell = pytensor_ml.layers.ElmanCell("cell", n_in=2, n_hidden=2)
+    with pytest.raises(TypeError, match=r"`name` must be a string, but got int 5\.$"):
+        pytensor_ml.layers.Recurrent(cell, 5)
+
+
+@pytest.mark.parametrize("layer_name", ["RNN", "LSTM", "GRU"])
+def test_a_recurrent_layer_defaults_to_its_own_name_not_its_base(layer_name):
+    """All three subclass ``Recurrent``, which names an unnamed layer after the class the caller
+    built rather than after itself."""
+    layer = getattr(pytensor_ml.layers, layer_name)
+    assert layer(None, n_in=2, n_hidden=2).name == layer_name
+
+
+def test_bidirectional_rejects_a_non_string_name():
+    forward = pytensor_ml.layers.RNN("forward", n_in=2, n_hidden=2)
+    backward = pytensor_ml.layers.RNN("backward", n_in=2, n_hidden=2)
+    with pytest.raises(TypeError, match=r"Bidirectional's `name` must be a string"):
+        pytensor_ml.layers.Bidirectional(forward, backward, 5)

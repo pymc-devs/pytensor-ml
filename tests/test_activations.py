@@ -84,7 +84,9 @@ def test_swish_matches_reference(beta):
 @pytest.mark.parametrize("activation", HIDDEN_ACTIVATIONS, ids=_activation_id)
 def test_activation_lets_a_network_learn_xor(activation):
     X = pt.matrix("X")
-    output = Sequential(Linear("fc1", 2, 8), activation, Linear("fc2", 8, 2))(X)
+    output = Sequential(Linear("fc1", n_in=2, n_out=8), activation, Linear("fc2", n_in=8, n_out=2))(
+        X
+    )
     parameters = collect_trainable_params(output)
     for parameter, value in zip(
         parameters, initialize_params(parameters, rng=np.random.default_rng(0))

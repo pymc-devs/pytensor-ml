@@ -1,6 +1,6 @@
 import pytensor.tensor as pt
 
-from pytensor_ml.base import Layer, UnaryLayerOp
+from pytensor_ml.base import Layer, UnaryLayerOp, _resolve_layer_name
 from pytensor_ml.params import trainable
 from pytensor_ml.state import Initializer, XavierNormalInitializer, ZeroInitializer
 
@@ -67,14 +67,14 @@ class Linear(Layer):
     def __init__(
         self,
         name: str | None,
+        *,
         n_in: int,
         n_out: int,
         bias: bool = True,
-        *,
         weight_initializer: Initializer | None = None,
         bias_initializer: Initializer | None = None,
     ):
-        self.name = name if name else "Linear"
+        self.name = _resolve_layer_name(name, type(self).__name__, "n_in")
         self.n_in = n_in
         self.n_out = n_out
         self.bias = bias

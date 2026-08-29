@@ -27,9 +27,9 @@ def constant(rng, shape, value):
 def simple_network():
     X = pt.tensor("X", shape=(None, 64))
     network = Sequential(
-        Linear("fc1", 64, 32),
+        Linear("fc1", n_in=64, n_out=32),
         ReLU(),
-        Linear("fc2", 32, 10),
+        Linear("fc2", n_in=32, n_out=10),
     )
     y = network(X)
     return X, y
@@ -39,10 +39,10 @@ def simple_network():
 def network_with_batchnorm():
     X = pt.tensor("X", shape=(None, 64))
     network = Sequential(
-        Linear("fc1", 64, 32),
+        Linear("fc1", n_in=64, n_out=32),
         BatchNorm("bn1", n_in=32),
         ReLU(),
-        Linear("fc2", 32, 10),
+        Linear("fc2", n_in=32, n_out=10),
     )
     y = network(X)
     return X, y
@@ -52,10 +52,10 @@ def network_with_batchnorm():
 def network_with_dropout():
     X = pt.tensor("X", shape=(None, 64))
     network = Sequential(
-        Linear("fc1", 64, 32),
+        Linear("fc1", n_in=64, n_out=32),
         Dropout(p=0.5),
         ReLU(),
-        Linear("fc2", 32, 10),
+        Linear("fc2", n_in=32, n_out=10),
     )
     y = network(X)
     return X, y

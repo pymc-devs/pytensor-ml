@@ -275,7 +275,7 @@ def test_does_not_hold_back_statistics_the_model_writes():
     folded in outside the rule, so a poisoned batch reaches it even though the parameters are spared."""
     X = pt.matrix("X")
     normalization = BatchNorm("bn", n_in=2)
-    network = Sequential(Linear("fc", 2, 2), normalization)
+    network = Sequential(Linear("fc", n_in=2, n_out=2), normalization)
     loss = (network(X) ** 2).sum()
     step = compile_train(loss, apply_if_finite(sgd(0.1), max_consecutive_skips=None))
 

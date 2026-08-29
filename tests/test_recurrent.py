@@ -148,7 +148,7 @@ def test_an_activation_brings_its_own_parameters_into_the_recurrence():
 def test_trains_end_to_end(rng):
     """Gradients survive the round trip through the scan and the training machinery moves the parameters."""
     X = Input("X", shape=(None, 6, 4))
-    y = Linear("head", 5, 1)(RNN("rnn", n_in=4, n_hidden=5)(X)[..., -1, :])
+    y = Linear("head", n_in=5, n_out=1)(RNN("rnn", n_in=4, n_hidden=5)(X)[..., -1, :])
     model = Model(X, y).initialize(seed=1)
     step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)
 
@@ -532,7 +532,7 @@ def test_the_gru_forwards_its_initializers_to_the_cell():
 def test_the_gru_trains_end_to_end(rng):
     """Gradients survive the round trip through the gates and the training machinery moves them."""
     X = Input("X", shape=(None, 6, 4))
-    y = Linear("head", 5, 1)(GRU("gru", n_in=4, n_hidden=5)(X)[..., -1, :])
+    y = Linear("head", n_in=5, n_out=1)(GRU("gru", n_in=4, n_hidden=5)(X)[..., -1, :])
     model = Model(X, y).initialize(seed=1)
     step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)
 
@@ -821,7 +821,7 @@ def test_the_lstm_trains_end_to_end(rng):
     """Gradients survive the round trip through both carried states and the training machinery moves
     them. Nothing else here differentiates a cell whose two states feed each other."""
     X = Input("X", shape=(None, 6, 4))
-    y = Linear("head", 5, 1)(LSTM("lstm", n_in=4, n_hidden=5)(X)[..., -1, :])
+    y = Linear("head", n_in=5, n_out=1)(LSTM("lstm", n_in=4, n_hidden=5)(X)[..., -1, :])
     model = Model(X, y).initialize(seed=1)
     step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)
 
@@ -1017,7 +1017,7 @@ def test_bidirectional_trains_end_to_end(rng):
     the parameters."""
     X = Input("X", shape=(None, 6, 4))
     both = Bidirectional(GRU("fwd", n_in=4, n_hidden=5), GRU("bwd", n_in=4, n_hidden=5))(X)
-    y = Linear("head", 10, 1)(both[..., -1, :])
+    y = Linear("head", n_in=10, n_out=1)(both[..., -1, :])
     model = Model(X, y).initialize(seed=1)
 
     assert len(collect_trainable_params(y)) == 10

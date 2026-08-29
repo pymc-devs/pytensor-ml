@@ -1,7 +1,7 @@
 import pytensor.tensor as pt
 
 from pytensor_ml.activations import GELU, Activation
-from pytensor_ml.base import Layer
+from pytensor_ml.base import Layer, _resolve_layer_name
 from pytensor_ml.layers.attention import MultiheadAttention
 from pytensor_ml.layers.dropout import Dropout
 from pytensor_ml.layers.linear import Linear
@@ -63,25 +63,25 @@ class FeedForward(Layer):
     def __init__(
         self,
         name: str | None,
+        *,
         d_model: int,
         hidden_dim: int | None = None,
         mlp_ratio: int = 4,
         activation: Activation | None = None,
         bias: bool = True,
-        *,
         fc_out_initializer: Initializer | None = None,
     ):
-        self.name = name if name else "FeedForward"
+        self.name = _resolve_layer_name(name, type(self).__name__, "d_model")
         self.d_model = d_model
         self.hidden_dim = hidden_dim if hidden_dim is not None else mlp_ratio * d_model
         self.activation = activation if activation is not None else GELU()
 
-        self.fc_in = Linear(f"{self.name}_fc_in", d_model, self.hidden_dim, bias)
+        self.fc_in = Linear(f"{self.name}_fc_in", n_in=d_model, n_out=self.hidden_dim, bias=bias)
         self.fc_out = Linear(
             f"{self.name}_fc_out",
-            self.hidden_dim,
-            d_model,
-            bias,
+            n_in=self.hidden_dim,
+            n_out=d_model,
+            bias=bias,
             weight_initializer=fc_out_initializer,
         )
 
@@ -164,9 +164,9 @@ class TransformerBlock(Layer):
     def __init__(
         self,
         name: str | None,
+        *,
         d_model: int,
         n_head: int,
-        *,
         mlp_ratio: int = 4,
         activation: Activation | None = None,
         norm_first: bool = True,
@@ -177,7 +177,7 @@ class TransformerBlock(Layer):
         epsilon: float = 1e-5,
         residual_initializer: Initializer | None = None,
     ):
-        self.name = name if name else "TransformerBlock"
+        self.name = _resolve_layer_name(name, type(self).__name__, "d_model")
         self.d_model = d_model
         self.norm_first = norm_first
 
@@ -185,8 +185,8 @@ class TransformerBlock(Layer):
         self.norm2 = LayerNorm(f"{self.name}_norm2", n_in=d_model, epsilon=epsilon)
         self.attn = MultiheadAttention(
             f"{self.name}_attn",
-            d_model,
-            n_head,
+            n_embd=d_model,
+            n_head=n_head,
             n_kv_head=n_kv_head,
             bias=bias,
             is_causal=is_causal,
@@ -194,7 +194,7 @@ class TransformerBlock(Layer):
         )
         self.ff = FeedForward(
             f"{self.name}_ff",
-            d_model,
+            d_model=d_model,
             mlp_ratio=mlp_ratio,
             activation=activation,
             bias=bias,

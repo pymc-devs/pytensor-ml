@@ -182,7 +182,7 @@ def test_an_encoder_decoder_trains_end_to_end(rng):
     X = Input("X", shape=(None, 8, 8, 2))
     encoded = Conv2D("down", in_channels=2, out_channels=4, kernel_size=3, stride=2)(X)
     decoded = ConvTranspose2D("up", in_channels=4, out_channels=2, kernel_size=3, stride=2)(encoded)
-    y = Linear("head", 7 * 7 * 2, 1)(Flatten(decoded))
+    y = Linear("head", n_in=7 * 7 * 2, n_out=1)(Flatten(decoded))
 
     model = Model(X, y).initialize(seed=1)
     step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)

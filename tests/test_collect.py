@@ -71,7 +71,7 @@ class TestCollectDifferentiableParams:
     )
     def test_excludes_a_detached_network(self, stop_gradient):
         X = pt.tensor("X", shape=(None, 4))
-        online, target = Linear("online", 4, 2)(X), Linear("target", 4, 2)(X)
+        online, target = Linear("online", n_in=4, n_out=2)(X), Linear("target", n_in=4, n_out=2)(X)
         loss = ((online - stop_gradient(target)) ** 2).sum()
 
         assert names(collect_trainable_params(loss)) == {
@@ -84,7 +84,7 @@ class TestCollectDifferentiableParams:
 
     def test_keeps_a_parameter_that_is_also_reached_on_a_live_path(self):
         X = pt.tensor("X", shape=(None, 4))
-        prediction = Linear("fc", 4, 2)(X)
+        prediction = Linear("fc", n_in=4, n_out=2)(X)
         loss = ((prediction - disconnected_grad(prediction)) ** 2).sum() + prediction.sum()
 
         assert names(collect_differentiable_params(loss)) == {"fc_W", "fc_b"}
@@ -94,7 +94,7 @@ class TestCollectDifferentiableParams:
         network output, so it is an ancestor of the loss as written and gone once the loss differentiates
         twice with respect to the input. Nothing marks it -- the ops simply propagate nothing to it."""
         x = pt.tensor("x", shape=(None, 1))
-        u = Sequential(Linear("hidden", 1, 4), Tanh(), Linear("out", 4, 1))(x)
+        u = Sequential(Linear("hidden", n_in=1, n_out=4), Tanh(), Linear("out", n_in=4, n_out=1))(x)
         loss = (grad(grad(u.sum(), x).sum(), x) ** 2).mean()
 
         assert names(collect_trainable_params(loss)) == {"hidden_W", "hidden_b", "out_W", "out_b"}
@@ -105,7 +105,10 @@ class TestCollectDifferentiableParams:
         as missing, so the marker walk is what catches it. Replacing that walk with the connection pattern
         would put these parameters back in the optimizer's set, where weight decay moves them."""
         X = pt.tensor("X", shape=(None, 4))
-        live_layer, frozen_layer = Linear("live", 4, 2), Linear("frozen", 4, 2)
+        live_layer, frozen_layer = (
+            Linear("live", n_in=4, n_out=2),
+            Linear("frozen", n_in=4, n_out=2),
+        )
         loss = ((live_layer(X) + zero_grad(frozen_layer(X))) ** 2).sum()
 
         [gradient] = grad(loss, [frozen_layer.W], disconnected_inputs="ignore")

@@ -314,7 +314,7 @@ def test_a_parameter_that_differentiates_away_is_skipped_unless_you_name_it():
     loss cannot reach is left out, so a physics-informed loss trains without hand-enumerating the rest.
     Named explicitly, it raises -- you asserted it should train, and it cannot."""
     x = pt.tensor("x", shape=(None, 1))
-    u = Sequential(Linear("hidden", 1, 4), Tanh(), Linear("out", 4, 1))(x)
+    u = Sequential(Linear("hidden", n_in=1, n_out=4), Tanh(), Linear("out", n_in=4, n_out=1))(x)
     loss = (grad(grad(u.sum(), x).sum(), x) ** 2).mean()
     every_parameter = collect_trainable_params(loss)
     initialize(every_parameter)

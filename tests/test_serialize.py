@@ -93,13 +93,15 @@ def _activation_id(activation):
 
 @pytest.mark.parametrize("activation", ALL_ACTIVATIONS, ids=_activation_id)
 def test_every_activation_roundtrips(activation):
-    X, output = initialized_network(Linear("fc1", 4, 8), activation, Linear("fc2", 8, 4))
+    X, output = initialized_network(
+        Linear("fc1", n_in=4, n_out=8), activation, Linear("fc2", n_in=8, n_out=4)
+    )
     assert_outputs_roundtrip([X], output, [np.random.default_rng(1).normal(size=(5, 4))])
 
 
 @pytest.mark.parametrize("bias", [True, False], ids=["bias", "no_bias"])
 def test_linear_bias_variants_roundtrip(bias):
-    X, output = initialized_network(Linear("fc", 4, 3, bias=bias))
+    X, output = initialized_network(Linear("fc", n_in=4, n_out=3, bias=bias))
     assert_outputs_roundtrip([X], output, [np.random.default_rng(1).normal(size=(5, 4))])
 
 
@@ -109,13 +111,17 @@ def test_linear_bias_variants_roundtrip(bias):
     ids=["default", "no_affine", "no_running_stats"],
 )
 def test_batchnorm_variants_roundtrip(kwargs):
-    X, output = initialized_network(Linear("fc", 4, 4), BatchNorm("bn", n_in=4, **kwargs))
+    X, output = initialized_network(
+        Linear("fc", n_in=4, n_out=4), BatchNorm("bn", n_in=4, **kwargs)
+    )
     assert_outputs_roundtrip([X], output, [np.random.default_rng(1).normal(size=(8, 4))])
 
 
 @pytest.mark.parametrize("affine", [True, False], ids=["affine", "no_affine"])
 def test_layernorm_roundtrips(affine):
-    X, output = initialized_network(Linear("fc", 4, 6), LayerNorm("ln", n_in=6, affine=affine))
+    X, output = initialized_network(
+        Linear("fc", n_in=4, n_out=6), LayerNorm("ln", n_in=6, affine=affine)
+    )
     assert_outputs_roundtrip([X], output, [np.random.default_rng(1).normal(size=(8, 4))])
 
 
@@ -166,7 +172,7 @@ def test_attention_roundtrips(is_causal, scale):
 
 def test_multi_output_network_roundtrips():
     X = pt.matrix("X")
-    output = [Linear("head_a", 4, 2)(X), Linear("head_b", 4, 3)(X)]
+    output = [Linear("head_a", n_in=4, n_out=2)(X), Linear("head_b", n_in=4, n_out=3)(X)]
     for parameter in collect_trainable_params(output):
         value = np.random.default_rng(0).normal(size=parameter.get_value().shape)
         parameter.set_value(value.astype(parameter.type.dtype))

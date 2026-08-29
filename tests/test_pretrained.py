@@ -24,7 +24,7 @@ floatX = pytensor.config.floatX
 def build_initialized_network(seed=0):
     rng = np.random.default_rng(seed)
     X = pt.matrix("X")
-    output = Sequential(Linear("fc1", 4, 8), ReLU(), Linear("fc2", 8, 2))(X)
+    output = Sequential(Linear("fc1", n_in=4, n_out=8), ReLU(), Linear("fc2", n_in=8, n_out=2))(X)
     for parameter in collect_trainable_params(output):
         value = rng.normal(size=parameter.get_value().shape)
         parameter.set_value(value.astype(parameter.type.dtype))
@@ -95,7 +95,7 @@ def test_load_network_rejects_unstamped_config(tmp_path):
 
 def test_dropout_network_roundtrips_with_fresh_rng(tmp_path):
     X = pt.matrix("X")
-    output = Sequential(Linear("fc", 4, 4), Dropout(p=0.5, random_state=0))(X)
+    output = Sequential(Linear("fc", n_in=4, n_out=4), Dropout(p=0.5, random_state=0))(X)
     for parameter in collect_trainable_params(output):
         value = np.random.default_rng(0).normal(size=parameter.get_value().shape)
         parameter.set_value(value.astype(parameter.type.dtype))
@@ -129,7 +129,7 @@ def test_restore_rng_reproduces_dropout_draws(tmp_path):
 def test_batchnorm_non_trainable_state_survives_roundtrip(tmp_path):
     rng = np.random.default_rng(0)
     X = pt.matrix("X")
-    output = Sequential(Linear("fc", 4, 4), BatchNorm("bn", n_in=4))(X)
+    output = Sequential(Linear("fc", n_in=4, n_out=4), BatchNorm("bn", n_in=4))(X)
     running_mean = next(v for v in collect_shared_variables(output) if v.name == "bn_running_mean")
     running_mean.set_value(rng.normal(size=4).astype(running_mean.type.dtype))
 
@@ -148,7 +148,7 @@ def test_load_network_rejects_an_older_format_version(tmp_path):
     # later inside class resolution.
     X = pt.tensor("X", shape=(None, 4))
     path = tmp_path / "config.json"
-    save_network(Linear("fc", 4, 2)(X), path, inputs=[X])
+    save_network(Linear("fc", n_in=4, n_out=2)(X), path, inputs=[X])
 
     config = json.loads(path.read_text())
     config["format_version"] = 1
@@ -163,7 +163,7 @@ def test_a_loaded_batch_norm_returns_to_its_identity_transform(tmp_path):
     and a config that dropped the declaration gave the scale a fan-scaled draw -- and once `fans` started
     refusing 1-D shapes, an outright error."""
     X = pt.matrix("X")
-    output = Sequential(Linear("fc", 4, 4), BatchNorm("norm", n_in=4))(X)
+    output = Sequential(Linear("fc", n_in=4, n_out=4), BatchNorm("norm", n_in=4))(X)
     save_network(output, tmp_path / "config.json")
 
     _, restored = load_network(tmp_path / "config.json")
@@ -180,7 +180,9 @@ def test_a_parameterized_initializer_keeps_its_arguments(tmp_path):
     """Recording the registry name alone would be lossy: 'normal' rebuilds at the default spread, so a table
     built for GPT-2 at 0.02 would come back at 0.01 and nothing would say so."""
     X = pt.imatrix("ids")
-    output = Embedding("tok", 32, 8, weight_initializer=NormalInitializer(0.0, 0.02))(X)
+    output = Embedding(
+        "tok", n_embeddings=32, n_features=8, weight_initializer=NormalInitializer(0.0, 0.02)
+    )(X)
     save_network(output, tmp_path / "config.json")
 
     _, restored = load_network(tmp_path / "config.json")
@@ -195,7 +197,7 @@ def test_a_decorated_initializer_round_trips_with_its_parameters(tmp_path):
     so they can be written down. `constant` lives in conftest, at module level, which is what lets the
     config find the class again."""
     X = pt.matrix("X")
-    output = Linear("fc", 4, 4, weight_initializer=constant(value=7.0))(X)
+    output = Linear("fc", n_in=4, n_out=4, weight_initializer=constant(value=7.0))(X)
     save_network(output, tmp_path / "config.json")
 
     _, restored = load_network(tmp_path / "config.json")
@@ -215,7 +217,7 @@ def test_an_initializer_defined_locally_reports_what_was_lost(tmp_path):
         return np.full(shape, value)
 
     X = pt.matrix("X")
-    output = Linear("fc", 4, 4, weight_initializer=local_constant(value=3.0))(X)
+    output = Linear("fc", n_in=4, n_out=4, weight_initializer=local_constant(value=3.0))(X)
     save_network(output, tmp_path / "config.json")
 
     _, restored = load_network(tmp_path / "config.json")
@@ -232,10 +234,10 @@ def test_a_loaded_network_initializes_exactly_like_the_one_it_was_saved_from(tmp
     sequence and a permutation would hand each the wrong draw."""
     X = pt.matrix("X")
     original = Sequential(
-        Linear("fc1", 4, 8),
+        Linear("fc1", n_in=4, n_out=8),
         ReLU(),
         BatchNorm("norm", n_in=8),
-        Linear("fc2", 8, 2, weight_initializer=NormalInitializer(0.0, 0.02)),
+        Linear("fc2", n_in=8, n_out=2, weight_initializer=NormalInitializer(0.0, 0.02)),
     )(X)
     save_network(original, tmp_path / "config.json")
     _, restored = load_network(tmp_path / "config.json")
@@ -263,9 +265,9 @@ def test_several_decorated_initializers_keep_their_own_class_and_parameters(tmp_
     not collide, and two different ones must not be confused for each other."""
     X = pt.matrix("X")
     output = Sequential(
-        Linear("fc1", 4, 4, weight_initializer=constant(value=7.0)),
-        Linear("fc2", 4, 4, weight_initializer=constant(value=-2.0)),
-        Linear("fc3", 4, 4, weight_initializer=arange_fill(start=100.0)),
+        Linear("fc1", n_in=4, n_out=4, weight_initializer=constant(value=7.0)),
+        Linear("fc2", n_in=4, n_out=4, weight_initializer=constant(value=-2.0)),
+        Linear("fc3", n_in=4, n_out=4, weight_initializer=arange_fill(start=100.0)),
     )(X)
     save_network(output, tmp_path / "config.json")
 
@@ -290,7 +292,7 @@ def test_an_initializer_with_no_parameters_round_trips(tmp_path):
     the sampler from the shape it is handed, which the config never sees. So a scaled initializer written by
     hand survives a round trip on the strength of its import path alone."""
     X = pt.matrix("X")
-    output = Linear("fc", 16, 4, weight_initializer=he_normal())(X)
+    output = Linear("fc", n_in=16, n_out=4, weight_initializer=he_normal())(X)
     save_network(output, tmp_path / "config.json")
 
     _, restored = load_network(tmp_path / "config.json")

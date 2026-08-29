@@ -272,9 +272,19 @@ def test_conv1d_pads_with_the_mode_it_is_given():
     X_np = np.ones((1, 6, 1), dtype=floatX)
     ones = np.ones((3, 1, 1), dtype=floatX)
 
-    zero_padded = Conv1D("c", 1, 1, 3, padding="same", bias=False)
+    zero_padded = Conv1D(
+        "c", in_channels=1, out_channels=1, kernel_size=3, padding="same", bias=False
+    )
     zero_padded.W.set_value(ones)
-    edge_padded = Conv1D("c", 1, 1, 3, padding="same", padding_mode="edge", bias=False)
+    edge_padded = Conv1D(
+        "c",
+        in_channels=1,
+        out_channels=1,
+        kernel_size=3,
+        padding="same",
+        padding_mode="edge",
+        bias=False,
+    )
     edge_padded.W.set_value(ones)
 
     np.testing.assert_allclose(
@@ -351,7 +361,7 @@ def test_conv1d_trains_end_to_end(rng):
     construction, and the test would be measuring nothing."""
     X = Input("X", shape=(None, 12, 2))
     features = Conv1D("conv", in_channels=2, out_channels=4, kernel_size=3, padding="same")(X)
-    y = Linear("head", 4, 1)(features.sum(axis=1))
+    y = Linear("head", n_in=4, n_out=1)(features.sum(axis=1))
     model = Model(X, y).initialize(seed=1)
     step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)
 
@@ -448,7 +458,7 @@ def test_a_kernel_of_one_is_a_linear_layer_applied_per_step(rng):
     the same weights. That pins the two conventions together: the kernel's trailing axes are the same
     ``(in, out)`` a weight matrix is, so copying one into the other needs a new axis and nothing else."""
     X = pt.tensor("X", shape=(None, None, 4))
-    linear = Linear("dense", 4, 6)
+    linear = Linear("dense", n_in=4, n_out=6)
     conv = Conv1D("conv", in_channels=4, out_channels=6, kernel_size=1)
 
     W_np = rng.normal(size=(4, 6)).astype(floatX)
@@ -750,7 +760,7 @@ def test_a_convolutional_network_trains_end_to_end(rng):
     features = Conv2D("conv", in_channels=2, out_channels=4, kernel_size=3, padding="same")(X)
     normalized = BatchNorm("norm", n_in=4)(ReLU()(features))
     pooled = MaxPool2D("pool", kernel_size=2)(normalized)
-    y = Linear("head", 4 * 4 * 4, 1)(Flatten(pooled))
+    y = Linear("head", n_in=4 * 4 * 4, n_out=1)(Flatten(pooled))
 
     model = Model(X, y).initialize(seed=1)
     step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)

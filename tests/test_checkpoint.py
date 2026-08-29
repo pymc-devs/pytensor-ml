@@ -27,7 +27,7 @@ def downcast_in_place(variable, dtype):
 def build_trained_step(seed: int = 0):
     """Build a small network, take a few Adam steps, and return its params and optimizer state."""
     X = pt.tensor("X", shape=(None, 4))
-    prediction = Sequential(Linear("fc1", 4, 8), Linear("fc2", 8, 2))(X)
+    prediction = Sequential(Linear("fc1", n_in=4, n_out=8), Linear("fc2", n_in=8, n_out=2))(X)
     parameters = collect_trainable_params(prediction)
     rng = np.random.default_rng(seed)
     for parameter, value in zip(parameters, initialize_params(parameters, rng=rng)):
@@ -212,7 +212,7 @@ def test_parameters_keep_identity_across_compilation():
     # The checkpoint handle is the parameter objects themselves. Compiling prediction and training graphs
     # must not clone them, or a checkpoint taken from collect_trainable_params would address dead copies.
     X = pt.tensor("X", shape=(None, 4))
-    prediction = Sequential(Linear("fc1", 4, 8), Linear("fc2", 8, 2))(X)
+    prediction = Sequential(Linear("fc1", n_in=4, n_out=8), Linear("fc2", n_in=8, n_out=2))(X)
     before = collect_trainable_params(prediction)
 
     compile_predict(prediction, inputs=[X])
