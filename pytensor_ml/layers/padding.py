@@ -5,7 +5,7 @@ import pytensor.tensor as pt
 from pytensor.tensor.pad import PadMode
 from pytensor.tensor.variable import TensorVariable
 
-from pytensor_ml.base import Layer, _check_input_rank
+from pytensor_ml.base import Layer, _check_input_rank, _resolve_layer_name
 
 
 def _pad_spatial(
@@ -103,9 +103,10 @@ class _PadNd(Layer):
     def __init__(
         self,
         name: str | None = None,
+        *,
         padding: int | Sequence[int] | Sequence[tuple[int, int]] = 0,
     ):
-        self.name = name if name else type(self).__name__
+        self.name = _resolve_layer_name(name, type(self).__name__, "padding")
         self.padding = _resolve_pad_amounts(padding, self.n_spatial)
 
     def __call__(self, X: pt.TensorLike) -> TensorVariable:
@@ -133,10 +134,11 @@ class _ConstantPadNd(_PadNd):
     def __init__(
         self,
         name: str | None = None,
+        *,
         padding: int | Sequence[int] | Sequence[tuple[int, int]] = 0,
         value: float = 0.0,
     ):
-        super().__init__(name, padding)
+        super().__init__(name, padding=padding)
         self.constant_value = float(value)
 
 

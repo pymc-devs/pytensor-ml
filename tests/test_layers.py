@@ -706,3 +706,70 @@ def test_batch_norm_reduces_over_time_as_well_as_the_batch(rng):
     expected = (X_np - X_np.mean(axis=(0, 1))) / np.sqrt(X_np.var(axis=(0, 1)) + batch_norm.epsilon)
 
     np.testing.assert_allclose(out.eval({X: X_np}), expected, rtol=1e-5, atol=ATOL)
+
+
+# The layers every hyperparameter of which has a default, so a stray value reaches the name slot
+# rather than failing as a missing argument. Each is paired with the hyperparameter a torch or keras
+# user would have put there positionally, a value for it, and what the layer stores for that value --
+# a scalar fans out to one entry per spatial axis.
+OPTIONAL_NAME_LAYERS = [
+    ("Dropout", "p", 0.1, 0.1),
+    ("BatchNorm", "n_in", 32, 32),
+    ("LayerNorm", "n_in", 32, 32),
+    ("MaxPool1D", "kernel_size", 3, (3,)),
+    ("MaxPool2D", "kernel_size", 3, (3, 3)),
+    ("AvgPool1D", "kernel_size", 3, (3,)),
+    ("AvgPool2D", "kernel_size", 3, (3, 3)),
+    ("ZeroPad1D", "padding", 1, ((1, 1),)),
+    ("ZeroPad2D", "padding", 1, ((1, 1), (1, 1))),
+    ("ConstantPad1D", "padding", 1, ((1, 1),)),
+    ("ConstantPad2D", "padding", 1, ((1, 1), (1, 1))),
+    ("ReflectionPad1D", "padding", 1, ((1, 1),)),
+    ("ReflectionPad2D", "padding", 1, ((1, 1), (1, 1))),
+    ("ReplicationPad1D", "padding", 1, ((1, 1),)),
+    ("ReplicationPad2D", "padding", 1, ((1, 1), (1, 1))),
+]
+OPTIONAL_NAME_LAYER_IDS = [layer_name for layer_name, *_ in OPTIONAL_NAME_LAYERS]
+
+
+@pytest.mark.parametrize(
+    "layer_name, parameter, value, _stored", OPTIONAL_NAME_LAYERS, ids=OPTIONAL_NAME_LAYER_IDS
+)
+def test_hyperparameter_in_the_name_slot_raises(layer_name, parameter, value, _stored):
+    """The torch and keras spelling puts the hyperparameter where ``name`` goes, so only a type
+    check on ``name`` can catch it."""
+    layer = getattr(pytensor_ml.layers, layer_name)
+    with pytest.raises(TypeError, match=rf"{layer_name}\({parameter}="):
+        layer(value)
+
+
+@pytest.mark.parametrize(
+    "layer_name, parameter, value, _stored", OPTIONAL_NAME_LAYERS, ids=OPTIONAL_NAME_LAYER_IDS
+)
+def test_hyperparameter_is_keyword_only(layer_name, parameter, value, _stored):
+    """A name in the name slot is not enough on its own: keyword-only arguments are what stop a
+    hyperparameter landing one place off and binding anyway."""
+    layer = getattr(pytensor_ml.layers, layer_name)
+    with pytest.raises(TypeError, match="positional argument"):
+        layer("layer", value)
+
+
+@pytest.mark.parametrize(
+    "layer_name, parameter, value, stored", OPTIONAL_NAME_LAYERS, ids=OPTIONAL_NAME_LAYER_IDS
+)
+def test_name_and_hyperparameter_by_keyword(layer_name, parameter, value, stored):
+    layer = getattr(pytensor_ml.layers, layer_name)
+    built = layer("layer", **{parameter: value})
+    assert built.name == "layer"
+    assert getattr(built, parameter) == stored
+
+    defaulted = layer(**{parameter: value})
+    assert defaulted.name == layer_name
+    assert getattr(defaulted, parameter) == stored
+
+
+@pytest.mark.parametrize("layer_name", OPTIONAL_NAME_LAYER_IDS)
+def test_name_defaults_to_the_class_name(layer_name):
+    layer = getattr(pytensor_ml.layers, layer_name)
+    assert layer().name == layer_name
+    assert layer(None).name == layer_name

@@ -16,6 +16,39 @@ def _check_input_rank(X: TensorVariable, name: str, n_spatial: int) -> None:
         )
 
 
+def _resolve_layer_name(
+    name: object, default: str, suggested_hyperparameter: str | None = None
+) -> str:
+    """
+    Return the layer's name, rejecting a hyperparameter passed where the name belongs.
+
+    Parameters
+    ----------
+    name : str or None
+        The name the caller passed, annotated as ``object`` because validating it is the point.
+        None selects ``default``.
+    default : str
+        The layer's own name, used when none is given and quoted in the error.
+    suggested_hyperparameter : str, optional
+        The parameter the error tells the caller to pass by keyword instead. Layers with no
+        hyperparameter a name could displace omit it, and the error only reports the bad name.
+
+    Returns
+    -------
+    resolved : str
+        ``name`` when it is a non-empty string, otherwise ``default``.
+    """
+    if name is not None and not isinstance(name, str):
+        message = f"{default}'s `name` must be a string, but got {type(name).__name__} {name!r}."
+        if suggested_hyperparameter is not None:
+            message += (
+                f" Hyperparameters are keyword-only, so pass it by name: "
+                f"{default}({suggested_hyperparameter}={name!r})."
+            )
+        raise TypeError(message)
+    return name if name else default
+
+
 class Layer(ABC):
     """
     Base class for the objects that build layer graphs. Defined here, not in ``pytensor_ml.layers``, so

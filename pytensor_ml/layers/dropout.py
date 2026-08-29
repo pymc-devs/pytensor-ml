@@ -7,7 +7,7 @@ import pytensor.tensor.random as ptr
 from pytensor import config
 from pytensor.tensor.random.variable import RandomGeneratorSharedVariable, shared_rng
 
-from pytensor_ml.base import Layer, UnaryLayerOp
+from pytensor_ml.base import Layer, UnaryLayerOp, _resolve_layer_name
 
 
 class DropoutLayer(UnaryLayerOp):
@@ -57,10 +57,10 @@ class Dropout(Layer):
         activations = network(X)
     """
 
-    def __init__(self, name: str | None = None, p: float = 0.5, random_state: Any | None = None):
+    def __init__(self, name: str | None = None, *, p: float = 0.5, random_state: Any | None = None):
+        self.name = _resolve_layer_name(name, type(self).__name__, "p")
         if p < 0.0 or p > 1.0:
             raise ValueError(f"Dropout probability has to be between 0 and 1, but got {p}")
-        self.name = name if name else "Dropout"
         self.p = p
         self.generators: list[RandomGeneratorSharedVariable] = []
         self._generator_source = np.random.default_rng(random_state)

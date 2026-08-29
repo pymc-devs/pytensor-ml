@@ -13,7 +13,7 @@ from pytensor.tensor.basic import get_scalar_constant_value
 from pytensor.tensor.pad import PadMode
 from pytensor.tensor.variable import TensorVariable
 
-from pytensor_ml.base import Layer, LayerOp, UnaryLayerOp, _check_input_rank
+from pytensor_ml.base import Layer, LayerOp, UnaryLayerOp, _check_input_rank, _resolve_layer_name
 from pytensor_ml.layers.padding import _pad_spatial
 from pytensor_ml.params import trainable_parameter
 from pytensor_ml.state import Initializer, XavierNormalInitializer, ZeroInitializer
@@ -1138,12 +1138,13 @@ class _PoolNd(Layer):
     def __init__(
         self,
         name: str | None = None,
+        *,
         kernel_size: int | Sequence[int] = 2,
         stride: int | Sequence[int] | None = None,
         dilation: int | Sequence[int] = 1,
         padding: str | int | Sequence[int] = "valid",
     ):
-        self.name = name if name else type(self).__name__
+        self.name = _resolve_layer_name(name, type(self).__name__, "kernel_size")
         self.kernel_size = _as_spatial_tuple(kernel_size, self.n_spatial, "kernel_size")
         self.stride = (
             self.kernel_size

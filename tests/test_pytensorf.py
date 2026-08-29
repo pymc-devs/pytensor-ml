@@ -411,7 +411,7 @@ def batch_norm_regression():
     """A network whose batch norm sits on the gradient path, with data far off unit scale so frozen
     statistics show up as a large prediction error rather than a small one."""
     x, y = pt.matrix("x"), pt.vector("y")
-    network = Sequential(Linear("fc1", 3, 4), BatchNorm("bn", 4), Linear("fc2", 4, 1))
+    network = Sequential(Linear("fc1", 3, 4), BatchNorm("bn", n_in=4), Linear("fc2", 4, 1))
     prediction = network(x)[:, 0]
     initialize_params(collect_trainable_params(prediction), rng=np.random.default_rng(0))
 
@@ -440,7 +440,7 @@ def test_a_statistic_reached_only_by_an_output_is_observed_not_advanced():
     """Reading a statistic to monitor it must not train it, so the write-back is traced from what feeds
     the updates rather than from everything the function returns."""
     x = pt.matrix("x")
-    monitor = BatchNorm("bn", 4)(Linear("fc", n_in=4, n_out=4)(x))
+    monitor = BatchNorm("bn", n_in=4)(Linear("fc", n_in=4, n_out=4)(x))
     running_mean = next(
         p for p in collect_non_trainable_params(monitor) if "running_mean" in p.name
     )
@@ -458,7 +458,7 @@ def test_the_callers_own_statistic_update_wins():
     guarantee that today -- the collector skips it and the merge puts the caller's updates last -- so this
     pins the behavior rather than either mechanism."""
     x = pt.matrix("x")
-    normalized = BatchNorm("bn", 4)(Linear("fc", n_in=4, n_out=4)(x))
+    normalized = BatchNorm("bn", n_in=4)(Linear("fc", n_in=4, n_out=4)(x))
     running_mean = next(
         p for p in collect_non_trainable_params(normalized) if "running_mean" in p.name
     )
@@ -498,7 +498,9 @@ def test_one_step_advances_every_kind_of_state():
     but silently freezes whichever lost."""
     x = pt.matrix("x")
     clock = step_counter(name="clock")
-    network = Sequential(Linear("fc", 4, 4), BatchNorm("bn", 4), Dropout(p=0.5, random_state=0))
+    network = Sequential(
+        Linear("fc", 4, 4), BatchNorm("bn", n_in=4), Dropout(p=0.5, random_state=0)
+    )
     activations = network(x)
     running_mean = next(
         p for p in collect_non_trainable_params(activations) if "running_mean" in p.name

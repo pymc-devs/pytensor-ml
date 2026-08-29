@@ -3,7 +3,7 @@ import pytensor.tensor as pt
 
 from pytensor import config
 
-from pytensor_ml.base import Layer, LayerOp, UnaryLayerOp
+from pytensor_ml.base import Layer, LayerOp, UnaryLayerOp, _resolve_layer_name
 from pytensor_ml.params import NonTrainableParameter, TrainableParameter, non_trainable, trainable
 from pytensor_ml.state import Initializer, OneInitializer, ZeroInitializer
 
@@ -219,16 +219,16 @@ class BatchNorm(Layer):
     def __init__(
         self,
         name: str | None = None,
+        *,
         n_in: int | None = None,
         epsilon: float = 1e-5,
         momentum: float = 0.1,
         affine: bool = True,
         track_running_stats: bool = True,
-        *,
         scale_initializer: Initializer | None = None,
         loc_initializer: Initializer | None = None,
     ):
-        self.name = name if name else "BatchNorm"
+        self.name = _resolve_layer_name(name, type(self).__name__, "n_in")
         self.n_in = n_in
         self.epsilon = epsilon
         self.momentum = momentum
@@ -376,14 +376,14 @@ class LayerNorm(Layer):
     def __init__(
         self,
         name: str | None = None,
+        *,
         n_in: int | None = None,
         epsilon: float = 1e-5,
         affine: bool = True,
-        *,
         scale_initializer: Initializer | None = None,
         loc_initializer: Initializer | None = None,
     ):
-        self.name = name if name else "LayerNorm"
+        self.name = _resolve_layer_name(name, type(self).__name__, "n_in")
         self.n_in = n_in
         self.epsilon = epsilon
         self.affine = affine
