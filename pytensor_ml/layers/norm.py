@@ -96,9 +96,17 @@ def _affine_parameters(
     """
     resolved_loc = ZeroInitializer() if loc_initializer is None else loc_initializer
     resolved_scale = OneInitializer() if scale_initializer is None else scale_initializer
-    loc = trainable(resolved_loc.initial_value((n_in,)), f"{name}_loc", initializer=resolved_loc)
+    loc = trainable(
+        resolved_loc.initial_value((n_in,)),
+        f"{name}_loc",
+        initializer=resolved_loc,
+        layer_name=name,
+    )
     scale = trainable(
-        resolved_scale.initial_value((n_in,)), f"{name}_scale", initializer=resolved_scale
+        resolved_scale.initial_value((n_in,)),
+        f"{name}_scale",
+        initializer=resolved_scale,
+        layer_name=name,
     )
     return loc, scale
 
@@ -266,8 +274,10 @@ class BatchNorm(Layer):
         if self.track_running_stats:
             zeros = np.zeros(n_in, dtype=config.floatX)
             ones = np.ones(n_in, dtype=config.floatX)
-            self.running_mean = non_trainable(zeros, f"{self.name}_running_mean")
-            self.running_var = non_trainable(ones, f"{self.name}_running_var")
+            self.running_mean = non_trainable(
+                zeros, f"{self.name}_running_mean", layer_name=self.name
+            )
+            self.running_var = non_trainable(ones, f"{self.name}_running_var", layer_name=self.name)
 
         self.initialized = True
 

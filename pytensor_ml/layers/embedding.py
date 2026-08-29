@@ -67,6 +67,7 @@ class Embedding(Layer):
             W_initializer.initial_value((n_embeddings, n_features)),
             f"{self.name}_W",
             initializer=W_initializer,
+            layer_name=self.name,
         )
 
     def __call__(self, ids: pt.TensorLike) -> pt.TensorVariable:

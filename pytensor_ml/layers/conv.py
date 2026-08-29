@@ -760,6 +760,7 @@ class _ConvNd(Layer):
             (*self.kernel_size, in_channels, out_channels),
             weight_initializer,
             XavierNormalInitializer(),
+            layer_name=self.name,
         )
         if bias:
             self.b = trainable_parameter(
@@ -767,6 +768,7 @@ class _ConvNd(Layer):
                 (out_channels,),
                 bias_initializer,
                 ZeroInitializer(),
+                layer_name=self.name,
             )
 
     def __call__(self, X: pt.TensorLike) -> TensorVariable:

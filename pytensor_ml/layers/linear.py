@@ -89,6 +89,7 @@ class Linear(Layer):
             W_initializer.initial_value((n_in, n_out)),
             f"{self.name}_W",
             initializer=W_initializer,
+            layer_name=self.name,
         )
 
         if self.bias:
@@ -97,6 +98,7 @@ class Linear(Layer):
                 b_initializer.initial_value((n_out,)),
                 f"{self.name}_b",
                 initializer=b_initializer,
+                layer_name=self.name,
             )
 
     def __call__(self, X: pt.TensorLike) -> pt.TensorVariable:

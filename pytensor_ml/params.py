@@ -20,6 +20,9 @@ class TrainableParameter(TensorSharedVariable):
         The law this parameter's value is drawn from, which :func:`~pytensor_ml.state.initialize_params`
         redraws it from. Every layer declares one for each parameter it builds. None means a redraw has
         nothing to go on and raises.
+    layer_name : str or None
+        The name of the layer that built this parameter, which is the part a checkpoint numbers when
+        several layers share a name. None for a parameter no layer owns.
 
     Examples
     --------
@@ -41,11 +44,18 @@ class TrainableParameter(TensorSharedVariable):
     """
 
     initializer: "Initializer | None" = None
+    layer_name: str | None = None
 
 
 class NonTrainableParameter(TensorSharedVariable):
     """
     Marker class for non-trainable state (running mean/var in BatchNorm).
+
+    Attributes
+    ----------
+    layer_name : str or None
+        The name of the layer that built this state, which is the part a checkpoint numbers when several
+        layers share a name. None for state no layer owns.
 
     Examples
     --------
@@ -62,6 +72,8 @@ class NonTrainableParameter(TensorSharedVariable):
 
         is_non_trainable = isinstance(running_mean, NonTrainableParameter)
     """
+
+    layer_name: str | None = None
 
 
 class StepCounter(TensorSharedVariable):
@@ -104,6 +116,7 @@ def trainable(
     shape=None,
     strict=False,
     initializer: "Initializer | None" = None,
+    layer_name: str | None = None,
     **kwargs,
 ) -> TrainableParameter:
     """
@@ -127,6 +140,9 @@ def trainable(
     initializer : Initializer, optional
         The law to redraw this parameter from, whether that is a unit scale, a zero bias, or a fan-scaled
         draw. Default None, which leaves the parameter with no law and raises on a redraw.
+    layer_name : str, optional
+        Name of the layer building this parameter, which a checkpoint numbers when several layers share
+        a name. Default None, for a parameter no layer owns.
     **kwargs
         Additional arguments passed to the SharedVariable constructor.
 
@@ -146,11 +162,12 @@ def trainable(
     """
     parameter = _make_parameter(TrainableParameter, value, name, shape, strict, **kwargs)
     parameter.initializer = initializer
+    parameter.layer_name = layer_name
     return parameter
 
 
 def trainable_parameter(
-    name: str, shape: tuple[int, ...], initializer=None, default=None
+    name: str, shape: tuple[int, ...], initializer=None, default=None, layer_name: str | None = None
 ) -> TrainableParameter:
     """
     Build a trainable parameter of ``shape``, drawn by ``initializer``, or by ``default`` if None.
@@ -168,17 +185,22 @@ def trainable_parameter(
         What the caller asked for. ``default`` is used when omitted.
     default : Initializer
         What the layer declares when the caller asks for nothing.
+    layer_name : str, optional
+        Name of the layer building this parameter, which a checkpoint numbers when several layers share
+        a name. Default None, for a parameter no layer owns.
     """
     chosen = default if initializer is None else initializer
-    return trainable(chosen.initial_value(shape), name, initializer=chosen)
+    return trainable(chosen.initial_value(shape), name, initializer=chosen, layer_name=layer_name)
 
 
-def non_trainable(value, name=None, shape=None, strict=False, **kwargs) -> NonTrainableParameter:
+def non_trainable(
+    value, name=None, shape=None, strict=False, layer_name: str | None = None, **kwargs
+) -> NonTrainableParameter:
     """
     Create a shared variable marked as non-trainable state, such as batch norm's running statistics.
 
-    Takes the same arguments as :func:`trainable`; only the marker class differs, which is what keeps these
-    out of the set an optimizer updates.
+    Takes the same arguments as :func:`trainable`, ``layer_name`` included; only the marker class differs,
+    which is what keeps these out of the set an optimizer updates.
 
     Examples
     --------
@@ -193,7 +215,9 @@ def non_trainable(value, name=None, shape=None, strict=False, **kwargs) -> NonTr
 
         running_mean = non_trainable(np.zeros(32), "bn_running_mean")
     """
-    return _make_parameter(NonTrainableParameter, value, name, shape, strict, **kwargs)
+    parameter = _make_parameter(NonTrainableParameter, value, name, shape, strict, **kwargs)
+    parameter.layer_name = layer_name
+    return parameter
 
 
 def step_counter(name: str = "step_count") -> StepCounter:

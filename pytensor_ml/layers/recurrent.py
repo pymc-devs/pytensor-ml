@@ -342,6 +342,7 @@ class ElmanCell(RecurrentCell):
             (n_in, n_hidden),
             weight_initializer,
             XavierNormalInitializer(),
+            layer_name=self.name,
         )
         if bias:
             self.b = trainable_parameter(
@@ -349,12 +350,14 @@ class ElmanCell(RecurrentCell):
                 (n_hidden,),
                 bias_initializer,
                 ZeroInitializer(),
+                layer_name=self.name,
             )
         self.W_hh = trainable_parameter(
             f"{self.name}_W_hh",
             (n_hidden, n_hidden),
             recurrent_initializer,
             OrthogonalInitializer(),
+            layer_name=self.name,
         )
 
     def step(self, x_t: TensorVariable, *state: TensorVariable) -> tuple[TensorVariable, ...]:
@@ -528,12 +531,14 @@ class GRUCell(RecurrentCell):
             (n_in, self._n_gates * n_hidden),
             weight_initializer,
             XavierNormalInitializer(),
+            layer_name=self.name,
         )
         self.W_hh = trainable_parameter(
             f"{self.name}_W_hh",
             (n_hidden, self._n_gates * n_hidden),
             recurrent_initializer,
             OrthogonalInitializer(),
+            layer_name=self.name,
         )
         if bias:
             self.b = trainable_parameter(
@@ -541,12 +546,14 @@ class GRUCell(RecurrentCell):
                 (self._n_gates * n_hidden,),
                 bias_initializer,
                 ZeroInitializer(),
+                layer_name=self.name,
             )
             self.c = trainable_parameter(
                 f"{self.name}_c",
                 (n_hidden,),
                 bias_initializer,
                 ZeroInitializer(),
+                layer_name=self.name,
             )
 
     def step(self, x_t: TensorVariable, *state: TensorVariable) -> tuple[TensorVariable, ...]:
@@ -740,12 +747,14 @@ class LSTMCell(RecurrentCell):
             (n_in, self._n_gates * n_hidden),
             weight_initializer,
             XavierNormalInitializer(),
+            layer_name=self.name,
         )
         self.W_hh = trainable_parameter(
             f"{self.name}_W_hh",
             (n_hidden, self._n_gates * n_hidden),
             recurrent_initializer,
             OrthogonalInitializer(),
+            layer_name=self.name,
         )
         if bias:
             self.b = trainable_parameter(
@@ -753,6 +762,7 @@ class LSTMCell(RecurrentCell):
                 (self._n_gates * n_hidden,),
                 bias_initializer,
                 ZeroInitializer(),
+                layer_name=self.name,
             )
 
     def step(self, x_t: TensorVariable, *state: TensorVariable) -> tuple[TensorVariable, ...]:
