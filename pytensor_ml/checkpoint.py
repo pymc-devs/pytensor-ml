@@ -1,3 +1,4 @@
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from os import fspath
 from pathlib import Path
@@ -9,19 +10,46 @@ from pytensor.compile.sharedvalue import SharedVariable
 from safetensors.numpy import load_file, save_file
 
 
-def _index_by_name(shared_variables: Sequence[SharedVariable]) -> dict[str, SharedVariable]:
-    """Index shared variables by name, rejecting unnamed or duplicate names."""
-    indexed: dict[str, SharedVariable] = {}
+def _numbered(variable: SharedVariable, name: str, ordinal: int) -> str:
+    """Number the layer a variable belongs to, so ``Linear_W`` keys as ``Linear_1_W`` not ``Linear_W_1``."""
+    layer_name = getattr(variable, "layer_name", None)
+    if layer_name and name.startswith(layer_name):
+        return f"{layer_name}_{ordinal}{name[len(layer_name) :]}"
+    return f"{name}_{ordinal}"
+
+
+def _index_by_key(shared_variables: Sequence[SharedVariable]) -> dict[str, SharedVariable]:
+    """
+    Index shared variables by their archive key, numbering a name that repeats.
+
+    Layers left unnamed take their class name, so a stack of several of a kind offers several variables
+    of one name. Each repeat is numbered after its layer -- ``Linear_1_W``, ``Linear_2_W`` -- in the
+    order given, so the keys hold only for that order. Collecting from the same graph reproduces it.
+    """
+    names: list[str] = []
     for variable in shared_variables:
-        name = variable.name
-        if name is None:
+        if variable.name is None:
             raise ValueError(
                 f"Cannot checkpoint the unnamed shared variable {variable!r}: the name is the only "
                 f"handle at the serialization boundary, so every variable must be named."
             )
-        if name in indexed:
-            raise ValueError(f"Duplicate shared-variable name {name!r}; names must be unique.")
-        indexed[name] = variable
+        names.append(variable.name)
+
+    occurrences = Counter(names)
+    indexed: dict[str, SharedVariable] = {}
+    ordinals: Counter[str] = Counter()
+    for name, variable in zip(names, shared_variables):
+        if occurrences[name] == 1:
+            indexed[name] = variable
+            continue
+        ordinals[name] += 1
+        key = _numbered(variable, name, ordinals[name])
+        if key in occurrences:
+            raise ValueError(
+                f"Numbering the shared variables named {name!r} produces {key!r}, which another "
+                f"variable already uses. Name those layers explicitly."
+            )
+        indexed[key] = variable
     return indexed
 
 
@@ -29,15 +57,16 @@ def save_state(shared_variables: Sequence[SharedVariable], path: str | Path) -> 
     """
     Save the current values of shared variables to a name-keyed ``.safetensors`` archive.
 
-    The variables' names become the archive keys, so the caller is responsible for naming them
-    distinctly. Pass the parameters together with the optimizer state to capture a complete training
+    The variables' names become the archive keys. Variables sharing a name -- as layers left unnamed
+    do -- are numbered after the layer that built them (``Linear_1_W``, ``Linear_2_W``) in the order
+    given, so collect them the same way at save and at load. Pass the parameters together with the optimizer state to capture a complete training
     checkpoint; both are ordinary shared variables and carry self-describing names (e.g. ``"fc1/weight"``,
     ``"fc1/weight/adam/first_moment"``).
 
     Parameters
     ----------
     shared_variables : sequence of SharedVariable
-        Variables whose values to save. Every variable must have a unique, non-``None`` name.
+        Variables whose values to save. Every variable must be named; repeats are numbered by position.
     path : str or pathlib.Path
         Destination archive, written verbatim.
 
@@ -60,7 +89,7 @@ def save_state(shared_variables: Sequence[SharedVariable], path: str | Path) -> 
 
         save_state(collect_shared_variables(logits), "weights.safetensors")
     """
-    indexed = _index_by_name(shared_variables)
+    indexed = _index_by_key(shared_variables)
     tensors = {
         name: _as_saveable_array(variable.get_value(), variable.type.dtype)
         for name, variable in indexed.items()
@@ -99,7 +128,8 @@ def load_state(
     Parameters
     ----------
     shared_variables : sequence of SharedVariable
-        Variables to restore. Every variable must have a unique, non-``None`` name.
+        Variables to restore. Every variable must be named; repeats are numbered by position, so pass
+        them in the order they were saved in.
     path : str or pathlib.Path
         A ``.safetensors`` archive, e.g. one written by :func:`save_state` or a HuggingFace checkpoint.
     name_map : mapping of str to str, optional
@@ -127,17 +157,19 @@ def load_state(
         save_state(shared, "weights.safetensors")
         load_state(shared, "weights.safetensors")
     """
-    indexed = _index_by_name(shared_variables)
+    indexed = _index_by_key(shared_variables)
     name_map = name_map or {}
 
     target_by_key: dict[str, SharedVariable] = {}
-    for name, variable in indexed.items():
-        key = name_map.get(name, name)
-        collision = target_by_key.get(key)
+    source_by_key: dict[str, str] = {}
+    for source, variable in indexed.items():
+        key = name_map.get(source, source)
+        collision = source_by_key.get(key)
         if collision is not None:
             raise ValueError(
-                f"name_map is not injective: both {collision.name!r} and {name!r} map to {key!r}."
+                f"name_map is not injective: both {collision!r} and {source!r} map to {key!r}."
             )
+        source_by_key[key] = source
         target_by_key[key] = variable
 
     values = load_file(fspath(path))

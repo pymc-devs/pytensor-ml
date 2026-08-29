@@ -9,6 +9,7 @@ from pytensor_ml.checkpoint import load_state, save_state
 from pytensor_ml.layers import Linear, Sequential
 from pytensor_ml.loss import SquaredError, supervised_loss
 from pytensor_ml.optim import adam
+from pytensor_ml.params import trainable
 from pytensor_ml.pytensorf import collect_trainable_params, compile_predict, function
 from pytensor_ml.state import initialize_params
 
@@ -193,11 +194,6 @@ def test_save_rejects_unnamed_variable(tmp_path):
         save_state([shared([1.0], None)], tmp_path / "c.safetensors")
 
 
-def test_save_rejects_duplicate_names(tmp_path):
-    with pytest.raises(ValueError, match="Duplicate"):
-        save_state([shared([1.0], "w"), shared([2.0], "w")], tmp_path / "c.safetensors")
-
-
 def test_load_rejects_non_injective_name_map(tmp_path):
     save_state([shared([1.0], "x")], tmp_path / "c.safetensors")
     with pytest.raises(ValueError, match="not injective"):
@@ -221,3 +217,85 @@ def test_parameters_keep_identity_across_compilation():
 
     after = collect_trainable_params(prediction)
     assert all(b is a for b, a in zip(before, after, strict=True))
+
+
+def test_repeated_names_are_numbered_by_position(tmp_path):
+    """A variable carrying no layer of its own is numbered at the end of its name, which is the
+    fallback for shared state a layer did not build."""
+    variables = [shared(1.0, "Linear_W"), shared(2.0, "Linear_b"), shared(3.0, "Linear_W")]
+    path = tmp_path / "m.safetensors"
+    save_state(variables, path)
+
+    assert sorted(load_file(path)) == ["Linear_W_1", "Linear_W_2", "Linear_b"]
+
+    restored = [shared(0.0, "Linear_W"), shared(0.0, "Linear_b"), shared(0.0, "Linear_W")]
+    load_state(restored, path)
+    np.testing.assert_array_equal([v.get_value() for v in restored], [1.0, 2.0, 3.0])
+
+
+def test_numbering_that_would_shadow_an_explicit_name_raises(tmp_path):
+    """The generated key has to stay distinct from a name the caller chose, which would otherwise be
+    silently overwritten by whichever landed second."""
+    variables = [shared(1.0, "Linear_W"), shared(2.0, "Linear_W"), shared(3.0, "Linear_W_1")]
+    with pytest.raises(ValueError, match=r"produces 'Linear_W_1', which another variable already"):
+        save_state(variables, tmp_path / "m.safetensors")
+
+
+def test_an_unnamed_stack_round_trips_into_a_rebuild(tmp_path):
+    """Names are derived from the class, so rebuilding the same architecture reproduces them, which is
+    what lets a checkpoint outlive the process that wrote it."""
+
+    def build():
+        X = pt.tensor("X", shape=(None, 4))
+        network = Sequential(Linear(n_in=4, n_out=4), Linear(n_in=4, n_out=4))
+        return collect_trainable_params(network(X))
+
+    saved = build()
+    initialize_params(saved, rng=np.random.default_rng(0))
+    path = tmp_path / "m.safetensors"
+    save_state(saved, path)
+
+    assert sorted(load_file(path)) == ["Linear_1_W", "Linear_1_b", "Linear_2_W", "Linear_2_b"]
+
+    rebuilt = build()
+    load_state(rebuilt, path)
+    for before, after in zip(saved, rebuilt):
+        np.testing.assert_array_equal(before.get_value(), after.get_value())
+
+
+def test_non_injective_name_map_names_the_numbered_keys(tmp_path):
+    """The report has to name keys the caller can act on: a numbered variable's own name is shared with
+    its twin and identifies neither side of the collision."""
+    variables = [
+        trainable(np.zeros(2), "Linear_W", layer_name="Linear"),
+        trainable(np.zeros(2), "Linear_W", layer_name="Linear"),
+    ]
+    save_state(variables, tmp_path / "m.safetensors")
+    with pytest.raises(ValueError, match=r"both 'Linear_1_W' and 'Linear_2_W' map to 'shared'"):
+        load_state(
+            variables,
+            tmp_path / "m.safetensors",
+            name_map={"Linear_1_W": "shared", "Linear_2_W": "shared"},
+        )
+
+
+def test_a_layer_name_that_is_not_a_prefix_falls_back_to_trailing_numbers(tmp_path):
+    """``layer_name`` is a second channel alongside the name it should prefix. If the two ever drift,
+    numbering falls back rather than splicing the ordinal into the middle of an unrelated string."""
+    variables = [
+        trainable(np.zeros(2), "weight", layer_name="somewhere_else"),
+        trainable(np.zeros(2), "weight", layer_name="somewhere_else"),
+    ]
+    save_state(variables, tmp_path / "m.safetensors")
+    assert sorted(load_file(tmp_path / "m.safetensors")) == ["weight_1", "weight_2"]
+
+
+def test_numbering_follows_the_order_the_variables_are_passed(tmp_path):
+    """The keys are a function of the sequence, not of anything intrinsic to the variables, which is
+    why a checkpoint only reloads when it is collected the same way at save and at load."""
+    first, second = shared(1.0, "w"), shared(2.0, "w")
+    save_state([first, second], tmp_path / "forward.safetensors")
+    save_state([second, first], tmp_path / "reversed.safetensors")
+
+    assert load_file(tmp_path / "forward.safetensors")["w_1"] == 1.0
+    assert load_file(tmp_path / "reversed.safetensors")["w_1"] == 2.0

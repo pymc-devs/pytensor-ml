@@ -192,9 +192,23 @@ Only the first can tell you which parameter you meant. Once the name slot holds 
 the extra arguments are anonymous, and the error is the one Python writes.
 
 Every layer's name is optional and falls back to its class, so ``BatchNorm(n_in=4)`` is named
-``BatchNorm``. Two unnamed ones in a network therefore name their parameters identically, which
-is inert during training and raises at the first :func:`~pytensor_ml.save_state` as
-``Duplicate shared-variable name 'BatchNorm_scale'``.
+``BatchNorm`` and a stack of unnamed layers offers several variables of one name. The
+serialization boundary numbers those apart, keying them ``BatchNorm_1_scale``,
+``BatchNorm_2_scale``, ... **in the order the variables are passed**. Collecting them from the
+same graph gives the same order every time, so an unnamed stack round-trips across processes and
+across rebuilds -- but a checkpoint saved from one ordering will not load under another:
+
+.. code-block:: python
+
+    shared = collect_shared_variables(network(X))
+    save_state(shared, "weights.safetensors")
+    load_state(collect_shared_variables(network(X)), "weights.safetensors")   # same order, loads
+
+Name the layers you care about and the numbering never touches them; a name that appears once is
+its own key. The ordinal numbers the layer, not the variable, so two unnamed
+:class:`~pytensor_ml.layers.Linear` layers give ``Linear_1_W``, ``Linear_1_b``, ``Linear_2_W``,
+``Linear_2_b``. Shared state no layer built -- a step counter, an optimizer's moments -- carries no
+layer to number, so a repeat there is numbered at the end of its own name instead.
 
 The only positional argument a layer takes is its name. The two that wrap other layers take those
 instead, and their name by keyword: :class:`~pytensor_ml.layers.Recurrent` is
