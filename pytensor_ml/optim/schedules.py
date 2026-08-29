@@ -152,8 +152,8 @@ def linear_schedule(
 
 
 def linear_onecycle_schedule(
-    transition_steps: int,
     peak_value: float,
+    total_steps: int,
     pct_start: float = 0.3,
     pct_final: float = 0.85,
     div_factor: float = 25.0,
@@ -164,7 +164,7 @@ def linear_onecycle_schedule(
     The rate rises from its initial value to ``peak_value`` during the first phase, returns to
     the initial value during the second, and falls to its final value during the third.
 
-    For :math:`T =` ``transition_steps``, phase boundaries :math:`s_1` and :math:`s_2`, initial rate
+    For :math:`T =` ``total_steps``, phase boundaries :math:`s_1` and :math:`s_2`, initial rate
     :math:`\eta_0`, peak rate :math:`\eta_p`, and final rate :math:`\eta_f`, the schedule is
 
     .. math::
@@ -177,11 +177,11 @@ def linear_onecycle_schedule(
 
     Parameters
     ----------
-    transition_steps : int
-        Number of steps in the complete cycle. Must be positive and give every rounded phase at least
-        one step.
     peak_value : float
         Maximum learning rate, reached at the end of the first phase.
+    total_steps : int
+        Number of steps in the complete cycle. Must be positive and give every rounded phase at least
+        one step.
     pct_start : float, optional
         Fraction of the cycle spent increasing to ``peak_value``. Must be between zero and
         ``pct_final``. Default 0.3.
@@ -207,10 +207,10 @@ def linear_onecycle_schedule(
 
         from pytensor_ml.optim import adam, linear_onecycle_schedule
 
-        rule = adam(learning_rate=linear_onecycle_schedule(10_000, peak_value=8e-3))
+        rule = adam(learning_rate=linear_onecycle_schedule(8e-3, total_steps=10_000))
     """
-    if transition_steps < 1:
-        raise ValueError(f"transition_steps must be at least 1, got {transition_steps}.")
+    if total_steps < 1:
+        raise ValueError(f"total_steps must be at least 1, got {total_steps}.")
     if not 0 < pct_start < pct_final < 1:
         raise ValueError(
             "pct_start and pct_final must satisfy 0 < pct_start < pct_final < 1, "
@@ -220,13 +220,13 @@ def linear_onecycle_schedule(
         raise ValueError(f"div_factor must be positive, got {div_factor}.")
     if not final_div_factor > 0:
         raise ValueError(f"final_div_factor must be positive, got {final_div_factor}.")
-    peak_step = int(pct_start * transition_steps)
-    final_phase_step = int(pct_final * transition_steps)
-    phase_steps = (peak_step, final_phase_step - peak_step, transition_steps - final_phase_step)
+    peak_step = int(pct_start * total_steps)
+    final_phase_step = int(pct_final * total_steps)
+    phase_steps = (peak_step, final_phase_step - peak_step, total_steps - final_phase_step)
     if min(phase_steps) < 1:
         raise ValueError(
             "pct_start and pct_final must produce three phases of at least one step after rounding; "
-            f"got phase lengths {phase_steps} for transition_steps={transition_steps}."
+            f"got phase lengths {phase_steps} for total_steps={total_steps}."
         )
     initial_value = peak_value / div_factor
 
@@ -236,7 +236,7 @@ def linear_onecycle_schedule(
             linear_schedule(peak_value, final_phase_step - peak_step, initial_value),
             linear_schedule(
                 initial_value,
-                transition_steps - final_phase_step,
+                total_steps - final_phase_step,
                 initial_value / final_div_factor,
             ),
         ],

@@ -95,23 +95,23 @@ def test_linear_schedule_holds_the_initial_rate_until_transition_begin():
 
 
 def test_linear_onecycle_schedule_hits_each_phase_boundary():
-    schedule = linear_onecycle_schedule(20, peak_value=1.0)
+    schedule = linear_onecycle_schedule(1.0, total_steps=20)
     rates = evaluate_schedule(schedule, [0, 6, 17, 20, 100])
     np.testing.assert_allclose(rates, [0.04, 1.0, 0.04, 4e-6, 4e-6], rtol=1e-6)
 
 
 def test_linear_onecycle_schedule_interpolates_custom_phases():
     schedule = linear_onecycle_schedule(
-        20, peak_value=1.0, pct_start=0.25, pct_final=0.75, div_factor=10, final_div_factor=100
+        1.0, total_steps=20, pct_start=0.25, pct_final=0.75, div_factor=10, final_div_factor=100
     )
     rates = evaluate_schedule(schedule, [0, 2, 5, 10, 15, 17, 20])
     np.testing.assert_allclose(rates, [0.1, 0.46, 1.0, 0.55, 0.1, 0.0604, 0.001], rtol=1e-6)
 
 
-@pytest.mark.parametrize("transition_steps", [0, -1])
-def test_linear_onecycle_schedule_rejects_empty_horizon(transition_steps):
-    with pytest.raises(ValueError, match="transition_steps must be at least 1"):
-        linear_onecycle_schedule(transition_steps, peak_value=1.0)
+@pytest.mark.parametrize("total_steps", [0, -1])
+def test_linear_onecycle_schedule_rejects_empty_horizon(total_steps):
+    with pytest.raises(ValueError, match="total_steps must be at least 1"):
+        linear_onecycle_schedule(1.0, total_steps)
 
 
 @pytest.mark.parametrize(
@@ -124,20 +124,20 @@ def test_linear_onecycle_schedule_rejects_empty_horizon(transition_steps):
 )
 def test_linear_onecycle_schedule_rejects_invalid_phase_fractions(kwargs):
     with pytest.raises(ValueError, match="0 < pct_start < pct_final < 1"):
-        linear_onecycle_schedule(20, peak_value=1.0, **kwargs)
+        linear_onecycle_schedule(1.0, 20, **kwargs)
 
 
 @pytest.mark.parametrize("name", ["div_factor", "final_div_factor"])
 @pytest.mark.parametrize("value", [0.0, -1.0, np.nan])
 def test_linear_onecycle_schedule_rejects_non_positive_divisors(name, value):
     with pytest.raises(ValueError, match=rf"{name} must be positive"):
-        linear_onecycle_schedule(20, peak_value=1.0, **{name: value})
+        linear_onecycle_schedule(1.0, 20, **{name: value})
 
 
 @pytest.mark.parametrize("kwargs", [{}, {"pct_start": 0.31, "pct_final": 0.39}])
 def test_linear_onecycle_schedule_rejects_empty_rounded_phases(kwargs):
     with pytest.raises(ValueError, match="three phases of at least one step after rounding"):
-        linear_onecycle_schedule(2 if not kwargs else 10, peak_value=1.0, **kwargs)
+        linear_onecycle_schedule(1.0, 2 if not kwargs else 10, **kwargs)
 
 
 @pytest.mark.parametrize(
