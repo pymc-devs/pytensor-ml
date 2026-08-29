@@ -312,6 +312,77 @@ def polynomial_schedule(
     return schedule
 
 
+def linear_onecycle_schedule(
+    transition_steps: int | TensorVariable,
+    peak_value: float,
+    pct_start: float = 0.3,
+    pct_final: float = 0.85,
+    div_factor: float = 25.0,
+    final_div_factor: float = 1e4,
+) -> Schedule:
+    r"""
+    A 1cycle learning rate schedule built from three linear segments.
+
+    Rises linearly from `peak_value / div_factor` to `peak_value` over the first `pct_start` of
+    the steps, then decays linearly back to the initial rate until `pct_final` of the steps, and finally
+    decays linearly to `initial_rate / final_div_factor` over the remaining steps.
+
+    Parameters
+    ----------
+    transition_steps : int or TensorVariable
+        The total number of steps in the cycle.
+    peak_value : float
+        The maximum learning rate reached at the end of the warmup phase.
+    pct_start : float, optional
+        The fraction of the cycle spent warming up to the peak. Default 0.3.
+    pct_final : float, optional
+        The fraction of the cycle before the final decay phase begins. Default 0.85.
+    div_factor : float, optional
+        The factor by which the initial learning rate is smaller than the peak. Default 25.0.
+    final_div_factor : float, optional
+        The factor by which the final learning rate is smaller than the initial rate. Default 1e4.
+
+    Returns
+    -------
+    schedule : Schedule
+        A callable mapping a symbolic step count to a scalar learning rate, ready to hand to a rule as
+        its `learning_rate`.
+
+    Examples
+    --------
+    Construct the canonical 1cycle curve:
+
+    .. code-block:: python
+
+        from pytensor_ml.optim import adam, linear_onecycle_schedule
+
+        rule = adam(learning_rate=linear_onecycle_schedule(10_000, 8e-3))
+    """
+    if not (0.0 < pct_start < pct_final < 1.0):
+        raise ValueError(
+            f"pct_start and pct_final must satisfy 0 < pct_start < pct_final < 1, "
+            f"got {pct_start} and {pct_final}."
+        )
+
+    transition_steps = _checked_total_steps(transition_steps)
+
+    # Cast to integer boundaries.
+    cut1 = pt.cast(pt.round(pct_start * pt.cast(transition_steps, config.floatX)), "int64")
+    cut2 = pt.cast(pt.round(pct_final * pt.cast(transition_steps, config.floatX)), "int64")
+
+    initial_value = peak_value / div_factor
+    final_value = initial_value / final_div_factor
+
+    return join_schedules(
+        [
+            linear_schedule(initial_value, cut1, peak_value),
+            linear_schedule(peak_value, cut2 - cut1, initial_value),
+            linear_schedule(initial_value, transition_steps - cut2, final_value),
+        ],
+        boundaries=[cut1, cut2],
+    )
+
+
 def step_decay(
     learning_rate: float,
     *,

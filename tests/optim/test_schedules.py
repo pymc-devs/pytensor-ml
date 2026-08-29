@@ -12,6 +12,7 @@ from pytensor_ml.optim import (
     cosine_schedule,
     exponential_schedule,
     join_schedules,
+    linear_onecycle_schedule,
     linear_schedule,
     polynomial_schedule,
     scale,
@@ -527,3 +528,33 @@ def test_a_literal_horizon_leaves_no_runtime_check_in_the_graph():
 
     assert not carries_a_check(linear_schedule(0.5, HORIZON))
     assert carries_a_check(linear_schedule(0.5, SHAPE_SOURCE.shape[0]))
+
+
+def test_linear_onecycle_schedule():
+    # Similar to the optax default: pct_start=0.3, pct_final=0.85, div=25, final_div=10000
+    schedule = linear_onecycle_schedule(transition_steps=1000, peak_value=0.1)
+    # expected cut1 = 300, cut2 = 850
+    # expected initial = 0.1 / 25 = 0.004
+    # expected final = 0.004 / 10000 = 4e-07
+
+    rates = evaluate_schedule(schedule, [0, 150, 300, 575, 850, 925, 1000, 1500])
+
+    # 0 -> initial (0.004)
+    # 300 -> peak (0.1)
+    # 150 -> halfway between initial and peak (0.052)
+    # 850 -> initial (0.004)
+    # 575 -> halfway between peak and initial (0.052)
+    # 1000 -> final (4e-07)
+    # 925 -> halfway between initial and final (approx 0.002)
+    # 1500 -> stays at final
+
+    np.testing.assert_allclose(rates[0], 0.004, rtol=1e-6)
+    np.testing.assert_allclose(rates[2], 0.1, rtol=1e-6)
+    np.testing.assert_allclose(rates[1], 0.052, rtol=1e-6)
+
+    np.testing.assert_allclose(rates[4], 0.004, rtol=1e-6)
+    np.testing.assert_allclose(rates[3], 0.052, rtol=1e-6)
+
+    np.testing.assert_allclose(rates[6], 4e-07, rtol=1e-6)
+    np.testing.assert_allclose(rates[5], 0.0020002, rtol=1e-6)
+    np.testing.assert_allclose(rates[7], 4e-07, rtol=1e-6)
