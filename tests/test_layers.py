@@ -784,9 +784,10 @@ def test_name_defaults_to_the_class_name(layer_name):
 
 
 def test_no_layer_takes_a_hyperparameter_positionally():
-    """A layer added with a positional hyperparameter reopens the slot torch and keras calls land
-    in, so the rule is checked over the whole exported surface rather than a fixed list."""
-    operands = {"Recurrent": ("cell",), "Bidirectional": ("forward", "backward")}
+    """The only positional argument a layer takes is its name, or the layers it wraps. Anything else
+    reopens the slot torch and keras calls land in, so the rule is checked over the whole exported
+    surface rather than a fixed list."""
+    wrapped = {"Recurrent": ("cell",), "Bidirectional": ("forward", "backward")}
     offenders = {}
     for layer_name in pytensor_ml.layers.__all__:
         layer = getattr(pytensor_ml.layers, layer_name)
@@ -798,10 +799,12 @@ def test_no_layer_takes_a_hyperparameter_positionally():
         positional = tuple(
             p.name for p in parameters if p.kind in (p.POSITIONAL_OR_KEYWORD, p.VAR_POSITIONAL)
         )
-        expected = (*operands.get(layer_name, ()), "name")
+        expected = wrapped.get(layer_name, ("name",))
         if positional != expected:
             offenders[layer_name] = positional
-    assert not offenders, f"layers taking more than a name positionally: {offenders}"
+    assert not offenders, (
+        f"layers taking more positionally than a name or wrapped layers: {offenders}"
+    )
 
 
 def test_a_layer_with_required_hyperparameters_can_go_unnamed():
@@ -821,7 +824,7 @@ def test_a_layer_with_no_displaceable_hyperparameter_suggests_nothing():
     error reports the bad name without inventing a parameter to blame for it."""
     cell = pytensor_ml.layers.ElmanCell("cell", n_in=2, n_hidden=2)
     with pytest.raises(TypeError, match=r"`name` must be a string, but got int 5\.$"):
-        pytensor_ml.layers.Recurrent(cell, 5)
+        pytensor_ml.layers.Recurrent(cell, name=5)
 
 
 @pytest.mark.parametrize("layer_name", ["RNN", "LSTM", "GRU"])
@@ -836,4 +839,4 @@ def test_bidirectional_rejects_a_non_string_name():
     forward = pytensor_ml.layers.RNN("forward", n_in=2, n_hidden=2)
     backward = pytensor_ml.layers.RNN("backward", n_in=2, n_hidden=2)
     with pytest.raises(TypeError, match=r"Bidirectional's `name` must be a string"):
-        pytensor_ml.layers.Bidirectional(forward, backward, 5)
+        pytensor_ml.layers.Bidirectional(forward, backward, name=5)

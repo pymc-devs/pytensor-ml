@@ -196,9 +196,10 @@ Every layer's name is optional and falls back to its class, so ``BatchNorm(n_in=
 is inert during training and raises at the first :func:`~pytensor_ml.save_state` as
 ``Duplicate shared-variable name 'BatchNorm_scale'``.
 
-The two layers that wrap other layers take those first and their name after:
-:class:`~pytensor_ml.layers.Recurrent` is ``Recurrent(cell, name)`` and
-:class:`~pytensor_ml.layers.Bidirectional` is ``Bidirectional(forward, backward, name)``.
+The only positional argument a layer takes is its name. The two that wrap other layers take those
+instead, and their name by keyword: :class:`~pytensor_ml.layers.Recurrent` is
+``Recurrent(cell, name=...)`` and :class:`~pytensor_ml.layers.Bidirectional` is
+``Bidirectional(forward, backward, name=...)``.
 
 Convolution inputs are channels-last
 ------------------------------------

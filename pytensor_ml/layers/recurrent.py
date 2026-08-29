@@ -131,7 +131,7 @@ class Recurrent(Layer):
         hidden_states = Recurrent(GRUCell("cell", n_in=16, n_hidden=32), reverse=True)(X)
     """
 
-    def __init__(self, cell: RecurrentCell, name: str | None = None, *, reverse: bool = False):
+    def __init__(self, cell: RecurrentCell, *, name: str | None = None, reverse: bool = False):
         self.cell = cell
         self.name = _resolve_layer_name(name, type(self).__name__)
         self.reverse = reverse
@@ -896,7 +896,7 @@ class Bidirectional(Layer):
         hidden_states = Bidirectional(forward, backward)(X)
     """
 
-    def __init__(self, forward: Recurrent, backward: Recurrent, name: str | None = None):
+    def __init__(self, forward: Recurrent, backward: Recurrent, *, name: str | None = None):
         if forward is backward:
             raise ValueError(
                 "Bidirectional needs two layers so each direction has its own parameters to learn its "
