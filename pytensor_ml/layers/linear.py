@@ -66,7 +66,7 @@ class Linear(Layer):
 
     def __init__(
         self,
-        name: str | None,
+        name: str | None = None,
         *,
         n_in: int,
         n_out: int,

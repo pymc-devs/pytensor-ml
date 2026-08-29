@@ -319,7 +319,7 @@ class ElmanCell(RecurrentCell):
 
     def __init__(
         self,
-        name: str | None,
+        name: str | None = None,
         *,
         n_in: int,
         n_hidden: int,
@@ -413,7 +413,7 @@ class RNN(Recurrent):
 
     def __init__(
         self,
-        name: str | None,
+        name: str | None = None,
         *,
         n_in: int,
         n_hidden: int,
@@ -505,7 +505,7 @@ class GRUCell(RecurrentCell):
 
     def __init__(
         self,
-        name: str | None,
+        name: str | None = None,
         *,
         n_in: int,
         n_hidden: int,
@@ -620,7 +620,7 @@ class GRU(Recurrent):
 
     def __init__(
         self,
-        name: str | None,
+        name: str | None = None,
         *,
         n_in: int,
         n_hidden: int,
@@ -717,7 +717,7 @@ class LSTMCell(RecurrentCell):
 
     def __init__(
         self,
-        name: str | None,
+        name: str | None = None,
         *,
         n_in: int,
         n_hidden: int,
@@ -828,7 +828,7 @@ class LSTM(Recurrent):
 
     def __init__(
         self,
-        name: str | None,
+        name: str | None = None,
         *,
         n_in: int,
         n_hidden: int,

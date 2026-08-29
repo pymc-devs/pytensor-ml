@@ -173,6 +173,33 @@ because an endpoint above the starting rate is a legitimate warmup.
 There is no ``warmup`` helper for the same reason: an endpoint above the start already is
 one, and :func:`~pytensor_ml.optim.join_schedules` composes the phases.
 
+Hyperparameters are keyword-only
+--------------------------------
+
+A layer takes its name first and every hyperparameter by keyword. There are no positional
+hyperparameters anywhere in the library, so the torch and keras spelling raises rather than
+binding a hyperparameter to ``name`` and leaving the real one at its default:
+
+.. code-block:: python
+
+    Dropout(0.1)              # TypeError: Dropout's `name` must be a string ... Dropout(p=0.1)
+    Conv2D("conv", 1, 16, 3)  # TypeError: takes 2 positional arguments but 5 were given
+
+    Dropout("drop", p=0.1)    # torch's nn.Dropout(0.1)
+    Conv2D("conv", in_channels=1, out_channels=16, kernel_size=3)
+
+Only the first can tell you which parameter you meant. Once the name slot holds a string
+the extra arguments are anonymous, and the error is the one Python writes.
+
+Every layer's name is optional and falls back to its class, so ``BatchNorm(n_in=4)`` is named
+``BatchNorm``. Two unnamed ones in a network therefore name their parameters identically, which
+is inert during training and raises at the first :func:`~pytensor_ml.save_state` as
+``Duplicate shared-variable name 'BatchNorm_scale'``.
+
+The two layers that wrap other layers take those first and their name after:
+:class:`~pytensor_ml.layers.Recurrent` is ``Recurrent(cell, name)`` and
+:class:`~pytensor_ml.layers.Bidirectional` is ``Bidirectional(forward, backward, name)``.
+
 Convolution inputs are channels-last
 ------------------------------------
 

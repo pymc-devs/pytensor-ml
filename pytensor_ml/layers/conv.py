@@ -730,7 +730,7 @@ class _ConvNd(Layer):
 
     def __init__(
         self,
-        name: str | None,
+        name: str | None = None,
         *,
         in_channels: int,
         out_channels: int,
@@ -927,7 +927,7 @@ class _ConvTransposeNd(_ConvNd):
 
     def __init__(
         self,
-        name: str | None,
+        name: str | None = None,
         *,
         in_channels: int,
         out_channels: int,

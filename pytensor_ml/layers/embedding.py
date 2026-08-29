@@ -49,7 +49,7 @@ class Embedding(Layer):
 
     def __init__(
         self,
-        name: str | None,
+        name: str | None = None,
         *,
         n_embeddings: int,
         n_features: int,

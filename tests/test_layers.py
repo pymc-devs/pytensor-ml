@@ -804,6 +804,11 @@ def test_no_layer_takes_a_hyperparameter_positionally():
     assert not offenders, f"layers taking more than a name positionally: {offenders}"
 
 
+def test_a_layer_with_required_hyperparameters_can_go_unnamed():
+    """A name is never required, so a stack can leave it out and take the class name."""
+    assert Linear(n_in=4, n_out=4).name == "Linear"
+
+
 def test_a_layer_with_required_hyperparameters_rejects_a_number_in_the_name_slot():
     """``Linear(4)`` fails as a missing argument rather than a bad name, so the check is only
     reachable once the hyperparameters it needs are supplied."""

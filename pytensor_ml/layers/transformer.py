@@ -62,7 +62,7 @@ class FeedForward(Layer):
 
     def __init__(
         self,
-        name: str | None,
+        name: str | None = None,
         *,
         d_model: int,
         hidden_dim: int | None = None,
@@ -163,7 +163,7 @@ class TransformerBlock(Layer):
 
     def __init__(
         self,
-        name: str | None,
+        name: str | None = None,
         *,
         d_model: int,
         n_head: int,

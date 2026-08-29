@@ -192,7 +192,7 @@ class MultiheadAttention(Layer):
 
     def __init__(
         self,
-        name: str | None,
+        name: str | None = None,
         *,
         n_embd: int,
         n_head: int,
@@ -293,7 +293,7 @@ class CausalSelfAttention(MultiheadAttention):
 
     def __init__(
         self,
-        name: str | None,
+        name: str | None = None,
         *,
         n_embd: int,
         n_head: int,
