@@ -1,16 +1,25 @@
+import json
+
 import numpy as np
 import pytensor
 import pytensor.tensor as pt
 import pytest
 
-from safetensors.numpy import load_file
+from pytensor.tensor.random.variable import shared_rng
+from safetensors import safe_open
+from safetensors.numpy import load_file, save_file
 
-from pytensor_ml.checkpoint import load_state, save_state
-from pytensor_ml.layers import Linear, Sequential
+from pytensor_ml.checkpoint import generator_from_state, load_state, save_state
+from pytensor_ml.layers import BatchNorm, Dropout, Linear, Sequential
 from pytensor_ml.loss import SquaredError, supervised_loss
 from pytensor_ml.optim import adam
 from pytensor_ml.params import trainable
-from pytensor_ml.pytensorf import collect_trainable_params, compile_predict, function
+from pytensor_ml.pytensorf import (
+    collect_shared_variables,
+    collect_trainable_params,
+    compile_predict,
+    function,
+)
 from pytensor_ml.state import initialize_params
 
 floatX = pytensor.config.floatX
@@ -334,3 +343,202 @@ def test_numbering_follows_the_order_the_variables_are_passed(tmp_path):
 
     assert load_file(tmp_path / "forward.safetensors")["w_1"] == 1.0
     assert load_file(tmp_path / "reversed.safetensors")["w_1"] == 2.0
+
+
+def rng_variable(name, bit_generator="PCG64", seed=0):
+    return shared_rng(np.random.Generator(getattr(np.random, bit_generator)(seed)), name=name)
+
+
+def test_a_network_with_a_dropout_checkpoints(tmp_path):
+    """``collect_shared_variables`` is the documented way to assemble a checkpoint and it returns
+    generators, so a stochastic network has to write both halves rather than one or neither."""
+    X = pt.tensor("X", shape=(None, 8))
+    y = Sequential(Linear("fc", n_in=8, n_out=4), Dropout("drop", p=0.5, random_state=0))(X)
+
+    path = tmp_path / "ckpt.safetensors"
+    save_state(collect_shared_variables(y), path)
+
+    assert sorted(load_file(path)) == ["fc_W", "fc_b"]
+    with safe_open(path, framework="numpy") as archive:
+        assert sorted(archive.metadata()) == ["rng/drop/rng_0"]
+
+
+def test_restoring_a_generator_reproduces_its_next_draw(tmp_path):
+    """Restoring the state is the point: a resumed run has to continue the stream, not restart it."""
+    X = pt.tensor("X", shape=(None, 8))
+    y = Sequential(Linear("fc", n_in=8, n_out=4), Dropout(p=0.5, random_state=0))(X)
+    shared = collect_shared_variables(y)
+    draw = function([X], y)
+    X_value = np.ones((2, 8), dtype=floatX)
+
+    draw(X_value)
+    path = tmp_path / "ckpt.safetensors"
+    save_state(shared, path)
+    expected = draw(X_value)
+
+    draw(X_value)
+    load_state(shared, path)
+    np.testing.assert_array_equal(draw(X_value), expected)
+
+
+@pytest.mark.parametrize("bit_generator", ["PCG64", "MT19937", "Philox", "SFC64"])
+def test_every_bit_generator_round_trips(tmp_path, bit_generator):
+    """MT19937 keeps its key as an array and Philox its counter, neither of which JSON takes directly."""
+    source = rng_variable("rng", bit_generator)
+    source.get_value(borrow=True).random(5)
+    path = tmp_path / "ckpt.safetensors"
+    save_state([source], path)
+    expected = source.get_value(borrow=True).random(3)
+
+    target = rng_variable("rng", bit_generator, seed=999)
+    load_state([target], path)
+    np.testing.assert_array_equal(target.get_value(borrow=True).random(3), expected)
+
+
+def test_loading_a_generator_state_into_another_kind_raises(tmp_path):
+    """The state of one bit generator means nothing to another, and assigning it across would either
+    raise from numpy or silently take a stream the archive never recorded."""
+    path = tmp_path / "ckpt.safetensors"
+    save_state([rng_variable("rng", "PCG64")], path)
+    with pytest.raises(
+        ValueError, match=r"target is a MT19937 generator, archive holds PCG64 state"
+    ):
+        load_state([rng_variable("rng", "MT19937")], path)
+
+
+def test_foreign_archive_metadata_is_not_read_as_generator_state(tmp_path):
+    """safetensors metadata is a flat map shared with whoever wrote the file; HuggingFace puts its own
+    keys there, and they are not generator state."""
+    path = tmp_path / "hf.safetensors"
+    save_file({"w": np.array([1.0, 2.0])}, path, metadata={"format": "pt"})
+
+    weight = shared([0.0, 0.0], "w")
+    load_state([weight], path)
+    np.testing.assert_array_equal(weight.get_value(), [1.0, 2.0])
+
+
+def test_an_archive_without_generator_state_reports_it_missing(tmp_path):
+    """Loading a weights-only archive into a stochastic graph leaves the generator unset, which has to
+    be as loud as a missing tensor rather than silently continuing an unrelated stream."""
+    path = tmp_path / "hf.safetensors"
+    save_file({"w": np.zeros(2, dtype="float64")}, path, metadata={"format": "pt"})
+
+    with pytest.raises(ValueError, match=r"missing from archive: \['rng'\]"):
+        load_state([shared([0.0, 0.0], "w"), rng_variable("rng")], path)
+
+
+def test_generator_state_rides_in_metadata_not_as_a_tensor(tmp_path):
+    """Nothing in the tensor half of the archive names the generator, so a reader that only understands
+    tensors -- any other safetensors consumer -- still sees a well-formed weights file."""
+    path = tmp_path / "ckpt.safetensors"
+    save_state([shared([1.0], "w"), rng_variable("rng")], path)
+
+    assert sorted(load_file(path)) == ["w"]
+    with safe_open(path, framework="numpy") as archive:
+        assert sorted(archive.metadata()) == ["rng/rng"]
+
+
+def test_a_stochastic_run_resumes_from_a_checkpoint(tmp_path):
+    """Resuming means the same steps, not merely similar ones, so parameters, running statistics, the
+    generator and the optimizer's own state all have to come back. Optimizer state is passed explicitly
+    because `collect_shared_variables` does not reach it."""
+
+    def build(seed):
+        X = pt.matrix("X")
+        prediction = Sequential(
+            Linear("fc1", n_in=4, n_out=8),
+            BatchNorm("bn", n_in=8),
+            Dropout("drop", p=0.5, random_state=seed),
+            Linear("fc2", n_in=8, n_out=2),
+        )(X)
+        parameters = collect_trainable_params(prediction)
+        for parameter, value in zip(
+            parameters, initialize_params(parameters, rng=np.random.default_rng(0))
+        ):
+            parameter.set_value(value)
+        loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+        updates = adam(learning_rate=1e-2)(loss, parameters)
+        in_graph = collect_shared_variables(loss)
+        optimizer_state = [v for v in updates if v not in set(in_graph)]
+        return function([X, target], loss, updates=updates), [*in_graph, *optimizer_state]
+
+    rng = np.random.default_rng(1)
+    X_value = rng.normal(size=(8, 4)).astype(floatX)
+    target_value = rng.normal(size=(8, 2)).astype(floatX)
+
+    step, everything = build(seed=0)
+    for _ in range(3):
+        step(X_value, target_value)
+    path = tmp_path / "ckpt.safetensors"
+    save_state(everything, path)
+    continued = [step(X_value, target_value) for _ in range(3)]
+
+    # A different seed, so a generator that failed to restore would show up in the losses.
+    resumed_step, resumed_everything = build(seed=999)
+    load_state(resumed_everything, path)
+    resumed = [resumed_step(X_value, target_value) for _ in range(3)]
+
+    np.testing.assert_allclose(resumed, continued)
+
+
+def corrupt_generator_state(path, mutate):
+    """Rewrite the generator state in an archive, leaving its tensors alone."""
+    tensors = dict(load_file(path))
+    with safe_open(path, framework="numpy") as archive:
+        metadata = dict(archive.metadata())
+    metadata["rng/rng"] = mutate(metadata["rng/rng"])
+    save_file(tensors, path, metadata=metadata)
+
+
+@pytest.mark.parametrize(
+    "mutate, expected",
+    [
+        (lambda text: "not json", "JSONDecodeError"),
+        (lambda text: json.dumps({"state": {}}), "KeyError"),
+        (lambda text: json.dumps({**json.loads(text), "bit_generator": "shuffle"}), "no bit gener"),
+        (
+            lambda text: json.dumps(
+                {
+                    **json.loads(text),
+                    "state": {"key": {"__array__": [0] * 10, "dtype": "uint32"}, "pos": 0},
+                }
+            ),
+            "IndexError",
+        ),
+    ],
+    ids=["not_json", "no_kind", "not_a_generator", "truncated_array"],
+)
+def test_unusable_generator_state_is_reported_and_writes_nothing(tmp_path, mutate, expected):
+    """numpy only checks a state's contents when it is assigned, which is after the tensors would
+    already be written, so the state has to be built during validation instead."""
+    path = tmp_path / "ckpt.safetensors"
+    weight = shared([9.0, 9.0], "w")
+    generator = rng_variable("rng", "MT19937")
+    save_state([weight, generator], path)
+    corrupt_generator_state(path, mutate)
+
+    weight.set_value(np.zeros(2))
+    with pytest.raises(ValueError, match=expected):
+        load_state([weight, generator], path)
+    np.testing.assert_array_equal(weight.get_value(), [0.0, 0.0])
+
+
+def test_name_map_remaps_a_generator_key(tmp_path):
+    """Generators are keyed and remapped exactly like tensors, so a renamed archive reaches them too."""
+    path = tmp_path / "ckpt.safetensors"
+    source = rng_variable("archived", seed=0)
+    source.get_value(borrow=True).random(5)
+    save_state([source], path)
+    expected = source.get_value(borrow=True).random(3)
+
+    target = rng_variable("local", seed=999)
+    load_state([target], path, name_map={"local": "archived"})
+    np.testing.assert_array_equal(target.get_value(borrow=True).random(3), expected)
+
+
+@pytest.mark.parametrize("kind", ["shuffle", "Generator", "NotAThing"])
+def test_generator_from_state_rejects_a_name_that_is_not_a_bit_generator(kind):
+    """``getattr(np.random, ...)`` finds plenty that is not a bit generator, and calling one of those
+    raises from numpy's internals rather than saying what is wrong with the archive."""
+    with pytest.raises(ValueError, match=rf"Cannot rebuild a '{kind}' bit generator"):
+        generator_from_state({"bit_generator": kind})
