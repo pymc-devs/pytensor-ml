@@ -337,6 +337,42 @@ def test_a_draw_nested_two_inner_graphs_deep_is_found():
         function([], [nested_draw_of(2), nested_draw_of(3)])
 
 
+def test_an_update_leaves_the_multiple_client_warning_standing():
+    """The check that replaces this warning only speaks for a generator the caller wrote no update for.
+    An update silences that check without separating the draws, so the warning has to survive: both still
+    read the state each call starts from and return the same values as each other."""
+    rng = shared(np.random.default_rng(0), name="rng")
+
+    def draw_and_next(size):
+        inner_rng = rng.type()
+        next_rng, inner_draw = ptr.normal(size=(size,), rng=inner_rng, return_next_rng=True)
+        return OpFromGraph([inner_rng], [inner_draw, next_rng])(rng)
+
+    first, next_rng = draw_and_next(2)
+    second, _ = draw_and_next(3)
+
+    with pytest.warns(UserWarning, match="multiple distinct clients"):
+        function([], [first, second], updates={rng: next_rng})
+
+
+def test_identical_draws_off_one_generator_are_allowed():
+    """A dropout mask has to be the same in the backward pass as in the forward one, which is two draws
+    reading one state on purpose. They are identical operations, so a single update covers both and
+    nothing is reported."""
+    rng = shared(np.random.default_rng(0), name="rng")
+
+    def draw_of(size):
+        inner_rng = rng.type()
+        next_rng, inner_draw = ptr.normal(size=(size,), rng=inner_rng, return_next_rng=True)
+        return OpFromGraph([inner_rng], [inner_draw, next_rng])(rng)[0]
+
+    step = function([], [draw_of(3), draw_of(3)])
+
+    one_call = step()
+    np.testing.assert_array_equal(one_call[0], one_call[1])
+    assert not np.array_equal(one_call[0], step()[0])
+
+
 def test_an_op_from_graph_that_draws_without_threading_is_rejected():
     rng = shared(np.random.default_rng(0), name="rng")
     inner_rng = rng.type()

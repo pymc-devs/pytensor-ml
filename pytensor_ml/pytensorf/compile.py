@@ -105,12 +105,11 @@ def function(
     if random_seed is not None:
         reseed_rngs(find_rng_nodes(read_variables), random_seed)
 
-    with warnings.catch_warnings():
-        # This warns for a generator with several distinct draws and returns no update for it. The check
-        # below reports that better, and only once the caller's own updates are known.
-        warnings.filterwarnings(
-            "ignore", message="RNG Variable .* multiple distinct clients", category=UserWarning
-        )
+    # This warns for a generator with several distinct draws and returns no update for it. The check below
+    # reports the same thing better, but only for a generator the caller has not written an update for, so
+    # the warning is held rather than dropped and re-raised if that check stays quiet.
+    with warnings.catch_warnings(record=True) as multiple_client_warnings:
+        warnings.simplefilter("always", UserWarning)
         rng_updates = collect_default_updates(inputs=input_variables, outputs=read_variables)
 
     frozen = [
@@ -121,11 +120,13 @@ def function(
     if frozen:
         raise ValueError(
             f"The graph draws from {[str(generator.name or generator) for generator in frozen]}, which "
-            "nothing advances, so every call would repeat the same values. Two draws off one generator is "
-            "the cause: it has no single next state, so none can be derived. Give each draw its own "
-            "generator, thread one through with `next_rng, draw = pt.random.normal(rng=rng, "
-            "return_next_rng=True)`, or pass an update for it yourself."
+            "nothing advances, so every call repeats the same values. Two draws off one generator is the "
+            "cause: give each draw its own, or thread one through with `next_rng, draw = "
+            "pt.random.normal(rng=rng, return_next_rng=True)`."
         )
+
+    for caught in multiple_client_warnings:
+        warnings.warn(caught.message, caught.category, stacklevel=2)
 
     # A clock's advance is always derivable, unlike a generator's next state, so an unwritten one is
     # threaded rather than reported.
