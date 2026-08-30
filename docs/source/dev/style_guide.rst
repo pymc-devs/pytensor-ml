@@ -180,7 +180,7 @@ Every public entrypoint carries an ``Examples`` section. Three rules:
         from pytensor_ml.optim import adam, chain, clip_by_global_norm, compile_train
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, chain(clip_by_global_norm(1.0), adam(1e-3)))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
