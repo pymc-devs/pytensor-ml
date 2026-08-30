@@ -12,9 +12,10 @@ from safetensors.numpy import load_file, save_file
 from pytensor_ml.checkpoint import generator_from_state, load_state, save_state
 from pytensor_ml.layers import BatchNorm, Dropout, Linear, Sequential
 from pytensor_ml.loss import SquaredError, supervised_loss
-from pytensor_ml.optim import adam
+from pytensor_ml.optim import adam, sgd
 from pytensor_ml.params import trainable
 from pytensor_ml.pytensorf import (
+    collect_optimizer_state,
     collect_shared_variables,
     collect_trainable_params,
     compile_predict,
@@ -440,8 +441,7 @@ def test_generator_state_rides_in_metadata_not_as_a_tensor(tmp_path):
 
 def test_a_stochastic_run_resumes_from_a_checkpoint(tmp_path):
     """Resuming means the same steps, not merely similar ones, so parameters, running statistics, the
-    generator and the optimizer's own state all have to come back. Optimizer state is passed explicitly
-    because `collect_shared_variables` does not reach it."""
+    generator and the optimizer's own state all have to come back."""
 
     def build(seed):
         X = pt.matrix("X")
@@ -459,7 +459,7 @@ def test_a_stochastic_run_resumes_from_a_checkpoint(tmp_path):
         loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
         updates = adam(learning_rate=1e-2)(loss, parameters)
         in_graph = collect_shared_variables(loss)
-        optimizer_state = [v for v in updates if v not in set(in_graph)]
+        optimizer_state = collect_optimizer_state(updates, in_graph)
         return function([X, target], loss, updates=updates), [*in_graph, *optimizer_state]
 
     rng = np.random.default_rng(1)
@@ -542,3 +542,92 @@ def test_generator_from_state_rejects_a_name_that_is_not_a_bit_generator(kind):
     raises from numpy's internals rather than saying what is wrong with the archive."""
     with pytest.raises(ValueError, match=rf"Cannot rebuild a '{kind}' bit generator"):
         generator_from_state({"bit_generator": kind})
+
+
+def test_a_resumed_optimizer_takes_the_step_it_would_have_taken(tmp_path):
+    """Reloading the parameters alone leaves the moments at zero and the step count at one, so bias
+    correction takes a full-rate step from a converged point and undoes the training. The step after a
+    resume has to match the step the original run would have taken next."""
+
+    def build():
+        X = pt.tensor("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        parameters = collect_trainable_params(loss)
+        initialize_params(parameters, rng=np.random.default_rng(0))
+        updates = adam(learning_rate=1e-2)(loss, parameters)
+        in_graph = collect_shared_variables(loss)
+        everything = [*in_graph, *collect_optimizer_state(updates, in_graph)]
+        return function([X, target], loss, updates=updates), parameters, everything
+
+    rng = np.random.default_rng(0)
+    features = rng.normal(size=(64, 4)).astype(floatX)
+    targets = (features @ np.arange(4.0)).astype(floatX)[:, None]
+
+    step, parameters, everything = build()
+    for _ in range(200):
+        step(features, targets)
+    path = tmp_path / "ckpt.safetensors"
+    save_state(everything, path)
+
+    before = [parameter.get_value().copy() for parameter in parameters]
+    step(features, targets)
+    continued = [parameter.get_value() - was for parameter, was in zip(parameters, before)]
+
+    resumed_step, resumed_parameters, resumed_everything = build()
+    load_state(resumed_everything, path)
+    before_resume = [parameter.get_value().copy() for parameter in resumed_parameters]
+    resumed_step(features, targets)
+    resumed = [
+        parameter.get_value() - was for parameter, was in zip(resumed_parameters, before_resume)
+    ]
+
+    for continued_delta, resumed_delta in zip(continued, resumed):
+        np.testing.assert_allclose(resumed_delta, continued_delta, rtol=1e-6)
+
+
+def test_collect_optimizer_state_returns_only_what_the_graph_misses():
+    """The moments and the step counter, and nothing the graph already offers -- a variable returned
+    twice would be saved twice and numbered apart as though it were two."""
+    X = pt.tensor("X", shape=(None, 4))
+    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+    parameters = collect_trainable_params(loss)
+    updates = adam(learning_rate=1e-2)(loss, parameters)
+    in_graph = collect_shared_variables(loss)
+
+    state = collect_optimizer_state(updates, in_graph)
+
+    assert not set(state) & set(in_graph)
+    assert set(state) | set(parameters) == set(updates)
+    assert sorted(v.name for v in state) == [
+        "adam/step_count",
+        "fc_W/adam/first_moment",
+        "fc_W/adam/second_moment",
+        "fc_b/adam/first_moment",
+        "fc_b/adam/second_moment",
+    ]
+
+
+def test_a_checkpoint_with_optimizer_state_will_not_half_restore(tmp_path):
+    """The two sets are not interchangeable in either direction. Loading a full checkpoint into the
+    parameters alone would leave the moments behind, so it is rejected rather than half-applied."""
+    X = pt.tensor("X", shape=(None, 4))
+    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+    parameters = collect_trainable_params(loss)
+    updates = adam(learning_rate=1e-2)(loss, parameters)
+    shared = collect_shared_variables(loss)
+
+    path = tmp_path / "ckpt.safetensors"
+    save_state([*shared, *collect_optimizer_state(updates, parameters)], path)
+
+    with pytest.raises(ValueError, match=r"unexpected in archive: \['adam/step_count'"):
+        load_state(parameters, path)
+
+
+def test_collect_optimizer_state_is_empty_for_a_rule_that_keeps_none():
+    """A rule with nothing to carry between steps contributes nothing, so a checkpoint of a stateless
+    optimizer is just the graph."""
+    X = pt.tensor("X", shape=(None, 4))
+    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+    parameters = collect_trainable_params(loss)
+
+    assert collect_optimizer_state(sgd(learning_rate=1e-2)(loss, parameters), parameters) == []

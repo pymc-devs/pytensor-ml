@@ -152,7 +152,9 @@ def save_state(shared_variables: Sequence[SharedVariable], path: str | Path) -> 
     do -- are numbered after the layer that built them (``Linear_1_W``, ``Linear_2_W``) in the order
     given, so collect them the same way at save and at load. Pass the parameters together with the
     optimizer state to capture a complete training checkpoint; both are ordinary shared variables and
-    carry self-describing names (e.g. ``"fc1/weight"``, ``"fc1/weight/adam/first_moment"``). A random
+    carry self-describing names (e.g. ``"fc1/weight"``, ``"fc1/weight/adam/first_moment"``).
+    :func:`~pytensor_ml.pytensorf.collect_optimizer_state` finds the half no walk of the graph reaches.
+    A random
     generator has no tensor to store, so its state is written to the archive's metadata under the same
     key, which is what lets a stochastic network checkpoint at all.
 

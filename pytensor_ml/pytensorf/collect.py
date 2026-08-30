@@ -1,4 +1,4 @@
-from collections.abc import Container, Sequence
+from collections.abc import Container, Mapping, Sequence
 
 from pytensor.compile.sharedvalue import SharedVariable
 from pytensor.gradient import DisconnectedGrad, ZeroGrad
@@ -92,7 +92,8 @@ def collect_shared_variables(outputs: Variable | Sequence[Variable]) -> list[Sha
     Examples
     --------
     Every shared variable in the graph, whichever kind: parameters, running statistics, RNGs and
-    training clocks together. This is the set a checkpoint saves:
+    training clocks together. A rule's own state is not in the graph, so a checkpoint that resumes a run
+    adds :func:`collect_optimizer_state` to this:
 
     .. code-block:: python
 
@@ -112,6 +113,60 @@ def collect_shared_variables(outputs: Variable | Sequence[Variable]) -> list[Sha
         shared = collect_shared_variables(activations)
     """
     return _collect_inputs_of_type(outputs, SharedVariable)
+
+
+def collect_optimizer_state(
+    updates: Mapping[SharedVariable, Variable], parameters: Sequence[SharedVariable]
+) -> list[SharedVariable]:
+    """
+    Collect the state a rule keeps between steps, which no walk of the graph reaches.
+
+    A rule's moments and its step counter are created when the rule is applied and appear only in the
+    updates it returns, so a checkpoint assembled from the graph alone saves the parameters and leaves
+    the optimizer at step zero.
+
+    Parameters
+    ----------
+    updates : mapping of SharedVariable to Variable
+        What a rule returned, keyed by the variable each expression writes to.
+    parameters : sequence of SharedVariable
+        The parameters the rule was given, which the result excludes.
+
+    Returns
+    -------
+    state : list of SharedVariable
+        The updated variables that are not in ``parameters``, in the order ``updates`` gives them.
+
+    Examples
+    --------
+    A checkpoint that resumes a run rather than restarting its optimizer needs both halves, since
+    reloading the parameters alone leaves the moments at zero and takes a full-rate step from a
+    converged point:
+
+    .. code-block:: python
+
+        import pytensor.tensor as pt
+
+        from pytensor_ml import save_state
+        from pytensor_ml.layers import Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import adam
+        from pytensor_ml.pytensorf import (
+            collect_optimizer_state,
+            collect_shared_variables,
+            collect_trainable_params,
+        )
+
+        X = pt.tensor("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        parameters = collect_trainable_params(loss)
+        updates = adam(1e-2)(loss, parameters)
+
+        shared = collect_shared_variables(loss)
+        save_state([*shared, *collect_optimizer_state(updates, parameters)], "ckpt.safetensors")
+    """
+    already_collected = set(parameters)
+    return [variable for variable in updates if variable not in already_collected]
 
 
 def collect_trainable_params(outputs: Variable | Sequence[Variable]) -> list[TrainableParameter]:
