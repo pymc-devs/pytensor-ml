@@ -158,7 +158,7 @@ def collect_optimizer_state(
         )
 
         X = pt.tensor("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
         parameters = collect_trainable_params(loss)
         updates = adam(1e-2)(loss, parameters)
 

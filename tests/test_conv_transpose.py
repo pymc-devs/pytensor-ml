@@ -185,7 +185,7 @@ def test_an_encoder_decoder_trains_end_to_end(rng):
     y = Linear("head", n_in=7 * 7 * 2, n_out=1)(Flatten(decoded))
 
     model = Model(X, y).initialize(seed=1)
-    step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)
+    step = model.compile_train(adam(learning_rate=0.05), SquaredError())
 
     X_np = rng.normal(size=(32, 8, 8, 2)).astype(floatX)
     y_np = X_np.sum(axis=(1, 2, 3))[:, None].astype(floatX)

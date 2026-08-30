@@ -150,7 +150,7 @@ def test_trains_end_to_end(rng):
     X = Input("X", shape=(None, 6, 4))
     y = Linear("head", n_in=5, n_out=1)(RNN("rnn", n_in=4, n_hidden=5)(X)[..., -1, :])
     model = Model(X, y).initialize(seed=1)
-    step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)
+    step = model.compile_train(adam(learning_rate=0.05), SquaredError())
 
     X_np = rng.normal(size=(32, 6, 4)).astype(floatX)
     y_np = X_np.sum(axis=(1, 2))[:, None].astype(floatX)
@@ -534,7 +534,7 @@ def test_the_gru_trains_end_to_end(rng):
     X = Input("X", shape=(None, 6, 4))
     y = Linear("head", n_in=5, n_out=1)(GRU("gru", n_in=4, n_hidden=5)(X)[..., -1, :])
     model = Model(X, y).initialize(seed=1)
-    step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)
+    step = model.compile_train(adam(learning_rate=0.05), SquaredError())
 
     X_np = rng.normal(size=(32, 6, 4)).astype(floatX)
     y_np = X_np.sum(axis=(1, 2))[:, None].astype(floatX)
@@ -823,7 +823,7 @@ def test_the_lstm_trains_end_to_end(rng):
     X = Input("X", shape=(None, 6, 4))
     y = Linear("head", n_in=5, n_out=1)(LSTM("lstm", n_in=4, n_hidden=5)(X)[..., -1, :])
     model = Model(X, y).initialize(seed=1)
-    step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)
+    step = model.compile_train(adam(learning_rate=0.05), SquaredError())
 
     X_np = rng.normal(size=(32, 6, 4)).astype(floatX)
     y_np = X_np.sum(axis=(1, 2))[:, None].astype(floatX)
@@ -1021,7 +1021,7 @@ def test_bidirectional_trains_end_to_end(rng):
     model = Model(X, y).initialize(seed=1)
 
     assert len(collect_trainable_params(y)) == 10
-    step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)
+    step = model.compile_train(adam(learning_rate=0.05), SquaredError())
     X_np = rng.normal(size=(32, 6, 4)).astype(floatX)
     y_np = X_np.sum(axis=(1, 2))[:, None].astype(floatX)
 

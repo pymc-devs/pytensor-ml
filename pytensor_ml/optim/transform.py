@@ -69,7 +69,7 @@ def trace(decay: float = 0.9, nesterov: bool = False, *, namespace: str = "trace
         from pytensor_ml.optim import chain, compile_train, sgd, trace
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, chain(sgd(0.1), trace(decay=0.9, nesterov=True)))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
@@ -127,7 +127,7 @@ def scale(factor: Rate) -> Transform:
         from pytensor_ml.optim import adam, chain, compile_train, scale
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, chain(adam(1e-3), scale(0.5)))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
@@ -195,7 +195,7 @@ def scale_by_schedule(schedule: Schedule, *, namespace: str = "scale_by_schedule
         from pytensor_ml.optim import adam, chain, clip_by_global_norm, compile_train, cosine_schedule, scale_by_schedule
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, chain(adam(1.0), clip_by_global_norm(1.0), scale_by_schedule(cosine_schedule(3e-4, 10_000))))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
@@ -254,7 +254,7 @@ def add_weight_decay(
         from pytensor_ml.optim import adam, add_weight_decay, chain, compile_train
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, chain(adam(1e-3), add_weight_decay(0.01, mask=lambda parameter: parameter.ndim > 1)))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))

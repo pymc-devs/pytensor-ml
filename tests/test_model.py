@@ -163,7 +163,7 @@ def test_compile_train_reduces_loss():
     y = Sequential(Linear("fc1", n_in=4, n_out=8), Linear("fc2", n_in=8, n_out=1))(X)
     model = Model(X, y).initialize(seed=0)
 
-    step = model.compile_train(sgd(learning_rate=1e-2), SquaredError(), ndim_out=2)
+    step = model.compile_train(sgd(learning_rate=1e-2), SquaredError())
 
     rng = np.random.default_rng(0)
     X_batch = rng.normal(size=(64, 4)).astype(config.floatX)

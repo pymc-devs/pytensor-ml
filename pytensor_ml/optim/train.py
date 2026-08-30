@@ -106,7 +106,7 @@ def compile_train(
 
         X = Input("X", shape=(None, 4))
         prediction = Linear("fc", n_in=4, n_out=1)(X)
-        loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(prediction, SquaredError())
 
         step = compile_train(loss, adam(1e-3), inputs=[X, target], extra_outputs=[prediction])
         loss_value, predictions = step(np.zeros((8, 4)), np.zeros((8, 1)))

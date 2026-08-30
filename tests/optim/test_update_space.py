@@ -280,7 +280,7 @@ def test_a_clip_ahead_of_a_rule_differentiates_the_loss_itself():
     """Every other case here hands the chain precomputed gradients. Here the clip is the stage that meets
     the loss, so it is the one that has to differentiate it rather than assume a dict."""
     X = Input("X", shape=(None, 4))
-    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
     step = compile_train(loss, chain(clip_by_global_norm(1.0), adam(1e-3)))
 

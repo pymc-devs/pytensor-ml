@@ -44,7 +44,7 @@ def build_trained_step(seed: int = 0):
     for parameter, value in zip(parameters, initialize_params(parameters, rng=rng)):
         parameter.set_value(value)
 
-    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(prediction, SquaredError())
     updates = adam(learning_rate=1e-2)(loss, parameters)
     state = [variable for variable in updates if variable not in set(parameters)]
     step = function([X, target], loss, updates=updates)
@@ -222,7 +222,7 @@ def test_parameters_keep_identity_across_compilation():
     before = collect_trainable_params(prediction)
 
     compile_predict(prediction, inputs=[X])
-    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(prediction, SquaredError())
     function([X, target], loss, updates=adam(1e-2)(loss, before))
 
     after = collect_trainable_params(prediction)
@@ -310,7 +310,7 @@ def test_unnamed_layers_round_trip_with_their_optimizer_state(tmp_path):
     for parameter, value in zip(parameters, initialize_params(parameters, rng=rng)):
         parameter.set_value(value)
 
-    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(prediction, SquaredError())
     updates = adam(learning_rate=1e-2)(loss, parameters)
     state = [variable for variable in updates if variable not in set(parameters)]
     step = function([X, target], loss, updates=updates)
@@ -456,7 +456,7 @@ def test_a_stochastic_run_resumes_from_a_checkpoint(tmp_path):
             parameters, initialize_params(parameters, rng=np.random.default_rng(0))
         ):
             parameter.set_value(value)
-        loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(prediction, SquaredError())
         updates = adam(learning_rate=1e-2)(loss, parameters)
         in_graph = collect_shared_variables(loss)
         optimizer_state = collect_optimizer_state(updates, in_graph)
@@ -551,7 +551,7 @@ def test_a_resumed_optimizer_takes_the_step_it_would_have_taken(tmp_path):
 
     def build():
         X = pt.tensor("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
         parameters = collect_trainable_params(loss)
         initialize_params(parameters, rng=np.random.default_rng(0))
         updates = adam(learning_rate=1e-2)(loss, parameters)
@@ -589,7 +589,7 @@ def test_collect_optimizer_state_returns_only_what_the_graph_misses():
     """The moments and the step counter, and nothing the graph already offers -- a variable returned
     twice would be saved twice and numbered apart as though it were two."""
     X = pt.tensor("X", shape=(None, 4))
-    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
     parameters = collect_trainable_params(loss)
     updates = adam(learning_rate=1e-2)(loss, parameters)
     in_graph = collect_shared_variables(loss)
@@ -611,7 +611,7 @@ def test_a_checkpoint_with_optimizer_state_will_not_half_restore(tmp_path):
     """The two sets are not interchangeable in either direction. Loading a full checkpoint into the
     parameters alone would leave the moments behind, so it is rejected rather than half-applied."""
     X = pt.tensor("X", shape=(None, 4))
-    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
     parameters = collect_trainable_params(loss)
     updates = adam(learning_rate=1e-2)(loss, parameters)
     shared = collect_shared_variables(loss)
@@ -627,7 +627,7 @@ def test_collect_optimizer_state_is_empty_for_a_rule_that_keeps_none():
     """A rule with nothing to carry between steps contributes nothing, so a checkpoint of a stateless
     optimizer is just the graph."""
     X = pt.tensor("X", shape=(None, 4))
-    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
     parameters = collect_trainable_params(loss)
 
     assert collect_optimizer_state(sgd(learning_rate=1e-2)(loss, parameters), parameters) == []

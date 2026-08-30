@@ -41,7 +41,7 @@ a :class:`SkipCondition` when it does:
 
 
     X = Input("X", shape=(None, 4))
-    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
     step = compile_train(loss, skip_if(adam(1e-3), loss_is_huge))
     loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
@@ -75,7 +75,7 @@ class SkipCondition:
         from pytensor_ml.optim import SkipCondition, adam, compile_train, skip_if
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         any_step_huge = SkipCondition(
             decide=lambda updates, parameters: pt.max([pt.abs(step).max() for step in updates.values()]) > 1e3,
@@ -120,7 +120,7 @@ def nonfinite() -> SkipCondition:
         from pytensor_ml.optim import adam, compile_train, nonfinite, skip_if
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, skip_if(adam(1e-3), nonfinite(), max_consecutive_skips=None))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
@@ -174,7 +174,7 @@ def large_step(max_norm: float | TensorVariable) -> SkipCondition:
         from pytensor_ml.optim import adam, compile_train, large_step, skip_if
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, skip_if(adam(1e-3), large_step(10.0)))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
@@ -271,7 +271,7 @@ def skip_if(
         from pytensor_ml.optim import adam, compile_train, large_step, skip_if
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         rule = skip_if(adam(1e-3), large_step(10.0), max_consecutive_skips=3)
 
@@ -359,7 +359,7 @@ def apply_if_finite(
         from pytensor_ml.optim import adam, apply_if_finite, compile_train
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, apply_if_finite(adam(1e-3)))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))

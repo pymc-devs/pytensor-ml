@@ -101,7 +101,7 @@ def reduce_on_plateau(
         from pytensor_ml.optim import adam, compile_train, reduce_on_plateau, scalar_state
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         scale = scalar_state("plateau/scale", fill_value=1.0)
         rule = reduce_on_plateau(adam(learning_rate=scale * 1e-3), scale, patience=5, accumulation_size=50)

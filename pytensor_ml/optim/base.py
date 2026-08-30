@@ -119,7 +119,7 @@ Wrap it in :func:`reuses_state` to hold those buffers across invocations when it
 
 
     X = Input("X", shape=(None, 4))
-    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
     step = compile_train(loss, chain(adam(1e-3), halve_every_step))
     loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
@@ -169,7 +169,7 @@ A shared scalar is the form to reach for when the rate has to change mid-run wit
     rate = scalar_state("rate", fill_value=0.1)
 
     X = Input("X", shape=(None, 4))
-    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
     step = compile_train(loss, sgd(learning_rate=rate))
     loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
@@ -259,7 +259,7 @@ def get_gradients(
         from pytensor_ml.pytensorf import collect_trainable_params
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         parameters = collect_trainable_params(loss)
         gradients = get_gradients(loss, parameters)
@@ -712,7 +712,7 @@ def chain(*transforms: Transform) -> Transform:
         from pytensor_ml.optim import adam, chain, clip_by_global_norm, compile_train
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, chain(clip_by_global_norm(1.0), adam(1e-3)))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))

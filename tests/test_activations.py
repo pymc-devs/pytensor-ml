@@ -93,7 +93,7 @@ def test_activation_lets_a_network_learn_xor(activation):
     ):
         parameter.set_value(value)
     loss, target = supervised_loss(
-        output, CrossEntropy(expect_onehot_labels=True, expect_logits=True), ndim_out=2
+        output, CrossEntropy(expect_onehot_labels=True, expect_logits=True)
     )
     step = compile_train(
         loss,

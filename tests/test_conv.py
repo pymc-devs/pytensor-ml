@@ -363,7 +363,7 @@ def test_conv1d_trains_end_to_end(rng):
     features = Conv1D("conv", in_channels=2, out_channels=4, kernel_size=3, padding="same")(X)
     y = Linear("head", n_in=4, n_out=1)(features.sum(axis=1))
     model = Model(X, y).initialize(seed=1)
-    step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)
+    step = model.compile_train(adam(learning_rate=0.05), SquaredError())
 
     X_np = rng.normal(size=(32, 12, 2)).astype(floatX)
     y_np = X_np.sum(axis=(1, 2))[:, None].astype(floatX)
@@ -763,7 +763,7 @@ def test_a_convolutional_network_trains_end_to_end(rng):
     y = Linear("head", n_in=4 * 4 * 4, n_out=1)(Flatten(pooled))
 
     model = Model(X, y).initialize(seed=1)
-    step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)
+    step = model.compile_train(adam(learning_rate=0.05), SquaredError())
 
     X_np = rng.normal(size=(32, 8, 8, 2)).astype(floatX)
     y_np = X_np.sum(axis=(1, 2, 3))[:, None].astype(floatX)

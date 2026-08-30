@@ -71,7 +71,7 @@ def sgd(
         from pytensor_ml.optim import compile_train, sgd
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, sgd(learning_rate=0.1, momentum=0.9, nesterov=True))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
@@ -124,7 +124,7 @@ def adam(
         from pytensor_ml.optim import adam, compile_train
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, adam(learning_rate=1e-3))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
@@ -181,7 +181,7 @@ def adamw(
         from pytensor_ml.optim import adamw, compile_train
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, adamw(learning_rate=1e-3, mask=lambda parameter: parameter.ndim > 1))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
@@ -237,7 +237,7 @@ def nadam(
         from pytensor_ml.optim import compile_train, nadam
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, nadam(learning_rate=2e-3))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
@@ -290,7 +290,7 @@ def adamax(
         from pytensor_ml.optim import adamax, compile_train
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, adamax(learning_rate=2e-3))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
@@ -343,7 +343,7 @@ def rprop(
         from pytensor_ml.optim import compile_train, rprop
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, rprop(learning_rate=1e-2, eta_plus=1.2, eta_minus=0.5))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
@@ -394,7 +394,7 @@ def rmsprop(
         from pytensor_ml.optim import compile_train, rmsprop
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, rmsprop(learning_rate=1e-2, centered=True))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
@@ -442,7 +442,7 @@ def adagrad(learning_rate: LearningRate = 0.01, epsilon: float = 1e-8) -> Transf
         from pytensor_ml.optim import adagrad, compile_train
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, adagrad(learning_rate=1e-2))
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
@@ -486,7 +486,7 @@ def adadelta(
         from pytensor_ml.optim import adadelta, compile_train
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         step = compile_train(loss, adadelta())
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))

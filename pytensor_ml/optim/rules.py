@@ -61,7 +61,7 @@ def sgd_updates(
         from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         updates = sgd_updates(loss, collect_trainable_params(loss), learning_rate=0.1)
         step = function([X, target], loss, updates=updates)
@@ -134,7 +134,7 @@ def adam_updates(
         from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         updates = adam_updates(loss, collect_trainable_params(loss), learning_rate=1e-3)
         step = function([X, target], loss, updates=updates)
@@ -306,7 +306,7 @@ def adamw_updates(
         from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         updates = adamw_updates(loss, collect_trainable_params(loss), learning_rate=1e-3, weight_decay=0.01)
         step = function([X, target], loss, updates=updates)
@@ -381,7 +381,7 @@ def nadam_updates(
         from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         updates = nadam_updates(loss, collect_trainable_params(loss), learning_rate=2e-3)
         step = function([X, target], loss, updates=updates)
@@ -473,7 +473,7 @@ def adamax_updates(
         from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         updates = adamax_updates(loss, collect_trainable_params(loss), learning_rate=2e-3)
         step = function([X, target], loss, updates=updates)
@@ -551,7 +551,7 @@ def adagrad_updates(
         from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         updates = adagrad_updates(loss, collect_trainable_params(loss), learning_rate=1e-2)
         step = function([X, target], loss, updates=updates)
@@ -631,7 +631,7 @@ def rmsprop_updates(
         from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         updates = rmsprop_updates(loss, collect_trainable_params(loss), learning_rate=1e-2)
         step = function([X, target], loss, updates=updates)
@@ -717,7 +717,7 @@ def adadelta_updates(
         from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         updates = adadelta_updates(loss, collect_trainable_params(loss))
         step = function([X, target], loss, updates=updates)
@@ -826,7 +826,7 @@ def rprop_updates(
         from pytensor_ml.pytensorf import collect_trainable_params, function
 
         X = Input("X", shape=(None, 4))
-        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError(), ndim_out=2)
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
 
         updates = rprop_updates(loss, collect_trainable_params(loss), learning_rate=1e-2)
         step = function([X, target], loss, updates=updates)

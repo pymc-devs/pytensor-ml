@@ -62,7 +62,7 @@ def test_trains_classifier(classification_data, rule):
     parameters = collect_trainable_params(prediction)
     initialize(parameters)
     loss, target = supervised_loss(
-        prediction, CrossEntropy(expect_onehot_labels=True, expect_logits=True), ndim_out=2
+        prediction, CrossEntropy(expect_onehot_labels=True, expect_logits=True)
     )
     step = compile_train(loss, rule, parameters=parameters, inputs=[X, target])
 
@@ -77,7 +77,7 @@ def test_trains_regressor(regression_data, rule):
     X, prediction = build_network(n_out=1)
     parameters = collect_trainable_params(prediction)
     initialize(parameters)
-    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(prediction, SquaredError())
     step = compile_train(loss, rule, parameters=parameters, inputs=[X, target])
 
     history = train(step, regression_data)
@@ -88,7 +88,7 @@ def test_supervised_loss_builds_target_and_scalar_loss():
     X = pt.tensor("X", shape=(None, 64))
     prediction = Linear("output", n_in=64, n_out=10)(X)
     loss, target = supervised_loss(
-        prediction, CrossEntropy(expect_onehot_labels=True, expect_logits=True), ndim_out=2
+        prediction, CrossEntropy(expect_onehot_labels=True, expect_logits=True)
     )
     assert target.type.shape == (None, 10)
     assert loss.type.ndim == 0
@@ -100,7 +100,7 @@ def test_optimizer_state_is_reachable_from_the_updates_dict():
     X = pt.tensor("X", shape=(None, 4))
     prediction = Linear("output", n_in=4, n_out=2)(X)
     parameters = collect_trainable_params(prediction)
-    loss, _ = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    loss, _ = supervised_loss(prediction, SquaredError())
 
     updates = adam(learning_rate=1e-2)(loss, parameters)
     state = [variable for variable in updates if variable not in set(parameters)]
@@ -114,7 +114,7 @@ def test_compile_train_infers_parameters_and_inputs():
     X = pt.tensor("X", shape=(None, 4))
     prediction = Linear("output", n_in=4, n_out=2)(X)
     initialize(collect_trainable_params(prediction))
-    loss, _ = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    loss, _ = supervised_loss(prediction, SquaredError())
 
     step = compile_train(loss, sgd(1e-2))  # parameters and inputs collected from the graph
 
@@ -126,7 +126,7 @@ def test_compile_train_returns_extra_outputs_in_order():
     prediction = Linear("output", n_in=4, n_out=2)(X)
     parameters = collect_trainable_params(prediction)
     initialize(parameters)
-    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(prediction, SquaredError())
     weight_norm = pt.sqrt(sum((parameter**2).sum() for parameter in parameters))
 
     step = compile_train(
@@ -159,7 +159,7 @@ def test_compile_train_collects_inputs_of_extra_outputs():
     example_weights = pt.tensor("example_weights", shape=(None,))
     prediction = Linear("output", n_in=4, n_out=2)(X)
     initialize(collect_trainable_params(prediction))
-    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(prediction, SquaredError())
 
     step = compile_train(loss, sgd(1e-2), extra_outputs=[(example_weights * loss).sum()])
 
@@ -181,7 +181,7 @@ def test_compile_train_ignores_updates_of_extra_outputs():
     monitor = BatchNorm("bn", n_in=4)(prediction)
     parameters = collect_trainable_params(prediction)
     initialize(parameters)
-    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(prediction, SquaredError())
 
     step = compile_train(
         loss,
@@ -248,7 +248,7 @@ def test_compile_train_includes_non_trainable_updates():
     prediction = Sequential(Linear("fc", n_in=4, n_out=4), BatchNorm("bn", n_in=4))(X)
     parameters = collect_trainable_params(prediction)
     initialize(parameters)
-    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(prediction, SquaredError())
     step = compile_train(loss, sgd(1e-2), parameters=parameters, inputs=[X, target])
 
     running_mean = next(
@@ -348,7 +348,7 @@ def test_extra_updates_write_state_no_gradient_produces():
     parameters = collect_trainable_params(prediction)
     initialize(parameters)
     target_weight = shared(online_layer.W.get_value().copy(), name="target_W")
-    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(prediction, SquaredError())
 
     step = compile_train(
         loss,
@@ -399,7 +399,7 @@ def test_a_rule_writing_a_statistic_the_model_owns_is_rejected():
     prediction = Sequential(Linear("fc", n_in=4, n_out=4), BatchNorm("bn", n_in=4))(X)
     parameters = collect_trainable_params(prediction)
     initialize(parameters)
-    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(prediction, SquaredError())
     running_mean = next(
         p for p in collect_non_trainable_params(prediction) if "running_mean" in p.name
     )
@@ -431,7 +431,7 @@ def test_extra_updates_reject_a_write_the_model_already_makes():
     prediction = Sequential(Linear("fc", n_in=4, n_out=4), BatchNorm("bn", n_in=4))(X)
     parameters = collect_trainable_params(prediction)
     initialize(parameters)
-    loss, target = supervised_loss(prediction, SquaredError(), ndim_out=2)
+    loss, target = supervised_loss(prediction, SquaredError())
     running_mean = next(
         p for p in collect_non_trainable_params(prediction) if "running_mean" in p.name
     )

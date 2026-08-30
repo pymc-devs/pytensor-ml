@@ -1,11 +1,14 @@
 import numpy as np
+import pytensor
 import pytensor.tensor as pt
 import pytest
 
 from scipy.special import softmax
 from sklearn.metrics import log_loss
 
-from pytensor_ml.loss import CrossEntropy, Reductions, SquaredError
+from pytensor_ml.loss import CrossEntropy, Reductions, SquaredError, supervised_loss
+
+floatX = pytensor.config.floatX
 
 
 def generate_categorical_data(expect_logits: bool, seed: int = 0):
@@ -70,3 +73,34 @@ def test_cross_entropy_accepts_a_callable_reduction():
 
     assert per_sample.shape == y_true.shape
     np.testing.assert_allclose(per_sample.mean(), pooled)
+
+
+@pytest.mark.parametrize(
+    "loss_fn, expected_shape",
+    [
+        (SquaredError(), (None, 3)),
+        (CrossEntropy(expect_onehot_labels=True), (None, 3)),
+    ],
+    ids=["squared_error", "cross_entropy_onehot"],
+)
+def test_the_loss_decides_the_rank_of_the_target_it_reads(loss_fn, expected_shape):
+    """The rank of the target follows from the prediction and the loss together, so it is not a question
+    the caller is asked."""
+    prediction = pt.tensor("prediction", shape=(None, 3), dtype=floatX)
+
+    _, target = supervised_loss(prediction, loss_fn)
+
+    assert target.type.shape == expected_shape
+
+
+def test_a_regression_head_is_scored_row_against_row():
+    """A (batch, 1) prediction against a (batch,) target broadcasts to (batch, batch), scoring every
+    pair of rows. The target has to take the prediction's rank for the loss to mean what it says."""
+    prediction = pt.tensor("prediction", shape=(None, 1), dtype=floatX)
+    loss, target = supervised_loss(prediction, SquaredError())
+    score = pytensor.function([prediction, target], loss)
+
+    predicted = np.array([[1.0], [2.0], [3.0]], dtype=floatX)
+    observed = np.array([[1.5], [2.5], [3.5]], dtype=floatX)
+
+    np.testing.assert_allclose(score(predicted, observed), 0.25)

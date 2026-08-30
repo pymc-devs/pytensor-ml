@@ -135,7 +135,7 @@ def test_a_recurrence_that_draws_trains_end_to_end():
     cell = RNN("rnn", n_in=4, n_hidden=8, activation=TanhDropout(p=0.2))
     y = Linear("head", n_in=8, n_out=1)(cell(X)[..., -1, :])
     model = Model(X, y).initialize(seed=1)
-    step = model.compile_train(adam(learning_rate=0.05), SquaredError(), ndim_out=2)
+    step = model.compile_train(adam(learning_rate=0.05), SquaredError())
 
     rng = np.random.default_rng(0)
     X_np = rng.normal(size=(32, 6, 4)).astype(floatX)

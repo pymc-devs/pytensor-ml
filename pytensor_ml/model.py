@@ -42,7 +42,7 @@ class Model:
         )
 
         model = Model(X, network(X)).initialize(seed=0)
-        step = model.compile_train(adam(1e-2), SquaredError(), ndim_out=2)
+        step = model.compile_train(adam(1e-2), SquaredError())
 
         batch = np.zeros((16, 4))
         loss_value = step(batch, np.zeros((16, 1)))
@@ -97,7 +97,6 @@ class Model:
         self,
         rule: optim.Transform,
         loss_fn: Loss | None = None,
-        ndim_out: int = 1,
         compile_kwargs: dict | None = None,
         *,
         loss: TensorVariable | None = None,
@@ -118,8 +117,6 @@ class Model:
             A configured optimizer, e.g. ``adam(1e-3)``.
         loss_fn : Loss, optional
             Callable ``(target, prediction) -> scalar loss``. Mutually exclusive with ``loss``.
-        ndim_out : int
-            Number of leading output dimensions the target shares. Supervised path only. Default 1.
         compile_kwargs : dict, optional
             Keyword arguments forwarded to the function compiler. Defaults to the model's own compile kwargs.
         loss : TensorVariable, optional
@@ -141,7 +138,7 @@ class Model:
                 raise ValueError(
                     "loss and inputs belong to the prebuilt path; omit them with loss_fn."
                 )
-            loss, target = supervised_loss(self.y, loss_fn, ndim_out)
+            loss, target = supervised_loss(self.y, loss_fn)
             inputs = [self.X, target]
         elif loss is None:
             raise ValueError("Pass either loss_fn for a supervised target, or a prebuilt loss.")
