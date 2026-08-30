@@ -6,7 +6,11 @@ import pytest
 from scipy.special import softmax
 from sklearn.metrics import log_loss
 
+from pytensor_ml.layers import Input, Linear
 from pytensor_ml.loss import CrossEntropy, Reductions, SquaredError, supervised_loss
+from pytensor_ml.optim import adam, compile_train
+from pytensor_ml.pytensorf import collect_trainable_params
+from pytensor_ml.state import initialize_params
 
 floatX = pytensor.config.floatX
 
@@ -76,21 +80,24 @@ def test_cross_entropy_accepts_a_callable_reduction():
 
 
 @pytest.mark.parametrize(
-    "loss_fn, expected_shape",
+    "loss_fn, expected_shape, expected_dtype",
     [
-        (SquaredError(), (None, 3)),
-        (CrossEntropy(expect_onehot_labels=True), (None, 3)),
+        (SquaredError(), (None, 3), floatX),
+        (CrossEntropy(), (None,), "int64"),
+        (CrossEntropy(expect_onehot_labels=True), (None, 3), floatX),
     ],
-    ids=["squared_error", "cross_entropy_onehot"],
+    ids=["squared_error", "cross_entropy_labels", "cross_entropy_onehot"],
 )
-def test_the_loss_decides_the_rank_of_the_target_it_reads(loss_fn, expected_shape):
-    """The rank of the target follows from the prediction and the loss together, so it is not a question
-    the caller is asked."""
+def test_the_loss_decides_the_target_it_reads(loss_fn, expected_shape, expected_dtype):
+    """The rank and dtype of the target follow from the prediction and the loss together, so neither is
+    a question the caller is asked. Integer labels index the class axis rather than subtracting from it,
+    which is a different rank and a different dtype from the prediction."""
     prediction = pt.tensor("prediction", shape=(None, 3), dtype=floatX)
 
     _, target = supervised_loss(prediction, loss_fn)
 
     assert target.type.shape == expected_shape
+    assert target.type.dtype == expected_dtype
 
 
 def test_a_regression_head_is_scored_row_against_row():
@@ -104,3 +111,24 @@ def test_a_regression_head_is_scored_row_against_row():
     observed = np.array([[1.5], [2.5], [3.5]], dtype=floatX)
 
     np.testing.assert_allclose(score(predicted, observed), 0.25)
+
+
+def test_cross_entropy_trains_from_integer_labels():
+    """Integer labels are the ordinary classification target, and reach the loss only if the target
+    placeholder is built with an integer dtype."""
+    X = Input("X", shape=(None, 4))
+    logits = Linear("logits", n_in=4, n_out=3)(X)
+    loss, target = supervised_loss(logits, CrossEntropy(expect_logits=True))
+    parameters = collect_trainable_params(loss)
+    for parameter, value in zip(
+        parameters, initialize_params(parameters, rng=np.random.default_rng(0))
+    ):
+        parameter.set_value(value)
+    step = compile_train(loss, adam(1e-1), inputs=[X, target])
+
+    rng = np.random.default_rng(0)
+    features = rng.normal(size=(32, 4)).astype(floatX)
+    labels = rng.integers(0, 3, size=32)
+
+    losses = [float(step(features, labels)) for _ in range(50)]
+    assert losses[-1] < losses[0]
