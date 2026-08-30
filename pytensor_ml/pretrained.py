@@ -80,7 +80,7 @@ def _weight_variables(outputs: Variable | Sequence[Variable]) -> list[SharedVari
 
 
 def _input_kind(variable: Variable) -> InputKind:
-    if isinstance(variable.type, RandomGeneratorType):
+    if isinstance(variable.type, RandomGeneratorType) and isinstance(variable, SharedVariable):
         return InputKind.RNG
     if isinstance(variable, TrainableParameter):
         return InputKind.TRAINABLE

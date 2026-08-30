@@ -5,7 +5,8 @@ import pytensor
 import pytensor.tensor as pt
 import pytest
 
-from pytensor.tensor.random.type import RandomGeneratorType
+from pytensor.compile.sharedvalue import SharedVariable
+from pytensor.tensor.random.type import RandomGeneratorType, random_generator_type
 
 from pytensor_ml.activations import ReLU
 from pytensor_ml.checkpoint import jsonable_rng_state
@@ -408,6 +409,21 @@ def test_a_fresh_generator_keeps_the_kind_the_network_was_saved_with(tmp_path, b
     assert jsonable_rng_state(generator.bit_generator.state) != jsonable_rng_state(
         generator_of(output).bit_generator.state
     )
+
+
+def test_a_generator_that_is_not_shared_stays_a_data_input(tmp_path):
+    """A free generator input is part of the call signature, not state the network owns, so rebuilding
+    it as shared would quietly change how the reloaded network is called."""
+    Z = pt.matrix("Z")
+    free = random_generator_type(name="free_rng")
+    _, draw = pt.random.normal(rng=free, size=(), return_next_rng=True)
+    output = Z.sum() + draw
+    path = tmp_path / "config.json"
+    save_network(output, path, inputs=[Z, free])
+
+    inputs, _ = load_network(path, restore_rng=False)
+    assert len(inputs) == 2
+    assert not any(isinstance(variable, SharedVariable) for variable in inputs)
 
 
 def test_a_fresh_generator_does_not_need_the_state_it_discards(tmp_path):
