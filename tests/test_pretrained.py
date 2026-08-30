@@ -5,11 +5,23 @@ import pytensor
 import pytensor.tensor as pt
 import pytest
 
+from pytensor.tensor.random.type import RandomGeneratorType
+
 from pytensor_ml.activations import ReLU
+from pytensor_ml.checkpoint import jsonable_rng_state
 from pytensor_ml.layers import BatchNorm, Dropout, Embedding, Linear, Sequential
 from pytensor_ml.params import NonTrainableParameter, TrainableParameter
-from pytensor_ml.pretrained import from_pretrained, load_network, save_network, save_pretrained
-from pytensor_ml.pytensorf import collect_shared_variables, collect_trainable_params
+from pytensor_ml.pretrained import (
+    from_pretrained,
+    load_network,
+    save_network,
+    save_pretrained,
+)
+from pytensor_ml.pytensorf import (
+    collect_shared_variables,
+    collect_trainable_params,
+    function,
+)
 from pytensor_ml.state import (
     NormalInitializer,
     UnrecordedInitializer,
@@ -303,3 +315,117 @@ def test_an_initializer_with_no_parameters_round_trips(tmp_path):
     # Redrawn from the restored class, and scaled by the fan-in the layer's shape implies.
     [value] = initialize_params([weight], rng=0)
     assert value.std() == pytest.approx(np.sqrt(2.0 / 16), rel=0.25)
+
+
+def generator_of(outputs):
+    variables = collect_shared_variables(outputs)
+    return next(
+        v.get_value(borrow=True) for v in variables if isinstance(v.type, RandomGeneratorType)
+    )
+
+
+@pytest.mark.parametrize("bit_generator", ["PCG64", "MT19937", "Philox", "SFC64"])
+def test_a_network_saves_and_restores_any_bit_generator(tmp_path, bit_generator):
+    """A generator's state is config JSON here, and MT19937 keeps its key as an array while Philox keeps
+    its counter, so the state has to survive JSON and rebuild the kind it came from."""
+    X = pt.matrix("X")
+    source = np.random.Generator(getattr(np.random, bit_generator)(0))
+    output = Sequential(Linear("fc", n_in=4, n_out=4), Dropout(p=0.5, random_state=source))(X)
+
+    path = tmp_path / "config.json"
+    save_network(output, path)
+    expected = generator_of(output).random(3)
+
+    _, restored = load_network(path, restore_rng=True)
+    assert type(generator_of(restored).bit_generator).__name__ == bit_generator
+    np.testing.assert_array_equal(generator_of(restored).random(3), expected)
+
+
+def test_a_config_written_before_arrays_were_tagged_still_loads(tmp_path):
+    """Configs already on disk hold the raw state dict. Only PCG64 could ever have been written -- the
+    others raised on the way out -- and its state is plain scalars, so the stored form is unchanged and
+    an old config is still a readable one."""
+    X = pt.matrix("X")
+    output = Sequential(Linear("fc", n_in=4, n_out=4), Dropout("drop", p=0.5, random_state=0))(X)
+    path = tmp_path / "config.json"
+    save_network(output, path)
+
+    stored = next(
+        meta["rng_state"]
+        for meta in json.loads(path.read_text())["input_meta"]
+        if "rng_state" in meta
+    )
+    assert stored == generator_of(output).bit_generator.state
+
+    expected = generator_of(output).random(3)
+    _, restored = load_network(path, restore_rng=True)
+    np.testing.assert_array_equal(generator_of(restored).random(3), expected)
+
+
+@pytest.mark.parametrize("bit_generator", ["PCG64", "MT19937"])
+def test_a_stochastic_network_round_trips_whole(tmp_path, bit_generator):
+    """Architecture, weights, running statistics and generator together: a restored network has to
+    reproduce the output of the one that was saved, not merely load without raising."""
+    X = pt.matrix("X")
+    output = Sequential(
+        Linear("fc1", n_in=4, n_out=8),
+        BatchNorm("bn", n_in=8),
+        ReLU(),
+        Dropout(
+            "drop", p=0.5, random_state=np.random.Generator(getattr(np.random, bit_generator)(0))
+        ),
+        Linear("fc2", n_in=8, n_out=2),
+    )(X)
+    parameters = collect_trainable_params(output)
+    for parameter, value in zip(
+        parameters, initialize_params(parameters, rng=np.random.default_rng(0))
+    ):
+        parameter.set_value(value)
+
+    save_pretrained(output, tmp_path)
+    X_value = np.ones((3, 4), dtype=floatX)
+    expected = function([X], output)(X_value)
+
+    inputs, restored = from_pretrained(tmp_path, restore_rng=True)
+    np.testing.assert_allclose(function(inputs, restored)(X_value), expected)
+
+
+@pytest.mark.parametrize("bit_generator", ["Philox", "MT19937"])
+def test_a_fresh_generator_keeps_the_kind_the_network_was_saved_with(tmp_path, bit_generator):
+    """``restore_rng=False`` asks for a fresh stream, not a different architecture. Rebuilding the
+    default kind instead would also strand a later `load_state` on the kind it finds."""
+    X = pt.matrix("X")
+    source = np.random.Generator(getattr(np.random, bit_generator)(0))
+    output = Sequential(Linear("fc", n_in=4, n_out=4), Dropout("drop", p=0.5, random_state=source))(
+        X
+    )
+    path = tmp_path / "config.json"
+    save_network(output, path)
+
+    _, restored = load_network(path, restore_rng=False)
+    generator = generator_of(restored)
+    assert type(generator.bit_generator).__name__ == bit_generator
+    assert jsonable_rng_state(generator.bit_generator.state) != jsonable_rng_state(
+        generator_of(output).bit_generator.state
+    )
+
+
+def test_a_fresh_generator_does_not_need_the_state_it_discards(tmp_path):
+    """``restore_rng=False`` reads only the recorded kind, so a config whose generator state is
+    unusable still rebuilds a network that never wanted that state."""
+    X = pt.matrix("X")
+    source = np.random.Generator(np.random.MT19937(0))
+    output = Sequential(Linear("fc", n_in=4, n_out=4), Dropout("drop", p=0.5, random_state=source))(
+        X
+    )
+    path = tmp_path / "config.json"
+    save_network(output, path)
+
+    config = json.loads(path.read_text())
+    for meta in config["input_meta"]:
+        if "rng_state" in meta:
+            meta["rng_state"]["state"]["key"]["__array__"] = [0] * 10
+    path.write_text(json.dumps(config))
+
+    _, restored = load_network(path, restore_rng=False)
+    assert type(generator_of(restored).bit_generator).__name__ == "MT19937"

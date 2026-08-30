@@ -12,7 +12,14 @@ from pytensor.compile.sharedvalue import SharedVariable
 from pytensor.graph.basic import Variable
 from pytensor.tensor.random.type import RandomGeneratorType
 
-from pytensor_ml.checkpoint import load_state, save_state
+from pytensor_ml.checkpoint import (
+    bit_generator_kind,
+    generator_from_state,
+    holds_generator,
+    jsonable_rng_state,
+    load_state,
+    save_state,
+)
 from pytensor_ml.json_serialize import (
     deserialize_graph,
     props_from_json,
@@ -27,7 +34,6 @@ from pytensor_ml.pytensorf import (
     as_output_list,
     collect_data_inputs,
     collect_shared_variables,
-    find_rng_nodes,
 )
 from pytensor_ml.state import Initializer, UnrecordedInitializer
 
@@ -66,12 +72,10 @@ def _detect_format(config: dict) -> Format:
 
 def _weight_variables(outputs: Variable | Sequence[Variable]) -> list[SharedVariable]:
     # Random generators are excluded: their state rides in the config as JSON, not as a tensor.
-    output_list = as_output_list(outputs)
-    random_generators = set(find_rng_nodes(output_list))
     return [
         variable
-        for variable in collect_shared_variables(output_list)
-        if variable not in random_generators
+        for variable in collect_shared_variables(as_output_list(outputs))
+        if not holds_generator(variable)
     ]
 
 
@@ -128,7 +132,8 @@ def _input_meta(variable: Variable) -> dict:
     meta: dict[str, Any] = {"name": variable.name, "kind": _input_kind(variable)}
     if isinstance(variable, SharedVariable) and meta["kind"] == InputKind.RNG:
         # Captured for exact reproducibility even though load does not restore it by default.
-        meta["rng_state"] = variable.get_value(borrow=True).bit_generator.state
+        state = variable.get_value(borrow=True).bit_generator.state
+        meta["rng_state"] = jsonable_rng_state(state)
     if isinstance(variable, TrainableParameter) and variable.initializer is not None:
         meta["initializer"] = _initializer_to_json(variable.initializer)
     return meta
@@ -158,9 +163,13 @@ def _rebuild_input(type_json: dict, meta: dict, restore_rng: bool):
     if kind == InputKind.DATA:
         return type_from_json(type_json)(name=name)
     if kind == InputKind.RNG:
-        generator = np.random.default_rng()
         if restore_rng:
-            generator.bit_generator.state = meta["rng_state"]
+            generator = generator_from_state(meta["rng_state"])
+        else:
+            # A fresh stream, but of the kind the network was saved with: the default kind silently
+            # rebuilds a different architecture, and any later load_state then fails on the kind.
+            # Only the recorded kind is read, so state this call discards cannot make it fail.
+            generator = np.random.Generator(bit_generator_kind(meta["rng_state"])())
         return pytensor.shared(generator, name=name)
 
     graph_type = type_from_json(type_json)
@@ -185,6 +194,10 @@ def save_network(
     Records each input's name and kind (data, trainable, non-trainable, or plain shared) so
     :func:`load_network` can rebuild the graph with the right variable identities. The data inputs are
     collected from ``outputs`` unless given explicitly.
+
+    A random generator is the one input whose *value* is recorded here, since it has no tensor to ride in
+    a weights archive. That makes the config depend on how far the generators have been drawn, so two
+    saves of one architecture differ; :func:`load_network` reads it back only when asked.
 
     Parameters
     ----------
