@@ -8,7 +8,7 @@ from pytensor.graph.op import io_connection_pattern
 from pytensor.graph.traversal import ancestors
 from pytensor.tensor import TensorVariable
 
-from pytensor_ml.base import StatefulOp
+from pytensor_ml.base import StatefulOp, update_chain_root
 from pytensor_ml.params import NonTrainableParameter, StepCounter, TrainableParameter
 
 
@@ -438,14 +438,24 @@ def collect_non_trainable_updates(
         updates = collect_non_trainable_updates(activations)
     """
     updates: dict[NonTrainableParameter, TensorVariable] = {}
+    depth_of: dict[NonTrainableParameter, int] = {}
     for ancestor in ancestors(as_output_list(outputs)):
         node = ancestor.owner
-        if node is None or not isinstance(node.op, StatefulOp):
+        if node is None:
+            continue
+        if not isinstance(node.op, StatefulOp):
             continue
         for output_index, input_index in node.op.update_map().items():
-            old_value = node.inputs[input_index]
-            if isinstance(old_value, NonTrainableParameter) and old_value not in already_written:
-                updates[old_value] = node.outputs[output_index]
+            chain = update_chain_root(node.inputs[input_index])
+            if chain is None:
+                continue
+            parameter, depth = chain
+            if not isinstance(parameter, NonTrainableParameter):
+                continue
+            if parameter in already_written or depth <= depth_of.get(parameter, -1):
+                continue
+            depth_of[parameter] = depth
+            updates[parameter] = node.outputs[output_index]
 
     return updates
 

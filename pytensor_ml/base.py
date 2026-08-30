@@ -4,6 +4,7 @@ from typing import Protocol, runtime_checkable
 import pytensor.tensor as pt
 
 from pytensor.compile.builders import SymbolicOp
+from pytensor.graph.basic import Variable
 from pytensor.tensor.variable import TensorVariable
 
 
@@ -122,4 +123,38 @@ class StatefulOp(Protocol):
         """Map each output index to the index of the input that output updates."""
 
 
-__all__ = ["Layer", "LayerOp", "StatefulOp", "UnaryLayerOp"]
+def update_chain_root(variable: Variable) -> tuple[Variable, int] | None:
+    """
+    Trace a stateful op's update input back to the value it ultimately writes, and count the applications
+    behind it.
+
+    Applying one layer object again feeds it what the previous application produced, so the input is the
+    written value itself only at the head of that chain. The depth orders the chain, and the deepest
+    application is the one holding every earlier contribution.
+
+    Parameters
+    ----------
+    variable : Variable
+        The input a stateful op declares itself to update.
+
+    Returns
+    -------
+    root : Variable or None
+        The value written at the head of the chain, or None if the chain breaks at an op that declares no
+        update for the output it reaches.
+    depth : int
+        How many applications separate ``variable`` from ``root``.
+    """
+    depth = 0
+    while True:
+        node = variable.owner
+        if node is None or not isinstance(node.op, StatefulOp):
+            return variable, depth
+        input_index = node.op.update_map().get(node.outputs.index(variable))
+        if input_index is None:
+            return None
+        variable = node.inputs[input_index]
+        depth += 1
+
+
+__all__ = ["Layer", "LayerOp", "StatefulOp", "UnaryLayerOp", "update_chain_root"]

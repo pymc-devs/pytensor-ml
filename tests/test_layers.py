@@ -25,9 +25,11 @@ from pytensor_ml.layers import (
     Sequential,
 )
 from pytensor_ml.layers.recurrent import RecurrentCell
+from pytensor_ml.optim import adam
 from pytensor_ml.pytensorf import (
     collect_non_trainable_updates,
     collect_trainable_params,
+    function,
     rewrite_for_prediction,
 )
 from pytensor_ml.state import NormalInitializer, initialize_params
@@ -354,6 +356,48 @@ def test_batch_norm_running_stats_write_back_to_the_right_inputs(affine):
         batch_norm.running_mean: batch_norm.new_running_mean,
         batch_norm.running_var: batch_norm.new_running_var,
     }
+
+
+def test_one_batch_norm_applied_twice_chains_its_statistics():
+    # Weight sharing across two towers is the ordinary reason to apply one layer object twice, and both
+    # applications have to reach the statistics. The chain is built while the graph is, which is where the
+    # order of the two calls is known.
+    a, b = pt.matrix("a"), pt.matrix("b")
+    batch_norm = BatchNorm("bn", n_in=4)
+    first, second = batch_norm(a), batch_norm(b)
+
+    # Read through the op's own update map, so this says "the second application reads what the first
+    # wrote" rather than pinning the positions the affine parameters happen to shift.
+    for output_index, input_index in second.owner.op.update_map().items():
+        assert second.owner.inputs[input_index] is first.owner.outputs[output_index]
+
+    updates = collect_non_trainable_updates([first, second])
+
+    assert updates == {
+        batch_norm.running_mean: second.owner.outputs[1],
+        batch_norm.running_var: second.owner.outputs[2],
+    }
+
+
+def test_one_batch_norm_applied_twice_counts_both_batches(rng):
+    a, b = pt.matrix("a"), pt.matrix("b")
+    batch_norm = BatchNorm("bn", n_in=4, momentum=0.1)
+    first, second = batch_norm(a), batch_norm(b)
+    loss = (first**2).sum() + (second**2).sum()
+    step = function([a, b], loss, updates=adam(1e-3)(loss, collect_trainable_params(loss)))
+
+    first_batch = rng.normal(loc=100.0, size=(8, 4)).astype(floatX)
+    second_batch = rng.normal(loc=-100.0, size=(8, 4)).astype(floatX)
+    step(first_batch, second_batch)
+
+    # Each application reads what the one before it wrote, so the momentum applies twice -- the same value
+    # torch accumulates from two forward calls on one module.
+    momentum = batch_norm.momentum
+    expected = (1 - momentum) * momentum * first_batch.mean(axis=0) + momentum * second_batch.mean(
+        axis=0
+    )
+
+    np.testing.assert_allclose(batch_norm.running_mean.get_value(), expected, rtol=1e-5)
 
 
 def test_batch_norm_variants_agree_on_output_arity():

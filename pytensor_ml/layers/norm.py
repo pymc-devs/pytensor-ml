@@ -298,7 +298,17 @@ class BatchNorm(Layer):
 
         if self.track_running_stats:
             assert self.running_mean is not None and self.running_var is not None
-            inputs.extend([self.running_mean, self.running_var])
+            # Applying one layer object again reads what the previous application wrote, so every
+            # application contributes. The chain is built here because call order is known only while the
+            # graph is being built; two finished branches carry no order between them.
+            inputs.extend(
+                [
+                    self.new_running_mean
+                    if self.new_running_mean is not None
+                    else self.running_mean,
+                    self.new_running_var if self.new_running_var is not None else self.running_var,
+                ]
+            )
             batch_norm_op: LayerOp = BatchNormLayer(
                 name=self.name,
                 n_in=self.n_in,
