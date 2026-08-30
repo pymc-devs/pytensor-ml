@@ -1,6 +1,6 @@
 import warnings
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 import numpy as np
 
@@ -69,9 +69,9 @@ def find_generators_drawn_from(
     """
     Return the shared generators a draw op in this graph consumes.
 
-    Being read is not being consumed: a generator handed back as an output needs no update, and neither does
-    one passed into an op carrying an inner graph, which may draw from it or merely accept it. Only that
-    inner graph knows, and reading inner graphs is :func:`collect_default_updates`' job.
+    Being read is not being consumed: a generator handed back as an output needs no update. One passed
+    into an op carrying an inner graph may draw from it or merely accept it, and only that inner graph
+    knows which, so it is followed. A draw inside one counts.
 
     Parameters
     ----------
@@ -88,8 +88,40 @@ def find_generators_drawn_from(
         generator
         for generator in fgraph.inputs
         if isinstance(generator, RandomGeneratorSharedVariable)
-        and any(isinstance(client.op, RNGConsumerOp) for client, _ in fgraph.clients[generator])
+        and _is_drawn_from(fgraph.clients, generator)
     ]
+
+
+def _inner_counterparts(node: Apply, input_index: int) -> list[Variable]:
+    """Return the inner-graph inputs that a node's outer input at ``input_index`` is passed to."""
+    op = node.op
+    if isinstance(op, Scan):
+        mapping = op.get_oinp_iinp_iout_oout_mappings()["inner_inp_from_outer_inp"]
+        return [op.inner_inputs[index] for index in mapping.get(input_index, [])]
+    if isinstance(op, OpFromGraph):
+        return [op.inner_inputs[input_index]]
+    return []
+
+
+def _is_drawn_from(clients: Mapping[Variable, list[tuple[Apply, int]]], variable: Variable) -> bool:
+    """
+    Report whether a draw op consumes ``variable``, following it into the inner graphs it enters.
+
+    An op carrying an inner graph is not itself a :class:`RNGConsumerOp`, so a generator drawn from only
+    inside one is invisible to a check that reads the outer clients alone.
+    """
+    for client, input_index in clients.get(variable, ()):
+        if isinstance(client.op, RNGConsumerOp):
+            return True
+        inner_inputs = _inner_counterparts(client, input_index)
+        if not inner_inputs:
+            continue
+        inner_clients = FunctionGraph(
+            inputs=client.op.inner_inputs, outputs=client.op.inner_outputs, clone=False
+        ).clients
+        if any(_is_drawn_from(inner_clients, inner_input) for inner_input in inner_inputs):
+            return True
+    return False
 
 
 def collect_default_updates_inner_fgraph(node: Apply) -> dict[Variable, Variable]:

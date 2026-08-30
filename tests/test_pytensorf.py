@@ -286,6 +286,57 @@ def test_a_draw_inside_an_op_from_graph_advances_its_generator():
     assert not np.array_equal(step(), step())
 
 
+def test_two_op_from_graphs_drawing_off_one_generator_are_rejected():
+    """An op carrying an inner graph is not itself a draw op, so a generator consumed only inside two of
+    them has no single next state and no client that looks like a consumer from outside. Both draws would
+    return the same values on every call, correlated with each other."""
+    rng = shared(np.random.default_rng(0), name="rng")
+
+    def draw_of(size):
+        inner_rng = rng.type()
+        next_rng, inner_draw = ptr.normal(size=(size,), rng=inner_rng, return_next_rng=True)
+        return OpFromGraph([inner_rng], [inner_draw, next_rng])(rng)[0]
+
+    with pytest.raises(ValueError, match=r"draws from \['rng'\], which nothing advances"):
+        function([], [draw_of(2), draw_of(3)])
+
+
+def test_two_scans_carrying_one_generator_as_state_are_rejected():
+    """A Scan threading its generator correctly exposes an outer input and a matching outer output, so
+    each scan alone is advanceable. Two of them off one generator still leaves it with no single next
+    state, and a Scan is no more a draw op from outside than an OpFromGraph is."""
+    rng = shared(np.random.default_rng(0), name="rng")
+
+    def one_step(total, generator):
+        next_generator, draw = ptr.normal(size=(), rng=generator, return_next_rng=True)
+        return total + draw, next_generator
+
+    def scan_draw(n_steps):
+        trace, _ = scan(
+            one_step, outputs_info=[pt.zeros(()), rng], n_steps=n_steps, return_updates=False
+        )
+        return trace[-1]
+
+    with pytest.raises(ValueError, match=r"draws from \['rng'\], which nothing advances"):
+        function([], [scan_draw(3), scan_draw(4)])
+
+
+def test_a_draw_nested_two_inner_graphs_deep_is_found():
+    """Layers nest -- an attention block is an OpFromGraph of Linear layers, each its own -- so reaching
+    only the first inner graph would miss a generator drawn from further in."""
+    rng = shared(np.random.default_rng(0), name="rng")
+
+    def nested_draw_of(size):
+        inner_rng = rng.type()
+        next_rng, inner_draw = ptr.normal(size=(size,), rng=inner_rng, return_next_rng=True)
+        inner_op = OpFromGraph([inner_rng], [inner_draw, next_rng])
+        outer_rng = rng.type()
+        return OpFromGraph([outer_rng], list(inner_op(outer_rng)))(rng)[0]
+
+    with pytest.raises(ValueError, match=r"draws from \['rng'\], which nothing advances"):
+        function([], [nested_draw_of(2), nested_draw_of(3)])
+
+
 def test_an_op_from_graph_that_draws_without_threading_is_rejected():
     rng = shared(np.random.default_rng(0), name="rng")
     inner_rng = rng.type()
