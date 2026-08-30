@@ -10,13 +10,13 @@ from pytensor.tensor.random.op import RandomVariable
 from pytensor.tensor.random.variable import shared_rng
 
 from pytensor_ml.activations import Activation, Tanh
-from pytensor_ml.layers import RNN, Dropout, Input, Linear, Recurrent, RecurrentCell
+from pytensor_ml.layers import RNN, BatchNorm, Dropout, Input, Linear, Recurrent, RecurrentCell
 from pytensor_ml.loss import SquaredError
 from pytensor_ml.model import Model
 from pytensor_ml.optim import adam
-from pytensor_ml.pytensorf import function
-from pytensor_ml.pytensorf.rewrite import hoist_scan_draws
-from pytensor_ml.rewriting.scan import hoist_draws_out_of_scan
+from pytensor_ml.pytensorf import collect_trainable_params, function
+from pytensor_ml.pytensorf.rewrite import carry_scan_statistics, hoist_scan_draws
+from pytensor_ml.rewriting.scan import carry_statistics_through_scan, hoist_draws_out_of_scan
 
 floatX = pytensor.config.floatX
 
@@ -422,3 +422,161 @@ def test_two_graphs_over_one_loop_are_lifted_once():
     [shared_by_first] = scan_nodes(first)
     assert shared_by_first in scan_nodes(second)
     assert function([X], [first, second])(np.ones((2, 6, 4), dtype=floatX))[1].shape == (2, 3)
+
+
+def chained_statistics(X, momentum, epsilon=None):
+    """The running mean and variance a step-by-step loop leaves behind, computed with numpy."""
+    running_mean, running_var = np.zeros(X.shape[-1]), np.ones(X.shape[-1])
+    for step in range(X.shape[0]):
+        running_mean = momentum * X[step].mean(axis=0) + (1 - momentum) * running_mean
+        running_var = momentum * X[step].var(axis=0) + (1 - momentum) * running_var
+    return running_mean, running_var
+
+
+def test_a_statistic_written_inside_a_recurrence_is_carried_through_it():
+    rng = np.random.default_rng(0)
+    X = rng.normal(loc=50.0, scale=3.0, size=(6, 8, 4)).astype(floatX)
+    xseq = pt.tensor("xseq", shape=(None, None, 4))
+    batch_norm = BatchNorm("bn", n_in=4, momentum=0.1)
+    normalized = scan(lambda x_t: batch_norm(x_t), sequences=[xseq], return_updates=False)
+    loss = (normalized**2).sum()
+
+    step = function([xseq], loss, updates=adam(1e-3)(loss, collect_trainable_params(loss)))
+    step(X)
+
+    # The statistics are of the loop's input, which the affine parameters do not touch, so one training
+    # step leaves exactly what stepping through the sequence by hand would.
+    expected_mean, expected_var = chained_statistics(X, batch_norm.momentum)
+    np.testing.assert_allclose(batch_norm.running_mean.get_value(), expected_mean, rtol=1e-5)
+    np.testing.assert_allclose(batch_norm.running_var.get_value(), expected_var, rtol=1e-5)
+
+
+def test_carrying_a_statistic_leaves_the_loop_output_alone():
+    rng = np.random.default_rng(1)
+    X = rng.normal(size=(5, 8, 4)).astype(floatX)
+    xseq = pt.tensor("xseq", shape=(None, None, 4))
+    batch_norm = BatchNorm("bn", n_in=4)
+    normalized = scan(lambda x_t: batch_norm(x_t), sequences=[xseq], return_updates=False)
+
+    [carried], _ = carry_scan_statistics([normalized])
+
+    np.testing.assert_allclose(
+        pytensor.function([xseq], carried)(X), pytensor.function([xseq], normalized)(X), rtol=1e-6
+    )
+
+
+def test_a_carried_statistic_leaves_the_gradient_finite_differences_give():
+    """Turning a non-sequence into a recurrent state adds an input and an output to the loop, and the
+    gradient has to survive that: a statistic is not differentiated through, but the loop it now lives in
+    is."""
+    xseq = pt.tensor("xseq", shape=(None, None, 4))
+    batch_norm = BatchNorm("bn", n_in=4)
+    normalized = scan(lambda x_t: batch_norm(x_t), sequences=[xseq], return_updates=False)
+    [carried], _ = carry_scan_statistics([normalized])
+
+    cost = (carried**2).sum()
+    cost_fn = pytensor.function([xseq], cost)
+    grad_fn = pytensor.function([xseq], pytensor.grad(cost, batch_norm.scale))
+    scale, scale_0 = batch_norm.scale, batch_norm.scale.get_value()
+    X = np.random.default_rng(3).normal(size=(5, 8, 4)).astype(floatX)
+
+    analytic, epsilon = grad_fn(X), 1e-6
+    numeric = np.zeros_like(scale_0)
+    for i in range(scale_0.shape[0]):
+        for sign in (1, -1):
+            perturbed = scale_0.copy()
+            perturbed[i] += sign * epsilon
+            scale.set_value(perturbed)
+            numeric[i] += sign * cost_fn(X)
+        numeric[i] /= 2 * epsilon
+    scale.set_value(scale_0)
+
+    np.testing.assert_allclose(analytic, numeric, rtol=1e-5)
+
+
+def test_one_layer_applied_twice_inside_a_loop_counts_both_applications():
+    """Reuse chains the applications, so the state the loop carries has to be the last one's, not the
+    first's. Carrying the first would drop half of what the layer saw at every step."""
+    rng = np.random.default_rng(0)
+    X = rng.normal(loc=50.0, scale=3.0, size=(6, 8, 4)).astype(floatX)
+    xseq = pt.tensor("xseq", shape=(None, None, 4))
+    batch_norm = BatchNorm("bn", n_in=4, momentum=0.1, epsilon=1e-5)
+    normalized = scan(
+        lambda x_t: batch_norm(batch_norm(x_t)), sequences=[xseq], return_updates=False
+    )
+    loss = (normalized**2).sum()
+
+    function([xseq], loss, updates=adam(1e-3)(loss, collect_trainable_params(loss)))(X)
+
+    momentum, expected_mean = batch_norm.momentum, np.zeros(4)
+    for step in range(X.shape[0]):
+        expected_mean = momentum * X[step].mean(axis=0) + (1 - momentum) * expected_mean
+        twice = (X[step] - X[step].mean(axis=0)) / np.sqrt(X[step].var(axis=0) + batch_norm.epsilon)
+        expected_mean = momentum * twice.mean(axis=0) + (1 - momentum) * expected_mean
+
+    np.testing.assert_allclose(batch_norm.running_mean.get_value(), expected_mean, rtol=1e-5)
+
+
+def test_two_layers_in_one_loop_are_both_carried():
+    rng = np.random.default_rng(0)
+    X = rng.normal(loc=50.0, scale=3.0, size=(6, 8, 4)).astype(floatX)
+    xseq = pt.tensor("xseq", shape=(None, None, 4))
+    first = BatchNorm("first", n_in=4, momentum=0.1)
+    second = BatchNorm("second", n_in=4, momentum=0.1)
+    # Shifted between the two, because the second layer reads what the first already normalized and a
+    # statistic of that sits at zero whether it was carried or not.
+    normalized = scan(
+        lambda x_t: second(first(x_t) + 100.0), sequences=[xseq], return_updates=False
+    )
+    loss = (normalized**2).sum()
+
+    function([xseq], loss, updates=adam(1e-3)(loss, collect_trainable_params(loss)))(X)
+
+    expected_first, _ = chained_statistics(X, first.momentum)
+    steps, momentum = X.shape[0], second.momentum
+    np.testing.assert_allclose(first.running_mean.get_value(), expected_first, rtol=1e-5)
+    np.testing.assert_allclose(
+        second.running_mean.get_value(), 100.0 * (1 - (1 - momentum) ** steps), rtol=1e-4
+    )
+
+
+def test_a_while_loop_is_left_alone_by_the_carry():
+    """A while loop runs a number of steps the accumulated statistic would depend on, and its condition
+    is an output the rebuild does not know how to carry, so it declines instead."""
+    batch_norm = BatchNorm("bn", n_in=4)
+
+    def step(state):
+        running = state + batch_norm(state)
+        return running, until(running.sum() > 3.0)
+
+    trace = scan(step, outputs_info=[pt.zeros((2, 4))], n_steps=20, return_updates=False)
+    fgraph = pytensor.graph.FunctionGraph(outputs=[trace], clone=False)
+    [node] = scan_nodes(trace)
+
+    assert node.op.info.as_while
+    assert carry_statistics_through_scan.transform(fgraph, node) is None
+
+
+def test_a_loop_that_writes_no_statistic_is_left_alone():
+    """The rewrite has to decline cleanly, or every scan in every graph would be rebuilt for nothing."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    plain = RNN("rnn", n_in=4, n_hidden=3)(X)
+    fgraph = pytensor.graph.FunctionGraph(outputs=[plain], clone=False)
+    [node] = scan_nodes(plain)
+
+    assert carry_statistics_through_scan.transform(fgraph, node) is None
+
+
+def test_a_statistic_written_in_a_nested_loop_is_reported():
+    """The carry reaches the loop whose own inner graph holds the layer. A loop inside a loop would
+    otherwise read a value no step advances, which is the silence this replaces."""
+    xseq = pt.tensor("xseq", shape=(None, None, None, 4))
+    batch_norm = BatchNorm("bn", n_in=4)
+    nested = scan(
+        lambda block: scan(lambda x_t: batch_norm(x_t), sequences=[block], return_updates=False),
+        sequences=[xseq],
+        return_updates=False,
+    )
+
+    with pytest.raises(NotImplementedError, match="nested in another loop"):
+        carry_scan_statistics([nested])

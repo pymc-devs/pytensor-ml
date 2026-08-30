@@ -3,15 +3,19 @@ from itertools import chain
 import pytensor.tensor as pt
 
 from pytensor.graph.basic import Apply, Variable
+from pytensor.graph.features import Feature
 from pytensor.graph.fg import FunctionGraph
 from pytensor.graph.replace import clone_replace
 from pytensor.graph.rewriting.basic import node_rewriter
 from pytensor.graph.rewriting.db import EquilibriumDB
 from pytensor.graph.traversal import ancestors, applys_between
 from pytensor.scan.op import Scan
-from pytensor.scan.utils import ScanArgs, safe_new
+from pytensor.scan.utils import ScanArgs, expand_empty, safe_new
 from pytensor.tensor.random.op import RandomVariable
 from pytensor.tensor.variable import TensorVariable
+
+from pytensor_ml.base import StatefulOp, update_chain_root
+from pytensor_ml.params import NonTrainableParameter
 
 optimize_db = EquilibriumDB()
 
@@ -185,4 +189,188 @@ def hoist_draws_out_of_scan(fgraph: FunctionGraph, node: Apply) -> list[Variable
     return outputs
 
 
-optimize_db.register("hoist_draws_out_of_scan", hoist_draws_out_of_scan, "basic", "scan")
+optimize_db.register("hoist_draws_out_of_scan", hoist_draws_out_of_scan, "hoist_draws", "scan")
+
+
+class CarriedStatistics(Feature):
+    """Holds the write-backs :func:`carry_statistics_through_scan` produced while rewriting a graph."""
+
+    def __init__(self) -> None:
+        self.written: dict[NonTrainableParameter, TensorVariable] = {}
+
+
+def carried_statistics_of(fgraph: FunctionGraph) -> dict[NonTrainableParameter, TensorVariable]:
+    """Return the write-backs recorded on ``fgraph``, attaching an empty record if it has none."""
+    for feature in fgraph._features:
+        if isinstance(feature, CarriedStatistics):
+            return feature.written
+    record = CarriedStatistics()
+    fgraph.attach_feature(record)
+    return record.written
+
+
+def _statistics_to_carry(args: ScanArgs) -> dict[Variable, Variable]:
+    """
+    Map each non-sequence a stateful op writes to the value the last application leaves it holding.
+
+    A statistic arrives as a non-sequence, so every step reads the value the loop started with and writes
+    a result nothing keeps. Applying one layer object twice inside the loop chains the applications, and
+    only the deepest holds both, so that is the one whose value has to survive the step.
+    """
+    carried: dict[Variable, Variable] = {}
+    depths: dict[Variable, int] = {}
+    for node in applys_between(args.inner_inputs, args.inner_outputs):
+        if not isinstance(node.op, StatefulOp):
+            continue
+        for output_index, input_index in node.op.update_map().items():
+            chain = update_chain_root(node.inputs[input_index])
+            if chain is None:
+                continue
+            root, depth = chain
+            if root not in args.inner_in_non_seqs or depth <= depths.get(root, -1):
+                continue
+            depths[root] = depth
+            carried[root] = node.outputs[output_index]
+    return carried
+
+
+@node_rewriter([Scan])
+def carry_statistics_through_scan(fgraph: FunctionGraph, node: Apply) -> list[Variable] | None:
+    """
+    Turn a statistic a loop writes into a recurrent state, so every step accumulates it.
+
+    A batch norm applied inside a recurrence reads its running statistics as non-sequences, which hold the
+    value the loop started with at every step, and writes results the loop does not keep. Carrying the
+    statistic as a recurrent state instead feeds each step what the step before it wrote, and leaves the
+    accumulated value as an output the caller can write back.
+
+    Parameters
+    ----------
+    fgraph : FunctionGraph
+        Graph being rewritten.
+    node : Apply
+        The ``Scan`` node being rewritten.
+
+    Returns
+    -------
+    outputs : list of Variable or None
+        The rebuilt scan's outputs, in the order the original node reports them, or None when the loop
+        writes no statistic. Each accumulated statistic is recorded on the graph, which
+        :func:`~pytensor_ml.pytensorf.rewrite.carry_scan_statistics` returns to its caller.
+    """
+    args = ScanArgs.from_node(node, clone=True)
+    # Two shapes this does not rewrite: a mit-mot's outputs are a nested list, and a while loop runs a
+    # number of steps the accumulated value would depend on.
+    if args.inner_out_mit_mot or args.as_while:
+        return None
+
+    carried = _statistics_to_carry(args)
+    if not carried:
+        return None
+
+    seeded = []
+    for inner_in, new_value in carried.items():
+        position = args.inner_in_non_seqs.index(inner_in)
+        outer_in = args.outer_in_non_seqs[position]
+        if not isinstance(outer_in, NonTrainableParameter):
+            continue
+        del args.inner_in_non_seqs[position], args.outer_in_non_seqs[position]
+        args.inner_in_sit_sot.append(inner_in)
+        args.outer_in_sit_sot.append(expand_empty(pt.expand_dims(outer_in, 0), args.n_steps))
+        args.inner_out_sit_sot.append(new_value)
+        seeded.append(outer_in)
+
+    if not seeded:
+        return None
+
+    rebuilt = Scan(
+        args.inner_inputs,
+        args.inner_outputs,
+        args.info,
+        mode=node.op.mode,
+        truncate_gradient=node.op.truncate_gradient,
+        name=node.op.name,
+        allow_gc=node.op.allow_gc,
+    )
+    outputs = rebuilt(*args.outer_inputs, return_list=True)
+    assert isinstance(outputs, list), "return_list=True yields a list"
+
+    # Positional replacement, so each original output is matched to the rebuilt one in the same place of
+    # the same group rather than by index into the node's outputs: adding a state reorders the groups, but
+    # every group except the recurrent states keeps the length it had.
+    original = ScanArgs.from_node(node, clone=False)
+    rebuilt_args = ScanArgs.from_node(outputs[0].owner, clone=False)
+    replacement = {
+        was: now
+        for group in (
+            "outer_out_mit_mot",
+            "outer_out_mit_sot",
+            "outer_out_sit_sot",
+            "outer_out_shared",
+            "outer_out_nit_sot",
+        )
+        for was, now in zip(getattr(original, group), getattr(rebuilt_args, group))
+    }
+
+    # Recorded here rather than recovered later: differentiating this loop builds a second one that
+    # replays the same recurrence, and nothing about the finished graph says which of the two the caller
+    # should write back. The loop that was rewritten is the one that knows.
+    written = carried_statistics_of(fgraph)
+    for parameter, state in zip(seeded, rebuilt_args.outer_out_sit_sot[-len(seeded) :]):
+        assert isinstance(state, TensorVariable), "a scan's recurrent states are tensors"
+        written[parameter] = state[-1]
+
+    return [replacement[output] for output in node.outputs]
+
+
+optimize_db.register(
+    "carry_statistics_through_scan", carry_statistics_through_scan, "carry_statistics", "scan"
+)
+
+
+def uncarried_statistics(outputs: list[Variable]) -> list[NonTrainableParameter]:
+    """
+    Find the statistics a loop still writes to a non-sequence, at any depth of nesting.
+
+    :func:`carry_statistics_through_scan` reaches the loops whose own inner graph holds the stateful op,
+    which leaves a layer applied inside a loop within a loop reading a value no step advances. Reporting
+    those is what keeps that shape from training against statistics that never move.
+
+    Parameters
+    ----------
+    outputs : list of Variable
+        Graphs to search, after the carry has run.
+
+    Returns
+    -------
+    parameters : list of NonTrainableParameter
+        The parameters still read as non-sequences by a stateful op inside some loop.
+    """
+    uncarried = []
+    # Each loop is visited with a map from the variables of the graph enclosing it to the top-level ones,
+    # because a nested loop takes the enclosing loop's inner variables as its own outer inputs, and the
+    # parameter behind one is only visible after resolving back up through every level.
+    pending: list[tuple[Apply, dict[Variable, Variable]]] = [
+        (node, {}) for node in applys_between([], outputs) if isinstance(node.op, Scan)
+    ]
+    while pending:
+        node, enclosing = pending.pop()
+        args = ScanArgs.from_node(node, clone=False)
+        to_top_level = {
+            inner: enclosing.get(outer, outer)
+            for inner, outer in zip(args.inner_in_non_seqs, args.outer_in_non_seqs)
+        }
+        for inner_node in applys_between(args.inner_inputs, args.inner_outputs):
+            if isinstance(inner_node.op, Scan):
+                pending.append((inner_node, to_top_level))
+                continue
+            if not isinstance(inner_node.op, StatefulOp):
+                continue
+            for input_index in inner_node.op.update_map().values():
+                chain = update_chain_root(inner_node.inputs[input_index])
+                if chain is None:
+                    continue
+                parameter = to_top_level.get(chain[0])
+                if isinstance(parameter, NonTrainableParameter):
+                    uncarried.append(parameter)
+    return uncarried

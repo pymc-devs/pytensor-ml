@@ -13,7 +13,11 @@ from pytensor_ml.pytensorf.collect import (
     collect_graph_inputs,
     collect_non_trainable_updates,
 )
-from pytensor_ml.pytensorf.rewrite import hoist_scan_draws, rewrite_for_prediction
+from pytensor_ml.pytensorf.rewrite import (
+    carry_scan_statistics,
+    hoist_scan_draws,
+    rewrite_for_prediction,
+)
 from pytensor_ml.pytensorf.rng import (
     SeedSequenceSeed,
     atleast_list,
@@ -95,6 +99,9 @@ def function(
     # has to come out of the loop first or there is nothing for the collection below to find.
     given_outputs = atleast_list(outputs)
     read_variables = hoist_scan_draws(read_variables)
+    # Likewise before the statistics are collected: a batch norm inside a loop reads its statistics as
+    # non-sequences, so the loop accumulates nothing until they are carried through it as recurrent state.
+    read_variables, carried_statistics = carry_scan_statistics(read_variables)
     rewritten = [
         pytensor.Out(variable, borrow=given.borrow) if isinstance(given, pytensor.Out) else variable
         for given, variable in zip(given_outputs, read_variables)
@@ -146,7 +153,13 @@ def function(
     return pytensor.function(
         inputs,
         outputs,
-        updates={**rng_updates, **clock_updates, **model_updates, **updates},
+        updates={
+            **rng_updates,
+            **clock_updates,
+            **model_updates,
+            **carried_statistics,
+            **updates,
+        },
         mode=mode,
         **kwargs,
     )

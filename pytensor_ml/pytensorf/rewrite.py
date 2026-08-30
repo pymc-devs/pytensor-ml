@@ -1,7 +1,7 @@
 from pytensor.graph import FunctionGraph, RewriteDatabaseQuery, rewrite_graph
 from pytensor.tensor.variable import Variable
 
-from pytensor_ml.rewriting.scan import optimize_db
+from pytensor_ml.rewriting.scan import carried_statistics_of, optimize_db, uncarried_statistics
 
 
 def hoist_scan_draws(outputs):
@@ -23,8 +23,45 @@ def hoist_scan_draws(outputs):
         The rewritten graphs, in the order given.
     """
     fgraph = FunctionGraph(outputs=list(outputs), clone=True, copy_inputs=False)
-    optimize_db.query(RewriteDatabaseQuery(include=["basic"])).rewrite(fgraph)
+    optimize_db.query(RewriteDatabaseQuery(include=["hoist_draws"])).rewrite(fgraph)
     return list(fgraph.outputs)
+
+
+def carry_scan_statistics(outputs):
+    """
+    Turn every statistic a loop writes into a recurrent state, across a whole set of graphs at once.
+
+    Rewriting the outputs and the updates together keeps a subgraph they share shared, so a loop read by
+    both is carried once. See
+    :func:`~pytensor_ml.rewriting.scan.carry_statistics_through_scan` for what the carry does and why a
+    statistic cannot stay a non-sequence.
+
+    Parameters
+    ----------
+    outputs : sequence of Variable
+        Graphs to rewrite, which are left untouched; the rewrite runs on a clone.
+
+    Returns
+    -------
+    rewritten : list of Variable
+        The rewritten graphs, in the order given.
+    carried : dict
+        Mapping from each statistic's parameter to the value its loop leaves it holding, recorded by the
+        rewrite as it ran.
+    """
+    fgraph = FunctionGraph(outputs=list(outputs), clone=True, copy_inputs=False)
+    optimize_db.query(RewriteDatabaseQuery(include=["carry_statistics"])).rewrite(fgraph)
+
+    stranded = uncarried_statistics(list(fgraph.outputs))
+    if stranded:
+        names = sorted({str(parameter.name or parameter) for parameter in stranded})
+        raise NotImplementedError(
+            f"{names} are written inside a loop nested in another loop, where the statistics cannot be "
+            "carried, so every step would read the value the run started with. Apply the layer in the "
+            "outer loop, or build it with track_running_stats=False."
+        )
+
+    return list(fgraph.outputs), carried_statistics_of(fgraph)
 
 
 def rewrite_pregrad(graph):
@@ -55,7 +92,10 @@ def rewrite_pregrad(graph):
         graph, include=("canonicalize", "stabilize"), exclude=("local_view_op",)
     )
     [hoisted] = hoist_scan_draws([simplified])
-    return hoisted
+    # Carried before the gradient is taken, not after: differentiating a loop builds a second one holding
+    # a copy of the same recurrence, and a statistic left uncarried here would be carried in both.
+    [carried], _ = carry_scan_statistics([hoisted])
+    return carried
 
 
 def rewrite_for_prediction(graph):
