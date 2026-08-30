@@ -41,12 +41,19 @@ Quick example
 
     import numpy as np
 
+    from pytensor import config
+    from sklearn.datasets import load_digits
+
     from pytensor_ml.activations import ReLU
     from pytensor_ml.layers import Input, Linear, Sequential
     from pytensor_ml.loss import CrossEntropy
     from pytensor_ml.model import Model
     from pytensor_ml.optim import adam, chain, clip_by_global_norm, cosine_schedule
     from pytensor_ml.util import DataLoader
+
+    X, y = load_digits(return_X_y=True)
+    X = (X / 16.0).astype(config.floatX)
+    y_onehot = np.eye(10, dtype=config.floatX)[y]
 
     X_in = Input("X_in", shape=(None, 64))
     network = Sequential(
