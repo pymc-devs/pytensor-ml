@@ -190,7 +190,9 @@ class BatchNorm(Layer):
     loc_initializer : Initializer, optional
         How :math:`\beta` is drawn. Zeros when omitted.
     track_running_stats : bool, optional
-        Maintain running mean and variance for use at prediction time. Default is True.
+        Maintain running mean and variance for use at prediction time. If False, each batch is
+        normalized against its own sample statistics at both training and inference time.
+        Default is True.
 
     Notes
     -----

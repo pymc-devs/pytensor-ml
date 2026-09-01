@@ -175,8 +175,8 @@ def compile_predict(
     Compile a forward-pass function, specialized for inference.
 
     Applies :func:`rewrite_for_prediction` to the graph before compiling, which drops stochastic training-only
-    layers (such as Dropout) and switches batch norm to its running statistics. The data inputs are collected
-    from the graph unless given explicitly.
+    layers (such as Dropout) and switches batch norm to its running statistics, if any. The data inputs
+    are collected from the graph unless given explicitly.
 
     Parameters
     ----------
