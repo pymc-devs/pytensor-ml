@@ -153,16 +153,18 @@ class Model:
             compile_kwargs=compile_kwargs or self._compile_kwargs,
         )
 
-    def predict(self, *inputs: np.ndarray) -> np.ndarray:
+    def predict(self, *inputs: np.ndarray, **named_inputs: np.ndarray) -> np.ndarray:
         """
         Run the inference pass, dropping dropout and reading batch norm's running statistics.
 
         Parameters
         ----------
         *inputs : ndarray
-            One array per data input the graph reads, in graph-input order. A model built around one
-            input takes one array; one that also reads a sequence mask, a decoder input or a
-            conditioning vector takes those too. The error names the order when the count is wrong.
+            One array per data input, in the order the graph reports them. Positional order follows
+            graph traversal rather than the order the inputs were built in, so name them instead
+            whenever a model reads more than one.
+        **named_inputs : ndarray
+            The same arrays given by the name of the variable each belongs to, which is order-free.
 
         Returns
         -------
@@ -171,11 +173,11 @@ class Model:
         """
         if self._data_inputs is None:
             self._data_inputs = collect_graph_inputs(self.y)
-        if len(inputs) != len(self._data_inputs):
+        if len(inputs) + len(named_inputs) != len(self._data_inputs):
             names = ", ".join(str(variable) for variable in self._data_inputs)
             raise ValueError(
                 f"predict takes one array per data input. This graph reads {len(self._data_inputs)} "
-                f"({names}), and {len(inputs)} were given."
+                f"({names}), and {len(inputs) + len(named_inputs)} were given."
             )
 
         if self._predict_fn is None:
@@ -183,7 +185,7 @@ class Model:
                 self.y, inputs=self._data_inputs, compile_kwargs=self._compile_kwargs
             )
 
-        return np.asarray(self._predict_fn(*inputs))
+        return np.asarray(self._predict_fn(*inputs, **named_inputs))
 
     def __str__(self):
         return debugprint(self.y, file="str")
