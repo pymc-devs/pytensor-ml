@@ -115,3 +115,18 @@ def test_a_degenerate_dropout_is_dropped_through_the_project_compile_path(p):
     compiled = function([X], Dropout("d", p=p, random_state=0)(X))
 
     assert dropout_layers_in(compiled) == []
+
+
+def test_a_graph_reading_a_batch_norm_statistic_still_specializes():
+    """The rewrite substitutes the running statistics for the outputs that would have written them, so a
+    graph reading one specializes rather than raising."""
+    X = pt.tensor("X", shape=(None, 6))
+    batch_norm = BatchNorm("bn", n_in=6)
+    normalized = batch_norm(X)
+
+    specialized, statistic = rewrite_for_prediction([normalized, batch_norm.new_running_mean])
+
+    running_mean = np.arange(6.0, dtype=floatX)
+    batch_norm.running_mean.set_value(running_mean)
+    np.testing.assert_allclose(statistic.eval(), running_mean)
+    assert specialized is not normalized
