@@ -26,16 +26,16 @@ def drop_degenerate_dropout(fgraph: FunctionGraph, node: Apply) -> list[Variable
 
     Returns
     -------
-    X : Variable or None
+    replacement : Variable or None
         The layer's input when it keeps everything, zeros when it keeps nothing, and None for the
         probabilities in between, which have a mask to apply.
     """
-    # Keeping nothing scales the survivors by 1/0, which pytensor evaluates while canonicalizing even
-    # though the branch it sits on is never selected, so folding it here is what keeps that out.
     X, _mask = node.inputs
     if node.op.p == 0.0:
         return [X]
     if node.op.p == 1.0:
+        # Keeping nothing scales the survivors by 1/0, which pytensor evaluates while canonicalizing
+        # even though the branch it sits on is never selected.
         return [pt.zeros_like(X)]
     return None
 
