@@ -108,7 +108,7 @@ class ZeroInitializer(Initializer):
         X = Input("X", shape=(None, 64))
         layer = Linear("fc", n_in=64, n_out=32, weight_initializer=ZeroInitializer())
 
-        model = Model(X, layer(X)).initialize(seed=0)
+        model = Model(layer(X)).initialize(seed=0)
     """
 
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
@@ -132,7 +132,7 @@ class OneInitializer(Initializer):
         X = Input("X", shape=(None, 64))
         layer = Linear("fc", n_in=64, n_out=32, weight_initializer=OneInitializer())
 
-        model = Model(X, layer(X)).initialize(seed=0)
+        model = Model(layer(X)).initialize(seed=0)
     """
 
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
@@ -157,7 +157,7 @@ class UnitUniformInitializer(Initializer):
         X = Input("X", shape=(None, 64))
         layer = Linear("fc", n_in=64, n_out=32, weight_initializer=UnitUniformInitializer())
 
-        model = Model(X, layer(X)).initialize(seed=0)
+        model = Model(layer(X)).initialize(seed=0)
     """
 
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
@@ -193,7 +193,7 @@ class NormalInitializer(Initializer):
         X = Input("X", shape=(None, 64))
         layer = Linear("fc", n_in=64, n_out=32, weight_initializer=NormalInitializer(std=0.02))
 
-        model = Model(X, layer(X)).initialize(seed=0)
+        model = Model(layer(X)).initialize(seed=0)
     """
 
     __props__ = ("mean", "std")
@@ -282,7 +282,7 @@ class XavierUniformInitializer(Initializer):
         X = Input("X", shape=(None, 64))
         layer = Linear("fc", n_in=64, n_out=32, weight_initializer=XavierUniformInitializer())
 
-        model = Model(X, layer(X)).initialize(seed=0)
+        model = Model(layer(X)).initialize(seed=0)
     """
 
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
@@ -316,7 +316,7 @@ class XavierNormalInitializer(Initializer):
         X = Input("X", shape=(None, 64))
         layer = Linear("fc", n_in=64, n_out=32, weight_initializer=XavierNormalInitializer())
 
-        model = Model(X, layer(X)).initialize(seed=0)
+        model = Model(layer(X)).initialize(seed=0)
     """
 
     def sample(self, shape: tuple[int, ...], dtype: str, rng: np.random.Generator) -> np.ndarray:
@@ -358,7 +358,7 @@ class OrthogonalInitializer(Initializer):
         X = Input("X", shape=(None, 64))
         layer = Linear("fc", n_in=64, n_out=32, weight_initializer=OrthogonalInitializer(gain=1.0))
 
-        model = Model(X, layer(X)).initialize(seed=0)
+        model = Model(layer(X)).initialize(seed=0)
     """
 
     __props__ = ("gain",)

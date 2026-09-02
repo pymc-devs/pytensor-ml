@@ -41,7 +41,7 @@ class Model:
             Linear("fc2", n_in=8, n_out=1),
         )
 
-        model = Model(X, network(X)).initialize(seed=0)
+        model = Model(network(X)).initialize(seed=0)
         step = model.compile_train(adam(1e-2), SquaredError())
 
         batch = np.zeros((16, 4))
@@ -49,8 +49,7 @@ class Model:
         predictions = model.predict(batch)
     """
 
-    def __init__(self, X: TensorVariable, y: TensorVariable, compile_kwargs: dict | None = None):
-        self.X = X
+    def __init__(self, y: TensorVariable, compile_kwargs: dict | None = None):
         self.y = y
         self._compile_kwargs = compile_kwargs or {}
         self._predict_fn: Function | None = None

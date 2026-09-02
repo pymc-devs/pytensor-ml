@@ -215,7 +215,7 @@ def compile_predict(
             Dropout(p=0.5),
         )
         activations = network(X)
-        Model(X, activations).initialize(seed=0)
+        Model(activations).initialize(seed=0)
 
         predict = compile_predict(activations, inputs=[X])
         predictions = predict(np.zeros((4, 64)))

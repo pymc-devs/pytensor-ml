@@ -51,7 +51,7 @@ network = Sequential(
     ReLU(),
     Linear("logits", n_in=128, n_out=10),
 )
-model = Model(X_in, network(X_in)).initialize(seed=0)
+model = Model(network(X_in)).initialize(seed=0)
 
 rule = chain(clip_by_global_norm(1.0), adam(learning_rate=cosine_schedule(1e-3, total_steps=500)))
 loss_fn = CrossEntropy(expect_onehot_labels=True, expect_logits=True, reduction="mean")

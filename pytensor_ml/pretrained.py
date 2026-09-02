@@ -347,7 +347,7 @@ def save_pretrained(
             Linear("logits", n_in=32, n_out=10),
         )
         logits = network(X)
-        Model(X, logits).initialize(seed=0)
+        Model(logits).initialize(seed=0)
 
         save_pretrained(logits, "artifacts/model")
     """
@@ -399,7 +399,7 @@ def from_pretrained(
 
         X = Input("X", shape=(None, 64))
         logits = Linear("logits", n_in=64, n_out=10)(X)
-        Model(X, logits).initialize(seed=0)
+        Model(logits).initialize(seed=0)
         save_pretrained(logits, "artifacts/model")
 
         inputs, outputs = from_pretrained("artifacts/model")

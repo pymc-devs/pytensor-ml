@@ -149,7 +149,7 @@ def test_trains_end_to_end(rng):
     """Gradients survive the round trip through the scan and the training machinery moves the parameters."""
     X = Input("X", shape=(None, 6, 4))
     y = Linear("head", n_in=5, n_out=1)(RNN("rnn", n_in=4, n_hidden=5)(X)[..., -1, :])
-    model = Model(X, y).initialize(seed=1)
+    model = Model(y).initialize(seed=1)
     step = model.compile_train(adam(learning_rate=0.05), SquaredError())
 
     X_np = rng.normal(size=(32, 6, 4)).astype(floatX)
@@ -533,7 +533,7 @@ def test_the_gru_trains_end_to_end(rng):
     """Gradients survive the round trip through the gates and the training machinery moves them."""
     X = Input("X", shape=(None, 6, 4))
     y = Linear("head", n_in=5, n_out=1)(GRU("gru", n_in=4, n_hidden=5)(X)[..., -1, :])
-    model = Model(X, y).initialize(seed=1)
+    model = Model(y).initialize(seed=1)
     step = model.compile_train(adam(learning_rate=0.05), SquaredError())
 
     X_np = rng.normal(size=(32, 6, 4)).astype(floatX)
@@ -822,7 +822,7 @@ def test_the_lstm_trains_end_to_end(rng):
     them. Nothing else here differentiates a cell whose two states feed each other."""
     X = Input("X", shape=(None, 6, 4))
     y = Linear("head", n_in=5, n_out=1)(LSTM("lstm", n_in=4, n_hidden=5)(X)[..., -1, :])
-    model = Model(X, y).initialize(seed=1)
+    model = Model(y).initialize(seed=1)
     step = model.compile_train(adam(learning_rate=0.05), SquaredError())
 
     X_np = rng.normal(size=(32, 6, 4)).astype(floatX)
@@ -1018,7 +1018,7 @@ def test_bidirectional_trains_end_to_end(rng):
     X = Input("X", shape=(None, 6, 4))
     both = Bidirectional(GRU("fwd", n_in=4, n_hidden=5), GRU("bwd", n_in=4, n_hidden=5))(X)
     y = Linear("head", n_in=10, n_out=1)(both[..., -1, :])
-    model = Model(X, y).initialize(seed=1)
+    model = Model(y).initialize(seed=1)
 
     assert len(collect_trainable_params(y)) == 10
     step = model.compile_train(adam(learning_rate=0.05), SquaredError())

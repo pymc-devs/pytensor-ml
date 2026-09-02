@@ -181,7 +181,7 @@ def save_state(shared_variables: Sequence[SharedVariable], path: str | Path) -> 
 
         X = Input("X", shape=(None, 64))
         logits = Linear("logits", n_in=64, n_out=10)(X)
-        Model(X, logits).initialize(seed=0)
+        Model(logits).initialize(seed=0)
 
         save_state(collect_shared_variables(logits), "weights.safetensors")
     """
@@ -253,7 +253,7 @@ def load_state(
 
         X = Input("X", shape=(None, 64))
         logits = Linear("logits", n_in=64, n_out=10)(X)
-        Model(X, logits).initialize(seed=0)
+        Model(logits).initialize(seed=0)
 
         shared = collect_shared_variables(logits)
         save_state(shared, "weights.safetensors")
