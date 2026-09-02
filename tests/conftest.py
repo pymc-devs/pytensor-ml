@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import pytensor.tensor as pt
 import pytest
@@ -59,3 +61,24 @@ def network_with_dropout():
     )
     y = network(X)
     return X, y
+
+
+@pytest.fixture(autouse=True)
+def fail_on_swallowed_rewrite_errors(caplog):
+    """Fail if a node rewriter raised while a test was rewriting a graph.
+
+    Pytensor catches exceptions from a node rewriter, reports them through ``logger.error``, and leaves
+    the graph untouched. Nothing else notices: ``filterwarnings = ["error"]`` only sees warnings, and a
+    rewrite that crashes on the first node it touches looks exactly like one that correctly declined to
+    match -- so a scan keeps the dropout an inference graph is supposed to drop, and the test still
+    passes.
+    """
+    yield
+
+    failures = [
+        record.getMessage()
+        for record in caplog.get_records("call")
+        if record.name.startswith("pytensor.graph.rewriting") and record.levelno >= logging.ERROR
+    ]
+
+    assert not failures, "a node rewriter raised and pytensor swallowed it:\n" + "\n".join(failures)
