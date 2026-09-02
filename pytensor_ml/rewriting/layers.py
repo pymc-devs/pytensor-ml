@@ -90,8 +90,7 @@ def rewrite_batch_stats_to_running_average_stats(
     X_normalized : Variable
         The input normalized by the accumulated running statistics instead of the batch statistics.
     running_mean : Variable
-        The accumulated running mean, unchanged. Prediction writes no statistics, so a graph that reads
-        what this step wrote reads what the layer already held.
+        The accumulated running mean, unchanged, since prediction writes no statistics.
     running_variance : Variable
         The accumulated running variance, unchanged, on the same terms.
     """
