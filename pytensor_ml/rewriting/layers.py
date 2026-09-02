@@ -3,7 +3,9 @@ import pytensor.tensor as pt
 from pytensor.graph.basic import Apply
 from pytensor.graph.fg import FunctionGraph
 from pytensor.graph.rewriting.basic import node_rewriter
-from pytensor.graph.rewriting.db import EquilibriumDB
+from pytensor.graph.rewriting.db import EquilibriumDB, RewriteDatabaseQuery
+from pytensor.scan.op import Scan
+from pytensor.scan.utils import ScanArgs
 from pytensor.tensor.rewriting.basic import register_specialize
 from pytensor.tensor.variable import Variable
 
@@ -113,5 +115,104 @@ def rewrite_batch_stats_to_running_average_stats(
 predict_db.register(
     "rewrite_batch_stats_to_running_average_stats",
     rewrite_batch_stats_to_running_average_stats,
+    "basic",
+)
+
+
+def _holds_a_training_layer(node: Apply) -> bool:
+    """Report whether a loop's own graph, or one nested inside it, still holds a layer to specialize."""
+    for inner in node.op.fgraph.apply_nodes:
+        if isinstance(inner.op, DropoutLayer | BatchNormLayer):
+            return True
+        if isinstance(inner.op, Scan) and _holds_a_training_layer(inner):
+            return True
+    return False
+
+
+def _drop_unread_non_sequences(node: Apply) -> list[Variable]:
+    """
+    Rebuild ``node`` without the non-sequences its graph no longer reads.
+
+    Removing a dropout takes its draw with it and leaves the generator it read as an input the loop never
+    touches, which the RNG collection would then demand an update for.
+
+    Parameters
+    ----------
+    node : Apply
+        The specialized ``Scan`` node, whose inner graph is already rewritten.
+
+    Returns
+    -------
+    outputs : list of Variable
+        The node's outputs, rebuilt without the dead non-sequences, or unchanged when the loop reads
+        every non-sequence it takes.
+    """
+    # Keyed on the node's own inner variables, which is what its client map is built on; the clone below
+    # carries different objects and would match nothing. A nested loop is specialized before this runs,
+    # so a generator it has stopped reading is already unread here too.
+    original = ScanArgs.from_node(node, clone=False)
+    unread = [
+        position
+        for position, inner_input in enumerate(original.inner_in_non_seqs)
+        if not node.op.fgraph.clients.get(inner_input)
+    ]
+    if not unread:
+        return list(node.outputs)
+
+    args = ScanArgs.from_node(node, clone=True)
+    for position in reversed(unread):
+        del args.inner_in_non_seqs[position], args.outer_in_non_seqs[position]
+
+    rebuilt = Scan(
+        args.inner_inputs,
+        args.inner_outputs,
+        args.info,
+        mode=node.op.mode,
+        truncate_gradient=node.op.truncate_gradient,
+        name=node.op.name,
+        allow_gc=node.op.allow_gc,
+    )
+    outputs = rebuilt(*args.outer_inputs, return_list=True)
+    assert isinstance(outputs, list), "return_list=True yields a list"
+    return outputs
+
+
+@node_rewriter([Scan])
+def specialize_scan_for_prediction(fgraph: FunctionGraph, node: Apply) -> list[Variable] | None:
+    """
+    Apply the prediction rewrites to the graph a loop runs at every step.
+
+    A node rewriter matches the nodes of the graph it is given, and a loop keeps its own, so a layer
+    applied inside a recurrence is untouched by the rewrites that specialize the rest of the model. That
+    leaves dropout sampling and batch norm reading batch statistics in a graph whose whole contract is
+    that it does neither.
+
+    Parameters
+    ----------
+    fgraph : FunctionGraph
+        Graph being rewritten.
+    node : Apply
+        The ``Scan`` node being rewritten.
+
+    Returns
+    -------
+    outputs : list of Variable or None
+        The rebuilt scan's outputs, or None when the loop holds nothing to specialize.
+    """
+    # The search sees through nesting because a nested loop is only reached by rewriting this one's
+    # graph, and it has to be exact: reporting a loop that holds nothing would rebuild it forever.
+    if not _holds_a_training_layer(node):
+        return None
+
+    inner = node.op.fgraph.unfreeze()
+    predict_db.query(RewriteDatabaseQuery(include=["basic"])).rewrite(inner)
+    specialized = node.op.clone_with_inner_graph(inner)(*node.inputs, return_list=True)
+    assert isinstance(specialized, list), "return_list=True yields a list"
+    return _drop_unread_non_sequences(specialized[0].owner)
+
+
+predict_db.register(
+    "specialize_scan_for_prediction",
+    specialize_scan_for_prediction,
     "basic",
 )
