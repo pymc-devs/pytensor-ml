@@ -7,7 +7,7 @@ from pytensor import config
 import pytensor_ml.model
 
 from pytensor_ml.activations import ReLU
-from pytensor_ml.layers import BatchNorm, LayerNorm, Linear, Sequential
+from pytensor_ml.layers import GRU, BatchNorm, LayerNorm, Linear, Sequential
 from pytensor_ml.loss import SquaredError
 from pytensor_ml.model import Model
 from pytensor_ml.optim import sgd
@@ -73,6 +73,32 @@ class TestModelPredict:
 
         assert compile_count == 1
         np.testing.assert_array_equal(first, second)
+
+    def test_takes_one_array_per_data_input(self):
+        """A sequence mask is a second data input, and nothing about the model says which is which, so
+        the arrays have to reach the variables the graph reads rather than merely fit their shapes."""
+        X = pt.tensor("X", shape=(None, None, 4))
+        mask = pt.matrix("mask")
+        model = Model(X, GRU("gru", n_in=4, n_hidden=3)(X, mask=mask)).initialize(seed=0)
+
+        X_test = np.random.default_rng(0).normal(size=(2, 5, 4)).astype(config.floatX)
+        # Padded, so a mask that never arrived would give a different answer than one that did.
+        mask_test = np.array([[1, 1, 1, 0, 0], [1, 1, 1, 1, 1]], dtype=config.floatX)
+
+        result = model.predict(X_test, mask_test)
+
+        assert result.shape == (2, 5, 3)
+        np.testing.assert_allclose(result, model.y.eval({X: X_test, mask: mask_test}), rtol=1e-6)
+
+    def test_says_which_inputs_it_wanted_when_given_the_wrong_count(self):
+        """The count is checked before compiling, where a missing input would otherwise surface as a
+        pytensor error naming an internal op rather than the input."""
+        X = pt.tensor("X", shape=(None, None, 4))
+        mask = pt.matrix("mask")
+        model = Model(X, GRU("gru", n_in=4, n_hidden=3)(X, mask=mask)).initialize(seed=0)
+
+        with pytest.raises(ValueError, match=r"reads 2 \(X, mask\), and 1 were given"):
+            model.predict(np.zeros((2, 5, 4), dtype=config.floatX))
 
 
 class TestModelInitialize:
@@ -217,3 +243,21 @@ def test_a_constant_reaches_one_parameter_through_initializers():
 
     np.testing.assert_array_equal(head.W.get_value(), 0)
     assert np.abs(first.W.get_value()).min() > 0  # its sibling still drew from its declaration
+
+
+def test_compile_train_takes_one_batch_per_data_input():
+    """The supervised path builds the target itself, so it also has to know every input the model reads."""
+    X = pt.tensor("X", shape=(None, None, 4))
+    mask = pt.matrix("mask")
+    model = Model(X, GRU("gru", n_in=4, n_hidden=3)(X, mask=mask)).initialize(seed=0)
+
+    step = model.compile_train(sgd(1e-3), SquaredError())
+
+    rng = np.random.default_rng(0)
+    X_batch = rng.normal(size=(2, 5, 4)).astype(config.floatX)
+    mask_batch = np.ones((2, 5), dtype=config.floatX)
+    target_batch = rng.normal(size=(2, 5, 3)).astype(config.floatX)
+
+    losses = [float(step(X_batch, mask_batch, target_batch)) for _ in range(20)]
+
+    assert losses[-1] < losses[0]

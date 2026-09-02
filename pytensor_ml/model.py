@@ -11,7 +11,7 @@ from pytensor.tensor.variable import TensorVariable
 from pytensor_ml import optim
 from pytensor_ml.loss import Loss, supervised_loss
 from pytensor_ml.params import TrainableParameter
-from pytensor_ml.pytensorf import collect_trainable_params, compile_predict
+from pytensor_ml.pytensorf import collect_graph_inputs, collect_trainable_params, compile_predict
 from pytensor_ml.state import Initializer, initialize_params
 
 
@@ -54,6 +54,7 @@ class Model:
         self.y = y
         self._compile_kwargs = compile_kwargs or {}
         self._predict_fn: Function | None = None
+        self._data_inputs: list[Variable] | None = None
 
     @property
     def weights(self) -> list[TrainableParameter]:
@@ -107,7 +108,8 @@ class Model:
         Compile a one-step training function, either against a supervised target or a prebuilt loss.
 
         Given ``loss_fn``, builds a target placeholder from the model output with :func:`supervised_loss` and
-        the step is called as ``step(X_batch, target_batch)``. Given ``loss`` instead, trains that graph
+        the step is called with one batch per data input the graph reads, then the target -- for the usual
+        single-input model, ``step(X_batch, target_batch)``. Given ``loss`` instead, trains that graph
         directly, which is what an autoencoder or a language-model objective needs -- neither has a target
         separate from its input. Either way the step applies every update in place.
 
@@ -139,7 +141,7 @@ class Model:
                     "loss and inputs belong to the prebuilt path; omit them with loss_fn."
                 )
             loss, target = supervised_loss(self.y, loss_fn)
-            inputs = [self.X, target]
+            inputs = [*collect_graph_inputs(self.y), target]
         elif loss is None:
             raise ValueError("Pass either loss_fn for a supervised target, or a prebuilt loss.")
 
@@ -152,13 +154,37 @@ class Model:
             compile_kwargs=compile_kwargs or self._compile_kwargs,
         )
 
-    def predict(self, X_values: np.ndarray) -> np.ndarray:
-        if self._predict_fn is None:
-            self._predict_fn = compile_predict(
-                self.y, inputs=[self.X], compile_kwargs=self._compile_kwargs
+    def predict(self, *inputs: np.ndarray) -> np.ndarray:
+        """
+        Run the inference pass, dropping dropout and reading batch norm's running statistics.
+
+        Parameters
+        ----------
+        *inputs : ndarray
+            One array per data input the graph reads, in graph-input order. A model built around one
+            input takes one array; one that also reads a sequence mask, a decoder input or a
+            conditioning vector takes those too. The error names the order when the count is wrong.
+
+        Returns
+        -------
+        predictions : ndarray
+            The model's output for the given data.
+        """
+        if self._data_inputs is None:
+            self._data_inputs = collect_graph_inputs(self.y)
+        if len(inputs) != len(self._data_inputs):
+            names = ", ".join(str(variable) for variable in self._data_inputs)
+            raise ValueError(
+                f"predict takes one array per data input. This graph reads {len(self._data_inputs)} "
+                f"({names}), and {len(inputs)} were given."
             )
 
-        return np.asarray(self._predict_fn(X_values))
+        if self._predict_fn is None:
+            self._predict_fn = compile_predict(
+                self.y, inputs=self._data_inputs, compile_kwargs=self._compile_kwargs
+            )
+
+        return np.asarray(self._predict_fn(*inputs))
 
     def __str__(self):
         return debugprint(self.y, file="str")
