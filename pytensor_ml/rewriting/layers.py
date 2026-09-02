@@ -182,10 +182,8 @@ def specialize_scan_for_prediction(fgraph: FunctionGraph, node: Apply) -> list[V
     """
     Apply the prediction rewrites to the graph a loop runs at every step.
 
-    A node rewriter matches the nodes of the graph it is given, and a loop keeps its own, so a layer
-    applied inside a recurrence is untouched by the rewrites that specialize the rest of the model. That
-    leaves dropout sampling and batch norm reading batch statistics in a graph whose whole contract is
-    that it does neither.
+    A node rewriter matches only the graph it is handed, and a loop keeps its own, so a layer inside a
+    recurrence is otherwise left exactly as it was built.
 
     Parameters
     ----------

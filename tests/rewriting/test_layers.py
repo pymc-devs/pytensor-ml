@@ -23,6 +23,24 @@ def dropout_layers_in(compiled):
     return [node for node in compiled.maker.fgraph.apply_nodes if isinstance(node.op, DropoutLayer)]
 
 
+def training_layers_inside(graph):
+    """Every dropout and batch-norm node still living in a loop reachable from ``graph``, at any depth."""
+    found = []
+
+    def walk(nodes):
+        for node in nodes:
+            if isinstance(node.op, Scan):
+                args = ScanArgs.from_node(node, clone=False)
+                inner = list(applys_between(args.inner_inputs, args.inner_outputs))
+                found.extend(
+                    one for one in inner if isinstance(one.op, DropoutLayer | BatchNormLayer)
+                )
+                walk(inner)
+
+    walk(pytensor.graph.FunctionGraph(outputs=[graph], clone=False).apply_nodes)
+    return found
+
+
 def test_remove_dropout():
     first_layer = Linear("Layer_1", n_in=6, n_out=3)
     second_layer = Linear("Layer_2", n_in=3, n_out=1)
@@ -170,24 +188,6 @@ def test_a_prediction_function_returning_a_batch_norm_statistic_compiles():
     np.testing.assert_allclose(predicted, expected, rtol=1e-5)
     np.testing.assert_allclose(mean, running_mean)
     np.testing.assert_allclose(variance, running_var)
-
-
-def training_layers_inside(graph):
-    """Every dropout and batch-norm node still living in a loop reachable from ``graph``, at any depth."""
-    found = []
-
-    def walk(nodes):
-        for node in nodes:
-            if isinstance(node.op, Scan):
-                args = ScanArgs.from_node(node, clone=False)
-                inner = list(applys_between(args.inner_inputs, args.inner_outputs))
-                found.extend(
-                    one for one in inner if isinstance(one.op, DropoutLayer | BatchNormLayer)
-                )
-                walk(inner)
-
-    walk(pytensor.graph.FunctionGraph(outputs=[graph], clone=False).apply_nodes)
-    return found
 
 
 def test_a_loop_predicts_without_its_training_layers():
