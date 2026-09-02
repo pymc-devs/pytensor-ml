@@ -1,11 +1,44 @@
+import pytensor.tensor as pt
+
 from pytensor.graph.basic import Apply
 from pytensor.graph.fg import FunctionGraph
 from pytensor.graph.rewriting.basic import node_rewriter
 from pytensor.graph.rewriting.db import EquilibriumDB
+from pytensor.tensor.rewriting.basic import register_specialize
 from pytensor.tensor.variable import Variable
 
 from pytensor_ml.layers.dropout import DropoutLayer
 from pytensor_ml.layers.norm import BatchNormLayer, PredictionBatchNormLayer
+
+
+@register_specialize
+@node_rewriter([DropoutLayer])
+def drop_degenerate_dropout(fgraph: FunctionGraph, node: Apply) -> list[Variable] | None:
+    """
+    Replace a dropout that keeps everything, or nothing, with the value it computes.
+
+    Parameters
+    ----------
+    fgraph : FunctionGraph
+        Graph being rewritten.
+    node : Apply
+        Node being rewritten.
+
+    Returns
+    -------
+    X : Variable or None
+        The layer's input when it keeps everything, zeros when it keeps nothing, and None for the
+        probabilities in between, which have a mask to apply.
+    """
+    # Keeping nothing scales the survivors by 1/0, which pytensor evaluates while canonicalizing even
+    # though the branch it sits on is never selected, so folding it here is what keeps that out.
+    X, _mask = node.inputs
+    if node.op.p == 0.0:
+        return [X]
+    if node.op.p == 1.0:
+        return [pt.zeros_like(X)]
+    return None
+
 
 predict_db = EquilibriumDB()
 
