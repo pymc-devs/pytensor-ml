@@ -116,9 +116,7 @@ def _is_drawn_from(clients: Mapping[Variable, list[tuple[Apply, int]]], variable
         inner_inputs = _inner_counterparts(client, input_index)
         if not inner_inputs:
             continue
-        inner_clients = FunctionGraph(
-            inputs=client.op.inner_inputs, outputs=client.op.inner_outputs, clone=False
-        ).clients
+        inner_clients = client.op.fgraph.clients
         if any(_is_drawn_from(inner_clients, inner_input) for inner_input in inner_inputs):
             return True
     return False
