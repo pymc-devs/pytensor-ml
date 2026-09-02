@@ -24,6 +24,7 @@ def sgd_updates(
     loss_gradients_or_updates: LossGradientsOrUpdates,
     parameters: Sequence[Parameter],
     learning_rate: Rate = 1.0,
+    namespace: str = "sgd",
 ) -> Updates:
     r"""
     Vanilla stochastic gradient descent: :math:`p \leftarrow p - \eta g`.
@@ -40,6 +41,10 @@ def sgd_updates(
         Parameters to update.
     learning_rate : float or shared tensor variable
         Step size :math:`\eta`. Default 1.0.
+
+    namespace : str
+        Prefix for every state slot this rule allocates, so two rules in one graph keep separate state
+        rather than reusing each other's. Default is the rule's own name.
 
     Returns
     -------
@@ -67,7 +72,7 @@ def sgd_updates(
         step = function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
-    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "sgd")
+    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, namespace)
     learning_rate = to_floatx(learning_rate)
     return Steps(incoming).replacing(
         {
@@ -85,6 +90,7 @@ def adam_updates(
     beta2: float = 0.999,
     epsilon: float = 1e-8,
     amsgrad: bool = False,
+    namespace: str = "adam",
 ) -> Updates:
     r"""
     Adam optimizer.
@@ -113,6 +119,10 @@ def adam_updates(
     amsgrad : bool
         Use the AMSGrad variant, dividing by the running maximum of the second moment so the denominator is
         non-decreasing. Default False.
+
+    namespace : str
+        Prefix for every state slot this rule allocates, so two rules in one graph keep separate state
+        rather than reusing each other's. Default is the rule's own name.
 
     Returns
     -------
@@ -148,7 +158,7 @@ def adam_updates(
         beta2=beta2,
         epsilon=epsilon,
         amsgrad=amsgrad,
-        namespace="adam",
+        namespace=namespace,
     )
 
 
@@ -251,6 +261,7 @@ def adamw_updates(
     epsilon: float = 1e-8,
     amsgrad: bool = False,
     mask: Callable[[Parameter], bool] | None = None,
+    namespace: str = "adamw",
 ) -> Updates:
     r"""
     AdamW: Adam with decoupled weight decay applied directly to the parameter, not the gradient.
@@ -286,6 +297,10 @@ def adamw_updates(
         Predicate ``(parameter) -> bool`` selecting which parameters receive decay. Decay is applied to every
         parameter when omitted.
 
+    namespace : str
+        Prefix for every state slot this rule allocates, so two rules in one graph keep separate state
+        rather than reusing each other's. Default is the rule's own name.
+
     Returns
     -------
     updates : Updates
@@ -320,7 +335,7 @@ def adamw_updates(
         beta2=beta2,
         epsilon=epsilon,
         amsgrad=amsgrad,
-        namespace="adamw",
+        namespace=namespace,
         weight_decay=weight_decay,
         mask=mask,
     )
@@ -333,6 +348,7 @@ def nadam_updates(
     beta1: float = 0.9,
     beta2: float = 0.999,
     epsilon: float = 1e-8,
+    namespace: str = "nadam",
 ) -> Updates:
     r"""
     Nadam: Adam with Nesterov momentum applied to the first-moment estimate.
@@ -361,6 +377,10 @@ def nadam_updates(
     epsilon : float
         Constant added to the denominator for numerical stability. Default 1e-8.
 
+    namespace : str
+        Prefix for every state slot this rule allocates, so two rules in one graph keep separate state
+        rather than reusing each other's. Default is the rule's own name.
+
     Returns
     -------
     updates : Updates
@@ -387,10 +407,10 @@ def nadam_updates(
         step = function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
-    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "nadam")
+    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, namespace)
     learning_rate = to_floatx(learning_rate)
 
-    step_count = counter("nadam/step_count")
+    step_count = counter(f"{namespace}/step_count")
     new_step_count = step_count + 1
     new_step_count_float = new_step_count.astype(config.floatX)
     first_moment_bias_correction = 1 - beta1**new_step_count_float
@@ -399,8 +419,8 @@ def nadam_updates(
     updates: Updates = Steps(incoming)
     updates[step_count] = new_step_count
     for parameter, gradient in zip(parameters, gradients):
-        first_moment = state_for(parameter, "nadam/first_moment")
-        second_moment = state_for(parameter, "nadam/second_moment")
+        first_moment = state_for(parameter, f"{namespace}/first_moment")
+        second_moment = state_for(parameter, f"{namespace}/second_moment")
 
         new_first_moment = beta1 * first_moment + (1 - beta1) * gradient
         new_second_moment = beta2 * second_moment + (1 - beta2) * gradient**2
@@ -426,6 +446,7 @@ def adamax_updates(
     beta1: float = 0.9,
     beta2: float = 0.999,
     epsilon: float = 1e-8,
+    namespace: str = "adamax",
 ) -> Updates:
     r"""
     AdaMax: Adam variant using an exponentially weighted infinity norm instead of the second moment.
@@ -453,6 +474,10 @@ def adamax_updates(
     epsilon : float
         Floor added to :math:`|g_t|` so the denominator stays positive. Default 1e-8.
 
+    namespace : str
+        Prefix for every state slot this rule allocates, so two rules in one graph keep separate state
+        rather than reusing each other's. Default is the rule's own name.
+
     Returns
     -------
     updates : Updates
@@ -479,10 +504,10 @@ def adamax_updates(
         step = function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
-    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "adamax")
+    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, namespace)
     learning_rate = to_floatx(learning_rate)
 
-    step_count = counter("adamax/step_count")
+    step_count = counter(f"{namespace}/step_count")
     new_step_count = step_count + 1
     new_step_count_float = new_step_count.astype(config.floatX)
     first_moment_bias_correction = 1 - beta1**new_step_count_float
@@ -490,8 +515,8 @@ def adamax_updates(
     updates: Updates = Steps(incoming)
     updates[step_count] = new_step_count
     for parameter, gradient in zip(parameters, gradients):
-        first_moment = state_for(parameter, "adamax/first_moment")
-        infinity_norm = state_for(parameter, "adamax/infinity_norm")
+        first_moment = state_for(parameter, f"{namespace}/first_moment")
+        infinity_norm = state_for(parameter, f"{namespace}/infinity_norm")
 
         new_first_moment = beta1 * first_moment + (1 - beta1) * gradient
         new_infinity_norm = pt.maximum(beta2 * infinity_norm, pt.abs(gradient) + epsilon)
@@ -510,6 +535,7 @@ def adagrad_updates(
     parameters: Sequence[Parameter],
     learning_rate: Rate = 0.01,
     epsilon: float = 1e-8,
+    namespace: str = "adagrad",
 ) -> Updates:
     r"""
     AdaGrad: per-parameter learning rate scaled by the inverse root of accumulated squared gradients.
@@ -530,6 +556,10 @@ def adagrad_updates(
         Step size :math:`\eta`. Default 0.01.
     epsilon : float
         Constant added under the root for numerical stability. Default 1e-8.
+
+    namespace : str
+        Prefix for every state slot this rule allocates, so two rules in one graph keep separate state
+        rather than reusing each other's. Default is the rule's own name.
 
     Returns
     -------
@@ -557,12 +587,12 @@ def adagrad_updates(
         step = function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
-    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "adagrad")
+    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, namespace)
     learning_rate = to_floatx(learning_rate)
 
     updates: Updates = Steps(incoming)
     for parameter, gradient in zip(parameters, gradients):
-        sum_squared_gradients = state_for(parameter, "adagrad/sum_squared_gradients")
+        sum_squared_gradients = state_for(parameter, f"{namespace}/sum_squared_gradients")
         new_sum_squared_gradients = sum_squared_gradients + gradient**2
         updates[sum_squared_gradients] = new_sum_squared_gradients
         updates[parameter] = parameter - learning_rate * gradient / pt.sqrt(
@@ -580,6 +610,7 @@ def rmsprop_updates(
     momentum: float = 0.0,
     epsilon: float = 1e-8,
     centered: bool = False,
+    namespace: str = "rmsprop",
 ) -> Updates:
     r"""
     RMSProp: per-parameter learning rate scaled by a decaying average of squared gradients.
@@ -611,6 +642,10 @@ def rmsprop_updates(
     centered : bool
         Center the variance estimate by the squared running mean of the gradient. Default False.
 
+    namespace : str
+        Prefix for every state slot this rule allocates, so two rules in one graph keep separate state
+        rather than reusing each other's. Default is the rule's own name.
+
     Returns
     -------
     updates : Updates
@@ -637,18 +672,18 @@ def rmsprop_updates(
         step = function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
-    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "rmsprop")
+    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, namespace)
     learning_rate = to_floatx(learning_rate)
 
     updates: Updates = Steps(incoming)
     for parameter, gradient in zip(parameters, gradients):
-        mean_squared_gradient = state_for(parameter, "rmsprop/mean_squared_gradient")
+        mean_squared_gradient = state_for(parameter, f"{namespace}/mean_squared_gradient")
         new_mean_squared_gradient = rho * mean_squared_gradient + (1 - rho) * gradient**2
         updates[mean_squared_gradient] = new_mean_squared_gradient
 
         variance = new_mean_squared_gradient
         if centered:
-            mean_gradient = state_for(parameter, "rmsprop/mean_gradient")
+            mean_gradient = state_for(parameter, f"{namespace}/mean_gradient")
             new_mean_gradient = rho * mean_gradient + (1 - rho) * gradient
             updates[mean_gradient] = new_mean_gradient
             variance = variance - new_mean_gradient**2
@@ -656,7 +691,7 @@ def rmsprop_updates(
         scaled_gradient = gradient / pt.sqrt(variance + epsilon)
 
         if momentum:
-            velocity = state_for(parameter, "rmsprop/velocity")
+            velocity = state_for(parameter, f"{namespace}/velocity")
             new_velocity = momentum * velocity + scaled_gradient
             updates[velocity] = new_velocity
             updates[parameter] = parameter - learning_rate * new_velocity
@@ -672,6 +707,7 @@ def adadelta_updates(
     learning_rate: Rate = 1.0,
     rho: float = 0.9,
     epsilon: float = 1e-8,
+    namespace: str = "adadelta",
 ) -> Updates:
     r"""
     AdaDelta: AdaGrad variant with a decaying window of squared gradients and squared updates.
@@ -696,6 +732,10 @@ def adadelta_updates(
         Decay rate for the running averages. Default 0.9.
     epsilon : float
         Constant added under the roots for numerical stability. Default 1e-8.
+
+    namespace : str
+        Prefix for every state slot this rule allocates, so two rules in one graph keep separate state
+        rather than reusing each other's. Default is the rule's own name.
 
     Returns
     -------
@@ -723,13 +763,15 @@ def adadelta_updates(
         step = function([X, target], loss, updates=updates)
         loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
     """
-    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "adadelta")
+    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, namespace)
     learning_rate = to_floatx(learning_rate)
 
     updates: Updates = Steps(incoming)
     for parameter, gradient in zip(parameters, gradients):
-        accumulated_squared_gradient = state_for(parameter, "adadelta/accumulated_squared_gradient")
-        accumulated_squared_update = state_for(parameter, "adadelta/accumulated_squared_update")
+        accumulated_squared_gradient = state_for(
+            parameter, f"{namespace}/accumulated_squared_gradient"
+        )
+        accumulated_squared_update = state_for(parameter, f"{namespace}/accumulated_squared_update")
 
         new_accumulated_squared_gradient = (
             rho * accumulated_squared_gradient + (1 - rho) * gradient**2
@@ -777,6 +819,7 @@ def rprop_updates(
     eta_plus: float = 1.2,
     step_min: float = 1e-6,
     step_max: float = 50.0,
+    namespace: str = "rprop",
 ) -> Updates:
     r"""
     Rprop: resilient backpropagation, stepping by a per-parameter magnitude that adapts to gradient-sign
@@ -806,6 +849,10 @@ def rprop_updates(
     step_max : float
         Upper clamp on the step size. Default 50.0.
 
+    namespace : str
+        Prefix for every state slot this rule allocates, so two rules in one graph keep separate state
+        rather than reusing each other's. Default is the rule's own name.
+
     Returns
     -------
     updates : Updates
@@ -834,12 +881,12 @@ def rprop_updates(
     """
     _require_numeric_learning_rate(learning_rate)
 
-    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, "rprop")
+    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, namespace)
 
     updates: Updates = Steps(incoming)
     for parameter, gradient in zip(parameters, gradients):
-        previous_gradient = state_for(parameter, "rprop/previous_gradient")
-        step_size = state_for(parameter, "rprop/step_size", fill_value=learning_rate)
+        previous_gradient = state_for(parameter, f"{namespace}/previous_gradient")
+        step_size = state_for(parameter, f"{namespace}/step_size", fill_value=learning_rate)
 
         sign_agreement = gradient * previous_gradient
         step_multiplier = pt.switch(

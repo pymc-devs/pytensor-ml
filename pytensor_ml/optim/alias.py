@@ -40,7 +40,11 @@ def _at_learning_rate(
 
 
 def sgd(
-    learning_rate: LearningRate = 0.01, momentum: float = 0.0, nesterov: bool = False
+    learning_rate: LearningRate = 0.01,
+    momentum: float = 0.0,
+    nesterov: bool = False,
+    *,
+    namespace: str = "sgd",
 ) -> Transform:
     """
     Stochastic gradient descent, optionally with momentum.
@@ -56,6 +60,11 @@ def sgd(
         Momentum coefficient. A value of 0 (the default) gives plain SGD.
     nesterov : bool
         Use Nesterov momentum. Ignored when ``momentum`` is 0. Default False.
+
+    namespace : str
+        Prefix for the state this rule allocates, so two of them in one step keep separate step counters
+        rather than colliding on one name. A composed transform such as the momentum ``trace`` names its
+        own state. Default is the rule's own name.
 
     Examples
     --------
@@ -87,12 +96,22 @@ def sgd(
     ) -> Updates:
         def build_updates(rate: Rate) -> Updates:
             if momentum_trace is None:
-                return sgd_updates(loss_gradients_or_updates, parameters, learning_rate=rate)
-            updates = sgd_updates(loss_gradients_or_updates, parameters, learning_rate=1.0)
+                return sgd_updates(
+                    loss_gradients_or_updates,
+                    parameters,
+                    learning_rate=rate,
+                    namespace=namespace,
+                )
+            updates = sgd_updates(
+                loss_gradients_or_updates,
+                parameters,
+                learning_rate=1.0,
+                namespace=namespace,
+            )
             updates = momentum_trace(updates, parameters)
             return scale(rate)(updates, parameters)
 
-        return _at_learning_rate(learning_rate, "sgd", build_updates)
+        return _at_learning_rate(learning_rate, namespace, build_updates)
 
     return rule
 
@@ -103,12 +122,14 @@ def adam(
     beta2: float = 0.999,
     epsilon: float = 1e-8,
     amsgrad: bool = False,
+    *,
+    namespace: str = "adam",
 ) -> Transform:
     """
     Adam optimizer. See :func:`~pytensor_ml.optim.rules.adam_updates` for the update rule.
 
-    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
-    :func:`sgd`.
+    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule, and
+    ``namespace`` prefixes the state this rule allocates; see :func:`sgd`.
 
     Examples
     --------
@@ -136,7 +157,7 @@ def adam(
     ) -> Updates:
         return _at_learning_rate(
             learning_rate,
-            "adam",
+            namespace,
             lambda rate: adam_updates(
                 loss_gradients_or_updates,
                 parameters,
@@ -145,6 +166,7 @@ def adam(
                 beta2=beta2,
                 epsilon=epsilon,
                 amsgrad=amsgrad,
+                namespace=namespace,
             ),
         )
 
@@ -159,13 +181,15 @@ def adamw(
     epsilon: float = 1e-8,
     amsgrad: bool = False,
     mask: Callable[[Parameter], bool] | None = None,
+    *,
+    namespace: str = "adamw",
 ) -> Transform:
     """
     AdamW optimizer (Adam with decoupled weight decay). See
     :func:`~pytensor_ml.optim.rules.adamw_updates`.
 
-    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
-    :func:`sgd`.
+    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule, and
+    ``namespace`` prefixes the state this rule allocates; see :func:`sgd`.
 
     Examples
     --------
@@ -193,7 +217,7 @@ def adamw(
     ) -> Updates:
         return _at_learning_rate(
             learning_rate,
-            "adamw",
+            namespace,
             lambda rate: adamw_updates(
                 loss_gradients_or_updates,
                 parameters,
@@ -204,6 +228,7 @@ def adamw(
                 epsilon=epsilon,
                 amsgrad=amsgrad,
                 mask=mask,
+                namespace=namespace,
             ),
         )
 
@@ -215,13 +240,15 @@ def nadam(
     beta1: float = 0.9,
     beta2: float = 0.999,
     epsilon: float = 1e-8,
+    *,
+    namespace: str = "nadam",
 ) -> Transform:
     """
     Nadam optimizer (Adam with Nesterov momentum). See
     :func:`~pytensor_ml.optim.rules.nadam_updates`.
 
-    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
-    :func:`sgd`.
+    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule, and
+    ``namespace`` prefixes the state this rule allocates; see :func:`sgd`.
 
     Examples
     --------
@@ -249,7 +276,7 @@ def nadam(
     ) -> Updates:
         return _at_learning_rate(
             learning_rate,
-            "nadam",
+            namespace,
             lambda rate: nadam_updates(
                 loss_gradients_or_updates,
                 parameters,
@@ -257,6 +284,7 @@ def nadam(
                 beta1=beta1,
                 beta2=beta2,
                 epsilon=epsilon,
+                namespace=namespace,
             ),
         )
 
@@ -268,13 +296,15 @@ def adamax(
     beta1: float = 0.9,
     beta2: float = 0.999,
     epsilon: float = 1e-8,
+    *,
+    namespace: str = "adamax",
 ) -> Transform:
     """
     AdaMax optimizer (Adam with an infinity-norm denominator). See
     :func:`~pytensor_ml.optim.rules.adamax_updates`.
 
-    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
-    :func:`sgd`.
+    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule, and
+    ``namespace`` prefixes the state this rule allocates; see :func:`sgd`.
 
     Examples
     --------
@@ -302,7 +332,7 @@ def adamax(
     ) -> Updates:
         return _at_learning_rate(
             learning_rate,
-            "adamax",
+            namespace,
             lambda rate: adamax_updates(
                 loss_gradients_or_updates,
                 parameters,
@@ -310,6 +340,7 @@ def adamax(
                 beta1=beta1,
                 beta2=beta2,
                 epsilon=epsilon,
+                namespace=namespace,
             ),
         )
 
@@ -322,12 +353,16 @@ def rprop(
     eta_plus: float = 1.2,
     step_min: float = 1e-6,
     step_max: float = 50.0,
+    *,
+    namespace: str = "rprop",
 ) -> Transform:
     """
     Rprop optimizer (resilient backpropagation). See :func:`~pytensor_ml.optim.rules.rprop_updates`.
 
     Unlike the other rules, ``learning_rate`` must be a plain number: it initializes the per-parameter
     step sizes Rprop then adapts, so it never enters the graph and cannot be scheduled or steered.
+
+    ``namespace`` prefixes the state this rule allocates; see :func:`sgd`.
 
     Examples
     --------
@@ -362,6 +397,7 @@ def rprop(
             eta_plus=eta_plus,
             step_min=step_min,
             step_max=step_max,
+            namespace=namespace,
         )
 
     return rule
@@ -373,12 +409,14 @@ def rmsprop(
     momentum: float = 0.0,
     epsilon: float = 1e-8,
     centered: bool = False,
+    *,
+    namespace: str = "rmsprop",
 ) -> Transform:
     """
     RMSProp optimizer. See :func:`~pytensor_ml.optim.rules.rmsprop_updates`.
 
-    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
-    :func:`sgd`.
+    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule, and
+    ``namespace`` prefixes the state this rule allocates; see :func:`sgd`.
 
     Examples
     --------
@@ -406,7 +444,7 @@ def rmsprop(
     ) -> Updates:
         return _at_learning_rate(
             learning_rate,
-            "rmsprop",
+            namespace,
             lambda rate: rmsprop_updates(
                 loss_gradients_or_updates,
                 parameters,
@@ -415,18 +453,24 @@ def rmsprop(
                 momentum=momentum,
                 epsilon=epsilon,
                 centered=centered,
+                namespace=namespace,
             ),
         )
 
     return rule
 
 
-def adagrad(learning_rate: LearningRate = 0.01, epsilon: float = 1e-8) -> Transform:
+def adagrad(
+    learning_rate: LearningRate = 0.01,
+    epsilon: float = 1e-8,
+    *,
+    namespace: str = "adagrad",
+) -> Transform:
     """
     AdaGrad optimizer. See :func:`~pytensor_ml.optim.rules.adagrad_updates`.
 
-    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
-    :func:`sgd`.
+    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule, and
+    ``namespace`` prefixes the state this rule allocates; see :func:`sgd`.
 
     Examples
     --------
@@ -454,9 +498,13 @@ def adagrad(learning_rate: LearningRate = 0.01, epsilon: float = 1e-8) -> Transf
     ) -> Updates:
         return _at_learning_rate(
             learning_rate,
-            "adagrad",
+            namespace,
             lambda rate: adagrad_updates(
-                loss_gradients_or_updates, parameters, learning_rate=rate, epsilon=epsilon
+                loss_gradients_or_updates,
+                parameters,
+                learning_rate=rate,
+                epsilon=epsilon,
+                namespace=namespace,
             ),
         )
 
@@ -464,13 +512,17 @@ def adagrad(learning_rate: LearningRate = 0.01, epsilon: float = 1e-8) -> Transf
 
 
 def adadelta(
-    learning_rate: LearningRate = 1.0, rho: float = 0.9, epsilon: float = 1e-8
+    learning_rate: LearningRate = 1.0,
+    rho: float = 0.9,
+    epsilon: float = 1e-8,
+    *,
+    namespace: str = "adadelta",
 ) -> Transform:
     """
     AdaDelta optimizer. See :func:`~pytensor_ml.optim.rules.adadelta_updates`.
 
-    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule; see
-    :func:`sgd`.
+    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule, and
+    ``namespace`` prefixes the state this rule allocates; see :func:`sgd`.
 
     Examples
     --------
@@ -498,9 +550,14 @@ def adadelta(
     ) -> Updates:
         return _at_learning_rate(
             learning_rate,
-            "adadelta",
+            namespace,
             lambda rate: adadelta_updates(
-                loss_gradients_or_updates, parameters, learning_rate=rate, rho=rho, epsilon=epsilon
+                loss_gradients_or_updates,
+                parameters,
+                learning_rate=rate,
+                rho=rho,
+                epsilon=epsilon,
+                namespace=namespace,
             ),
         )
 

@@ -19,6 +19,8 @@ from pytensor_ml.optim import (
     adamax_updates,
     adamw,
     adamw_updates,
+    compile_train,
+    cosine_schedule,
     nadam,
     nadam_updates,
     rmsprop,
@@ -223,6 +225,69 @@ def test_adam_and_adamw_in_one_step_keep_separate_state():
         if key.name.endswith("step_count")
     }
     assert counters == {"adam/step_count": 1, "adamw/step_count": 1}
+
+
+def test_two_rules_of_one_kind_keep_separate_state_when_named():
+    """Two groups on the same rule is the ordinary reason to want two rules, and every slot the rule keeps
+    hangs off its namespace -- including the step counter, which is one variable for the whole rule rather
+    than one per parameter, so it is the slot that actually collides."""
+    weights = trainable(np.array([1.0, -2.0]), name="weights")
+    biases = trainable(np.array([0.5]), name="biases")
+    loss = 0.5 * (weights**2).sum() + 0.5 * (biases**2).sum()
+
+    on_weights = adam_updates(loss, [weights], learning_rate=0.1, namespace="fast")
+    on_biases = adam_updates(loss, [biases], learning_rate=0.01, namespace="slow")
+
+    assert not set(on_weights) & set(on_biases)
+    function([], loss, updates={**on_weights, **on_biases})()
+
+    counters = {
+        key.name: key.get_value()
+        for key in (*on_weights, *on_biases)
+        if key.name.endswith("step_count")
+    }
+    assert counters == {"fast/step_count": 1, "slow/step_count": 1}
+
+
+@pytest.mark.parametrize(
+    "rule_updates, name",
+    [
+        (adam_updates, "adam"),
+        (adamw_updates, "adamw"),
+        (nadam_updates, "nadam"),
+        (adamax_updates, "adamax"),
+        (adagrad_updates, "adagrad"),
+        (rmsprop_updates, "rmsprop"),
+        (adadelta_updates, "adadelta"),
+        (rprop_updates, "rprop"),
+    ],
+    ids=lambda value: value if isinstance(value, str) else "",
+)
+def test_a_rule_names_its_state_after_itself_by_default(rule_updates, name):
+    """The default has to stay the rule's own name: it is what a checkpoint written before ``namespace``
+    existed is keyed on. Plain sgd keeps no state of its own, so it is covered through its alias."""
+    parameter = trainable(np.array([1.0, -2.0]), name="w")
+    loss = (parameter**2).sum()
+
+    updates = rule_updates(loss, [parameter])
+
+    slots = {key.name for key in updates if key is not parameter}
+    assert slots, f"{name} keeps no state to name"
+    assert all(slot.split("/")[-2] == name for slot in slots), slots
+
+
+def test_sgd_names_the_step_counter_its_schedule_reads():
+    """sgd allocates no state of its own, so its namespace shows up only on the counter the alias keeps
+    for a schedule to read -- which is the slot two sgd rules in one step would collide on."""
+    parameter = trainable(np.array([1.0, -2.0]), name="w")
+    loss = (parameter**2).sum()
+
+    step = compile_train(loss, sgd(cosine_schedule(0.1, 10), namespace="fast"), inputs=[])
+
+    counters = [
+        str(shared.name) for shared in step.get_shared() if str(shared.name).endswith("step_count")
+    ]
+    assert counters == ["fast/step_count"]
 
 
 @pytest.mark.parametrize(
