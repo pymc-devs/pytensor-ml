@@ -7,7 +7,7 @@ from pytensor.compile.mode import Mode
 from pytensor.graph.traversal import ancestors
 from pytensor.tensor.random.op import RandomVariable
 
-from pytensor_ml.activations import ReLU
+from pytensor_ml.activations import ReLU, Swish
 from pytensor_ml.layers.attention import CausalSelfAttention
 from pytensor_ml.layers.transformer import FeedForward, TransformerBlock
 from pytensor_ml.pytensorf import collect_trainable_params
@@ -71,6 +71,43 @@ def test_feedforward_matches_manual(activation, reference, rng):
     hidden = reference(X_np @ ff.fc_in.W.get_value() + ff.fc_in.b.get_value())
     expected = hidden @ ff.fc_out.W.get_value() + ff.fc_out.b.get_value()
     np.testing.assert_allclose(result, expected, atol=1e-5)
+
+
+@pytest.mark.parametrize(
+    "activation, reference",
+    [(None, gelu_tanh), (Swish(), lambda x: x / (1 + np.exp(-x)))],
+    ids=["geglu", "swiglu"],
+)
+def test_feedforward_gated_matches_manual(activation, reference, rng):
+    ff = FeedForward("ff", d_model=6, mlp_ratio=2, activation=activation, gated=True)
+    X = pt.tensor("X", shape=(2, 4, 6))
+    out = ff(X)
+    randomize(out, rng)
+
+    X_np = rng.normal(size=(2, 4, 6)).astype(floatX)
+    result = out.eval({X: X_np}, mode=FAST)
+
+    projected = X_np @ ff.fc_in.W.get_value() + ff.fc_in.b.get_value()
+    value, gate = projected[..., : ff.hidden_dim], projected[..., ff.hidden_dim :]
+    expected = (value * reference(gate)) @ ff.fc_out.W.get_value() + ff.fc_out.b.get_value()
+
+    np.testing.assert_allclose(result, expected, atol=1e-5)
+
+
+def test_gated_widens_one_projection_rather_than_adding_a_second():
+    """A pretrained checkpoint stores the widened projection as one tensor, so a two-weight layout
+    would make the loader concatenate them."""
+    ff = FeedForward("ff", d_model=8, hidden_dim=16, gated=True)
+    parameters = collect_trainable_params(ff(pt.tensor("X", shape=(None, 8))))
+
+    assert ff.fc_in.W.get_value().shape == (8, 32)
+    assert ff.fc_out.W.get_value().shape == (16, 8)
+    assert sorted(p.name for p in parameters) == [
+        "ff_fc_in_W",
+        "ff_fc_in_b",
+        "ff_fc_out_W",
+        "ff_fc_out_b",
+    ]
 
 
 @pytest.mark.parametrize("norm_first", [True, False], ids=["pre_norm", "post_norm"])
