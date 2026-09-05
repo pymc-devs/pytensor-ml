@@ -46,6 +46,8 @@ Convolution and pooling
     MaxPool2D
     AvgPool1D
     AvgPool2D
+    Upsample1D
+    Upsample2D
 
 Padding
 -------
