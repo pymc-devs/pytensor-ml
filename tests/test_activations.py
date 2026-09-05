@@ -7,7 +7,15 @@ from pytensor import config
 from pytensor.compile import Mode
 from scipy.special import erf
 
-from pytensor_ml.activations import GELU, LeakyReLU, ReLU, Sigmoid, SoftPlus, Swish, Tanh
+from pytensor_ml.activations import (
+    GELU,
+    LeakyReLU,
+    ReLU,
+    Sigmoid,
+    SoftPlus,
+    Swish,
+    Tanh,
+)
 from pytensor_ml.layers import Linear, Sequential
 from pytensor_ml.loss import CrossEntropy, supervised_loss
 from pytensor_ml.optim import adam, compile_train
@@ -79,6 +87,13 @@ def test_swish_matches_reference(beta):
     f = pytensor.function([x], Swish(beta=beta)(x), mode=FAST_MODE)
 
     np.testing.assert_allclose(f(values), values / (1 + np.exp(-beta * values)), rtol=1e-6)
+
+
+@pytest.mark.parametrize("activation", HIDDEN_ACTIVATIONS, ids=_activation_id)
+def test_activation_names_its_output_for_its_class(activation):
+    """The name is what a printed graph shows, so a subclass that inherits its parent's `__call__`
+    still has to say which activation is in the graph."""
+    assert activation(pt.vector("x")).name == type(activation).__name__
 
 
 @pytest.mark.parametrize("activation", HIDDEN_ACTIVATIONS, ids=_activation_id)

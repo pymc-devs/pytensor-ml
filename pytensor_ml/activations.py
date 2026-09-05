@@ -151,7 +151,7 @@ class Tanh(Activation):
 
     def __call__(self, x: pt.TensorLike) -> pt.TensorVariable:
         out = pt.tanh(x)
-        out.name = "TanH"
+        out.name = "Tanh"
         return out
 
 
@@ -319,7 +319,7 @@ class Swish(Activation):
     def __call__(self, x: pt.TensorLike) -> pt.TensorVariable:
         x = pt.as_tensor(x)
         out = x * pt.sigmoid(_constant_like(self.beta, x) * x)
-        out.name = "Swish"
+        out.name = type(self).__name__
         return out
 
 
