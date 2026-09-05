@@ -70,6 +70,7 @@ Normalization and regularization
 
     BatchNorm
     LayerNorm
+    GroupNorm
     Dropout
 
 Recurrent
