@@ -454,3 +454,162 @@ class LayerNorm(Layer):
         X_transformed.name = f"{self.name}_output"
 
         return X_transformed
+
+
+class GroupNormLayer(UnaryLayerOp):
+    __props__ = ("n_in", "n_groups", "epsilon", "affine")
+
+    def build_inner_graph(self, X, *rest):
+        affine_params, _ = _split_affine(self.affine, rest)
+        channels_per_group = X.shape[-1] // self.n_groups
+        grouped = pt.split_dims(X, shape=(self.n_groups, channels_per_group), axis=-1)
+
+        # X's spatial axes, which the split leaves in place, and the group's own channels at the end.
+        statistic_axes = (*range(1, X.ndim - 1), -1)
+        X_grouped, _, _ = _standardize(grouped, self.epsilon, axis=statistic_axes, keepdims=True)
+        X_normalized = pt.join_dims(X_grouped, start_axis=-2, n_axes=2)
+
+        return [_rescale(X_normalized, affine_params)]
+
+
+class GroupNorm(Layer):
+    r"""
+    Group normalization over a channel grouping and every spatial axis.
+
+    Split the channels into ``n_groups`` contiguous groups, standardize each group of each sample
+    independently, then optionally apply a learned per-channel affine transform:
+
+    .. math::
+
+        y = \frac{x - \mathrm{E}[x]}{\sqrt{\mathrm{Var}[x] + \epsilon}} \cdot \gamma + \beta,
+
+    where the mean and (biased) variance are taken over one group's channels together with every
+    spatial axis, giving one statistic per sample per group. Like :class:`LayerNorm` and unlike
+    :class:`BatchNorm`, the statistics depend only on the current sample, so there are no running
+    statistics and no train/eval distinction, which is why convolutional networks trained at small
+    batch sizes reach for it.
+
+    ``n_groups = 1`` puts every channel in one group and normalizes each sample's whole feature map
+    at once; ``n_groups = n_in`` gives each channel its own statistic, which is instance
+    normalization.
+
+    Parameters
+    ----------
+    name : str, optional
+        Name used as a prefix for the layer's parameters. Default is "GroupNorm".
+    n_groups : int
+        Number of groups :math:`G` the channels are split into. Must divide the channel count.
+    n_in : int, optional
+        Size of the channel axis. Inferred from the input's last dimension on the first call when
+        omitted.
+    epsilon : float, optional
+        Constant :math:`\epsilon` added to the variance for numerical stability. Default is 1e-5.
+    affine : bool, optional
+        Apply the learned scale :math:`\gamma` and shift :math:`\beta`, one entry per channel,
+        starting from the identity transform :math:`\gamma = 1`, :math:`\beta = 0`, which a redraw
+        returns them to. Default is True.
+    scale_initializer : Initializer, optional
+        How :math:`\gamma` is drawn. Ones when omitted, which is the identity transform; drawing a
+        random factor to rescale a normalized activation by would defeat the layer.
+    loc_initializer : Initializer, optional
+        How :math:`\beta` is drawn. Zeros when omitted.
+
+    Examples
+    --------
+    Normalize a convolution's output over 8 groups of its 32 channels. The input is channel-last,
+    ``(batch, height, width, channels)``, so each of the 8 statistics covers 4 channels and the whole
+    spatial extent of one image:
+
+    .. code-block:: python
+
+        from pytensor_ml.activations import Swish
+        from pytensor_ml.layers import Conv2D, GroupNorm, Input, Sequential
+
+        X = Input("X", shape=(None, 64, 64, 3))
+        network = Sequential(
+            Conv2D("conv", in_channels=3, out_channels=32, kernel_size=3, padding="same"),
+            GroupNorm("gn", n_groups=8, n_in=32),
+            Swish(),
+        )
+
+        activations = network(X)
+    """
+
+    def __init__(
+        self,
+        name: str | None = None,
+        *,
+        n_groups: int,
+        n_in: int | None = None,
+        epsilon: float = 1e-5,
+        affine: bool = True,
+        scale_initializer: Initializer | None = None,
+        loc_initializer: Initializer | None = None,
+    ):
+        self.name = _resolve_layer_name(name, type(self).__name__, "n_groups")
+        if n_groups < 1:
+            raise ValueError(f"{self.name} needs at least one group, but got n_groups={n_groups}.")
+
+        self.n_groups = n_groups
+        self.n_in = n_in
+        self.epsilon = epsilon
+        self.affine = affine
+        self._scale_initializer = scale_initializer
+        self._loc_initializer = loc_initializer
+
+        self.scale: TrainableParameter | None = None
+        self.loc: TrainableParameter | None = None
+
+        self.initialized = False
+        self._initialize_params(None)
+
+    def _initialize_params(self, X: pt.TensorVariable | None):
+        if self.initialized:
+            return
+
+        n_in = _resolve_n_in(self.name, self.n_in, X)
+        if n_in is None:
+            return
+
+        if n_in % self.n_groups:
+            raise ValueError(
+                f"{self.name} splits the channels into equal groups, so n_groups must divide the "
+                f"channel count; {self.n_groups} groups do not divide {n_in} channels."
+            )
+
+        if self.affine:
+            self.loc, self.scale = _affine_parameters(
+                self.name,
+                n_in,
+                loc_initializer=self._loc_initializer,
+                scale_initializer=self._scale_initializer,
+            )
+
+        self.initialized = True
+
+    def __call__(self, X: pt.TensorLike) -> pt.TensorVariable:
+        X = pt.as_tensor(X)
+        if X.ndim < 2:
+            raise ValueError(
+                f"{self.name} groups the last axis and reduces over the spatial axes before it, so "
+                f"it needs at least a batch axis and a channel axis; got a {X.ndim}-dimensional "
+                f"input."
+            )
+
+        self._initialize_params(X)
+
+        inputs = [X]
+        if self.affine:
+            assert self.scale is not None and self.loc is not None
+            inputs.extend([self.loc, self.scale])
+
+        X_transformed = GroupNormLayer(
+            name=self.name,
+            n_in=self.n_in,
+            n_groups=self.n_groups,
+            epsilon=self.epsilon,
+            affine=self.affine,
+        )(*inputs)
+        X_transformed.name = f"{self.name}_output"
+
+        return X_transformed

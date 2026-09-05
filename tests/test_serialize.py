@@ -26,6 +26,7 @@ from pytensor_ml.layers import (
     Dropout,
     Embedding,
     Flatten,
+    GroupNorm,
     LayerNorm,
     Linear,
     Sequential,
@@ -121,6 +122,14 @@ def test_batchnorm_variants_roundtrip(kwargs):
 def test_layernorm_roundtrips(affine):
     X, output = initialized_network(
         Linear("fc", n_in=4, n_out=6), LayerNorm("ln", n_in=6, affine=affine)
+    )
+    assert_outputs_roundtrip([X], output, [np.random.default_rng(1).normal(size=(8, 4))])
+
+
+@pytest.mark.parametrize("affine", [True, False], ids=["affine", "no_affine"])
+def test_groupnorm_roundtrips(affine):
+    X, output = initialized_network(
+        Linear("fc", n_in=4, n_out=6), GroupNorm("gn", n_groups=3, n_in=6, affine=affine)
     )
     assert_outputs_roundtrip([X], output, [np.random.default_rng(1).normal(size=(8, 4))])
 

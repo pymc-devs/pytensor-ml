@@ -33,6 +33,8 @@ from pytensor_ml.layers.linear import Linear, LinearLayer
 from pytensor_ml.layers.norm import (
     BatchNorm,
     BatchNormLayer,
+    GroupNorm,
+    GroupNormLayer,
     LayerNorm,
     LayerNormLayer,
     NoRunningStatsBatchNormLayer,
@@ -84,6 +86,7 @@ __all__ = [
     "FeedForward",
     "Flatten",
     "GRUCell",
+    "GroupNorm",
     "Input",
     "LSTMCell",
     "Layer",

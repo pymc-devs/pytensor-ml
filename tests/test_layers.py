@@ -6,6 +6,7 @@ import pytensor
 import pytensor.tensor as pt
 import pytest
 
+from pytensor.gradient import verify_grad
 from pytensor.graph.replace import vectorize_graph
 
 import pytensor_ml.layers
@@ -18,6 +19,7 @@ from pytensor_ml.layers import (
     Dropout,
     Embedding,
     Flatten,
+    GroupNorm,
     Input,
     LayerNorm,
     Linear,
@@ -257,6 +259,97 @@ def test_layer_norm_no_affine_standardizes_each_row(rng):
     np.testing.assert_allclose(res.var(axis=-1), 1.0, rtol=1e-3)
 
 
+def group_norm_reference(X_np, n_groups, epsilon):
+    """Loop over (sample, group) blocks rather than reshaping the way the layer does, so the two
+    share nothing but the definition and cannot agree about a wrong axis set."""
+    channels_per_group = X_np.shape[-1] // n_groups
+    expected = np.empty_like(X_np)
+    for sample in range(X_np.shape[0]):
+        for group in range(n_groups):
+            channels = slice(group * channels_per_group, (group + 1) * channels_per_group)
+            block = X_np[sample, ..., channels]
+            expected[sample, ..., channels] = (block - block.mean()) / np.sqrt(
+                block.var() + epsilon
+            )
+    return expected
+
+
+@pytest.mark.parametrize("n_groups", [1, 2, 8], ids=["one_group", "two_groups", "per_channel"])
+@pytest.mark.parametrize(
+    "batch_shape", [(10,), (2, 5, 3)], ids=["no_spatial_axes", "two_spatial_axes"]
+)
+@pytest.mark.parametrize("n_in", [8, None], ids=["specified", "lazy"])
+def test_group_norm_forward(n_in, batch_shape, n_groups, rng):
+    X = pt.tensor("X", shape=(*(None,) * len(batch_shape), 8))
+    group_norm = GroupNorm(name="GroupNorm_1", n_groups=n_groups, n_in=n_in)
+    out = group_norm(X)
+    assert out.name == "GroupNorm_1_output"
+
+    X_np = rng.normal(size=(*batch_shape, 8)).astype(floatX)
+    scale_np = rng.normal(size=(8,)).astype(floatX)
+    loc_np = rng.normal(size=(8,)).astype(floatX)
+    group_norm.scale.set_value(scale_np)
+    group_norm.loc.set_value(loc_np)
+
+    expected = group_norm_reference(X_np, n_groups, group_norm.epsilon) * scale_np + loc_np
+
+    np.testing.assert_allclose(out.eval({X: X_np}), expected, rtol=1e-5, atol=ATOL)
+
+
+def test_group_norm_preserves_the_static_shape():
+    """The grouping reshape drops the static shape, and a downstream layer infers its n_in from
+    what comes back."""
+    X = pt.tensor("X", shape=(None, 5, 3, 8))
+    out = GroupNorm("gn", n_groups=4)(X)
+
+    assert out.type.shape == (None, 5, 3, 8)
+
+
+@pytest.mark.parametrize(
+    "n_groups, statistic_axes",
+    [(1, (1, 2, 3)), (4, (1, 2))],
+    ids=["one_group_covers_the_feature_map", "per_channel_is_instance_norm"],
+)
+def test_group_norm_extremes_standardize_what_they_claim_to(n_groups, statistic_axes, rng):
+    X = pt.tensor("X", shape=(None, 5, 3, 4))
+    out = GroupNorm("gn", n_groups=n_groups, n_in=4, affine=False)(X)
+
+    res = out.eval({X: rng.normal(loc=3.0, scale=2.0, size=(6, 5, 3, 4)).astype(floatX)})
+
+    np.testing.assert_allclose(res.mean(axis=statistic_axes), 0.0, atol=1e-5)
+    np.testing.assert_allclose(res.var(axis=statistic_axes), 1.0, rtol=1e-3)
+
+
+def test_group_norm_gradient(rng):
+    X_np = rng.normal(size=(3, 4, 6)).astype(floatX)
+    group_norm = GroupNorm("gn", n_groups=3, n_in=6)
+    group_norm.scale.set_value(rng.normal(size=(6,)).astype(floatX))
+    group_norm.loc.set_value(rng.normal(size=(6,)).astype(floatX))
+
+    verify_grad(group_norm, [X_np], rng=np.random.default_rng(0))
+
+
+@pytest.mark.parametrize("n_groups", [0, -1], ids=["zero", "negative"])
+def test_group_norm_needs_a_positive_group_count(n_groups):
+    with pytest.raises(ValueError, match=f"needs at least one group, but got n_groups={n_groups}"):
+        GroupNorm("gn", n_groups=n_groups, n_in=8)
+
+
+def test_group_norm_uneven_groups_raise():
+    with pytest.raises(ValueError, match="3 groups do not divide 8 channels"):
+        GroupNorm("gn", n_groups=3, n_in=8)
+
+
+def test_group_norm_uneven_groups_raise_on_a_lazily_inferred_channel_count():
+    with pytest.raises(ValueError, match="3 groups do not divide 8 channels"):
+        GroupNorm("gn", n_groups=3)(pt.tensor("X", shape=(None, 8)))
+
+
+def test_group_norm_without_a_channel_axis_raises():
+    with pytest.raises(ValueError, match="got a 1-dimensional input"):
+        GroupNorm("gn", n_groups=2, n_in=4)(pt.vector("x", shape=(4,)))
+
+
 def test_batch_norm_learns_population_stats(rng):
     population_mean, population_std = 3.2, 6.2
     X = pt.tensor("X", shape=(None, 32))
@@ -322,6 +415,7 @@ def test_batch_norm_learns_population_stats(rng):
         ("NoRunningStatsBatchNormLayer", "norm"),
         ("PredictionBatchNormLayer", "norm"),
         ("LayerNormLayer", "norm"),
+        ("GroupNormLayer", "norm"),
     ],
 )
 def test_marker_ops_stay_reachable_from_the_package(op_name, submodule):
@@ -427,6 +521,11 @@ DECLARED_BY_LAYERS = {
     ),
     "BatchNorm": (lambda: BatchNorm("bn", n_in=4), FEATURES, {"bn_scale": 1.0, "bn_loc": 0.0}),
     "LayerNorm": (lambda: LayerNorm("ln", n_in=4), FEATURES, {"ln_scale": 1.0, "ln_loc": 0.0}),
+    "GroupNorm": (
+        lambda: GroupNorm("gn", n_groups=2, n_in=4),
+        FEATURES,
+        {"gn_scale": 1.0, "gn_loc": 0.0},
+    ),
 }
 
 
@@ -493,6 +592,18 @@ INITIALIZER_KEYWORDS = {
         FEATURES,
         "ln_loc",
         {"ln_scale": 1.0},
+    ),
+    "GroupNorm.scale": (
+        lambda init: GroupNorm("gn", n_groups=2, n_in=4, scale_initializer=init),
+        FEATURES,
+        "gn_scale",
+        {"gn_loc": 0.0},
+    ),
+    "GroupNorm.loc": (
+        lambda init: GroupNorm("gn", n_groups=2, n_in=4, loc_initializer=init),
+        FEATURES,
+        "gn_loc",
+        {"gn_scale": 1.0},
     ),
 }
 
