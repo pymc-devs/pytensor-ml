@@ -320,6 +320,23 @@ def test_group_norm_extremes_standardize_what_they_claim_to(n_groups, statistic_
     np.testing.assert_allclose(res.var(axis=statistic_axes), 1.0, rtol=1e-3)
 
 
+def test_group_norm_applies_epsilon_inside_the_square_root(rng):
+    # At the default epsilon, dividing by sqrt(var + eps) and by sqrt(var) + eps agree to well
+    # under the tolerance any other test runs at, so only a large one separates them.
+    X = pt.tensor("X", shape=(None, 4, 6))
+    group_norm = GroupNorm("gn", n_groups=2, n_in=6, epsilon=0.5, affine=False)
+    out = group_norm(X)
+
+    X_np = rng.normal(size=(3, 4, 6)).astype(floatX)
+
+    np.testing.assert_allclose(
+        out.eval({X: X_np}),
+        group_norm_reference(X_np, 2, group_norm.epsilon),
+        rtol=1e-5,
+        atol=ATOL,
+    )
+
+
 def test_group_norm_gradient(rng):
     X_np = rng.normal(size=(3, 4, 6)).astype(floatX)
     group_norm = GroupNorm("gn", n_groups=3, n_in=6)
