@@ -36,8 +36,7 @@ class FeedForward(Layer):
         \left[a, g\right] = x W_1 + b_1.
 
     That is GEGLU with :class:`~pytensor_ml.activations.GELU` and SwiGLU with
-    :class:`~pytensor_ml.activations.Swish` -- the two are the same layer at different activations,
-    which is why they are a keyword here rather than two classes.
+    :class:`~pytensor_ml.activations.Swish`.
 
     Parameters
     ----------
