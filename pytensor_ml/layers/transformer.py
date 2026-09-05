@@ -53,9 +53,7 @@ class FeedForward(Layer):
         Activation applied to the hidden layer. Default is :class:`GELU`.
     gated : bool, optional
         Widen the first projection to :math:`2 d_{hidden}` and gate one half of it by the activation
-        applied to the other, instead of passing the whole hidden layer through the activation. The
-        widened projection stays a single weight rather than two, which is the layout pretrained
-        checkpoints store it in. Default is False.
+        applied to the other. The widened projection stays one weight. Default is False.
     bias : bool, optional
         Include bias terms in both linear layers. Default is True.
     fc_out_initializer : Initializer, optional
