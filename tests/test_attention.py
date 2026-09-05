@@ -184,6 +184,50 @@ def test_multihead_attention_shape_and_value(rng):
     np.testing.assert_allclose(result, expected, atol=1e-5)
 
 
+def test_cross_attention_shape_and_value(rng):
+    n_embd, kv_dim, n_head = 12, 8, 3
+    mha = MultiheadAttention("mha", n_embd=n_embd, n_head=n_head, kv_dim=kv_dim)
+    set_random_weights(mha, rng)
+
+    assert mha.q_proj.W.get_value().shape[0] == n_embd
+    assert mha.k_proj.W.get_value().shape[0] == kv_dim
+    assert mha.v_proj.W.get_value().shape[0] == kv_dim
+
+    X = pt.tensor("X", shape=(None, None, n_embd))
+    context = pt.tensor("context", shape=(None, None, kv_dim))
+    out = mha(X, context)
+    assert out.type.shape == (None, None, n_embd)
+
+    batch, seq, seq_kv = 2, 5, 3
+    X_np = rng.normal(size=(batch, seq, n_embd)).astype(floatX)
+    context_np = rng.normal(size=(batch, seq_kv, kv_dim)).astype(floatX)
+    result = out.eval({X: X_np, context: context_np})
+
+    head_dim = n_embd // n_head
+
+    def project(proj, x):
+        return x @ proj.W.get_value() + proj.b.get_value()
+
+    def split(x, length):
+        return x.reshape(batch, length, n_head, head_dim).transpose(0, 2, 1, 3)
+
+    q = split(project(mha.q_proj, X_np), seq)
+    k = split(project(mha.k_proj, context_np), seq_kv)
+    v = split(project(mha.v_proj, context_np), seq_kv)
+    attn = sdpa_np(q, k, v).transpose(0, 2, 1, 3).reshape(batch, seq, n_embd)
+    expected = project(mha.out_proj, attn)
+
+    np.testing.assert_allclose(result, expected, atol=1e-5)
+
+
+def test_causal_cross_attention_raises():
+    mha = MultiheadAttention("mha", n_embd=12, n_head=3, is_causal=True)
+    X = pt.tensor("X", shape=(2, 5, 12))
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        mha(X, X)
+
+
 def test_causal_self_attention_is_causal(rng):
     csa = CausalSelfAttention("csa", n_embd=12, n_head=3)
     assert csa.is_causal is True

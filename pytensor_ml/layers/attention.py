@@ -150,11 +150,12 @@ def scaled_dot_product_attention(
 
 class MultiheadAttention(Layer):
     r"""
-    Multi-head self-attention.
+    Multi-head attention, over one sequence or between two.
 
-    Project the input to per-head queries, keys, and values, apply
-    :func:`scaled_dot_product_attention`, then project the concatenated heads back to the model
-    dimension. Supports grouped-query attention through ``n_kv_head``.
+    Project to per-head queries, keys, and values, apply :func:`scaled_dot_product_attention`, then
+    project the concatenated heads back to the model dimension. Supports grouped-query attention
+    through ``n_kv_head``. Keys and values come from the query input unless :meth:`__call__` is given
+    a second one, which is cross-attention.
 
     Parameters
     ----------
@@ -167,10 +168,14 @@ class MultiheadAttention(Layer):
     n_kv_head : int, optional
         Number of key/value heads, for grouped-query attention. Must divide ``n_head`` evenly. Defaults
         to ``n_head`` (standard multi-head attention).
+    kv_dim : int, optional
+        Model dimension of the key/value input, when cross-attending to a source of a different width.
+        Defaults to ``n_embd``.
     bias : bool, optional
         Include bias terms in the projections. Default is True.
     is_causal : bool, optional
-        Apply a causal mask in the attention. Default is False.
+        Apply a causal mask in the attention. Cannot be combined with cross-attention. Default is
+        False.
     out_proj_initializer : Initializer, optional
         How the output projection's weight is drawn. The three input projections are unaffected, which is
         what a scaling applied only to the projection writing back into a residual stream needs. Xavier
@@ -188,6 +193,16 @@ class MultiheadAttention(Layer):
 
         X = Input("X", shape=(None, 128, 256))
         attended = MultiheadAttention("attn", n_embd=256, n_head=8, n_kv_head=2)(X)
+
+    Cross-attend instead by passing a second input for the keys and values, at its own width:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, MultiheadAttention
+
+        X = Input("X", shape=(None, 128, 256))
+        context = Input("context", shape=(None, 77, 512))
+        attended = MultiheadAttention("attn", n_embd=256, n_head=8, kv_dim=512)(X, context)
     """
 
     def __init__(
@@ -197,6 +212,7 @@ class MultiheadAttention(Layer):
         n_embd: int,
         n_head: int,
         n_kv_head: int | None = None,
+        kv_dim: int | None = None,
         bias: bool = True,
         is_causal: bool = False,
         out_proj_initializer: Initializer | None = None,
@@ -212,16 +228,17 @@ class MultiheadAttention(Layer):
         self.n_head = n_head
         self.n_kv_head = n_kv_head
         self.head_dim = n_embd // n_head
+        self.kv_dim = kv_dim if kv_dim is not None else n_embd
         self.is_causal = is_causal
 
         self.q_proj = Linear(
             f"{self.name}_q_proj", n_in=n_embd, n_out=n_head * self.head_dim, bias=bias
         )
         self.k_proj = Linear(
-            f"{self.name}_k_proj", n_in=n_embd, n_out=n_kv_head * self.head_dim, bias=bias
+            f"{self.name}_k_proj", n_in=self.kv_dim, n_out=n_kv_head * self.head_dim, bias=bias
         )
         self.v_proj = Linear(
-            f"{self.name}_v_proj", n_in=n_embd, n_out=n_kv_head * self.head_dim, bias=bias
+            f"{self.name}_v_proj", n_in=self.kv_dim, n_out=n_kv_head * self.head_dim, bias=bias
         )
         self.out_proj = Linear(
             f"{self.name}_out_proj",
@@ -237,12 +254,42 @@ class MultiheadAttention(Layer):
         # vectorize_graph) instead of falling back to object mode.
         return pt.split_dims(x, shape=(n_head, self.head_dim), axis=-1).swapaxes(-3, -2)
 
-    def __call__(self, x: pt.TensorLike, mask: pt.TensorLike | None = None) -> pt.TensorVariable:
+    def __call__(
+        self,
+        x: pt.TensorLike,
+        kv: pt.TensorLike | None = None,
+        mask: pt.TensorLike | None = None,
+    ) -> pt.TensorVariable:
+        """
+        Attend over ``x``, of shape ``(batch, seq, n_embd)``.
+
+        Parameters
+        ----------
+        x : TensorLike
+            Input the queries are projected from.
+        kv : TensorLike, optional
+            Input the keys and values are projected from, of width ``kv_dim`` and any sequence
+            length. Defaults to ``x``, which is self-attention.
+        mask : TensorLike, optional
+            Additive mask broadcast over the attention scores.
+
+        Returns
+        -------
+        attended : TensorVariable
+            Shape ``(batch, seq, n_embd)``.
+        """
+        if kv is not None and self.is_causal:
+            raise ValueError(
+                f"{self.name} cannot mask against earlier positions of a sequence it is not "
+                f"attending over, so is_causal and kv are mutually exclusive."
+            )
+
         x = pt.as_tensor(x)
+        kv = x if kv is None else pt.as_tensor(kv)
 
         q = self._split_heads(self.q_proj(x), self.n_head)
-        k = self._split_heads(self.k_proj(x), self.n_kv_head)
-        v = self._split_heads(self.v_proj(x), self.n_kv_head)
+        k = self._split_heads(self.k_proj(kv), self.n_kv_head)
+        v = self._split_heads(self.v_proj(kv), self.n_kv_head)
 
         if mask is not None:
             mask = pt.as_tensor(mask)
