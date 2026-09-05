@@ -26,6 +26,8 @@ from pytensor_ml.layers.conv import (
     MaxPool2D,
     PoolLayer,
     PoolLayerGrad,
+    Upsample1D,
+    Upsample2D,
 )
 from pytensor_ml.layers.dropout import Dropout, DropoutLayer
 from pytensor_ml.layers.embedding import Embedding, EmbeddingLayer
@@ -103,6 +105,8 @@ __all__ = [
     "Sequential",
     "Squeeze",
     "TransformerBlock",
+    "Upsample1D",
+    "Upsample2D",
     "ZeroPad1D",
     "ZeroPad2D",
     "scaled_dot_product_attention",

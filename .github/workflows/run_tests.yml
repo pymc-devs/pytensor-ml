@@ -40,6 +40,7 @@ jobs:
               tests/test_conv_transpose.py
               tests/test_padding.py
               tests/test_pool.py
+              tests/test_upsample.py
               tests/rewriting/
           - name: optim
             paths: |

@@ -6,6 +6,7 @@ import numpy as np
 import pytensor.tensor as pt
 
 from numpy.lib.stride_tricks import sliding_window_view
+from pytensor import config
 from pytensor.gradient import disconnected_type
 from pytensor.graph.basic import Apply, Variable
 from pytensor.graph.op import Op
@@ -1293,3 +1294,226 @@ class AvgPool1D(_PoolNd):
 
     n_spatial = 1
     reduction = "mean"
+
+
+def _nearest_source_indices(
+    in_extent: int | TensorVariable, out_extent: int | TensorVariable
+) -> TensorVariable:
+    """Index of the input element each output position copies, as ``floor(position * in / out)``.
+    Spelled as an integer division so the ratio is never rounded before the floor."""
+    return pt.arange(out_extent) * in_extent // out_extent
+
+
+def _linear_source_coordinates(
+    in_extent: int | TensorVariable, out_extent: int | TensorVariable, align_corners: bool
+) -> TensorVariable:
+    """Fractional input position each output position samples, in input coordinates. Without
+    ``align_corners`` the outermost samples fall outside the input, which is what the clamp handles."""
+    # Cast the extents before dividing: they arrive as int64, and an int64 division is float64,
+    # which would carry the whole interpolation off floatX and back in the layer's output.
+    in_span = pt.cast(in_extent, config.floatX)
+    out_span = pt.cast(out_extent, config.floatX)
+
+    positions = pt.arange(out_extent, dtype=config.floatX)
+    if align_corners:
+        # The maximum keeps a single-element output spreading over nothing rather than dividing by it.
+        source = positions * ((in_span - 1) / pt.maximum(out_span - 1, 1.0))
+    else:
+        source = (positions + 0.5) * (in_span / out_span) - 0.5
+    return pt.clip(source, 0.0, in_span - 1)
+
+
+def _resample_axis(
+    X: TensorVariable,
+    axis: int,
+    out_extent: int | TensorVariable,
+    mode: str,
+    align_corners: bool,
+) -> TensorVariable:
+    """Resample one spatial axis of ``X`` to ``out_extent``, leaving every other axis alone."""
+    in_extent = X.shape[axis]
+    if mode == "nearest":
+        return pt.take(X, _nearest_source_indices(in_extent, out_extent), axis=axis)
+
+    source = _linear_source_coordinates(in_extent, out_extent, align_corners)
+    lower_position = pt.floor(source)
+    lower_index = pt.cast(lower_position, "int64")
+    upper_index = pt.minimum(lower_index + 1, in_extent - 1)
+
+    # The weight varies along `axis` alone, so it broadcasts against every other axis of the gather.
+    along_axis = (np.newaxis,) * axis + (slice(None),) + (np.newaxis,) * (X.ndim - axis - 1)
+    weight = (source - lower_position)[along_axis]
+
+    lower = pt.take(X, lower_index, axis=axis)
+    upper = pt.take(X, upper_index, axis=axis)
+    return lower + (upper - lower) * weight
+
+
+class _UpsampleNd(Layer):
+    """
+    Everything resampling does that does not depend on how many spatial axes it has.
+
+    Subclasses set :attr:`n_spatial` and :attr:`linear_mode`, the name torch gives linear
+    interpolation at that rank; see :class:`Upsample2D` for the arguments, which are shared.
+    """
+
+    n_spatial: int
+    linear_mode: str
+
+    def __init__(
+        self,
+        name: str | None = None,
+        *,
+        scale_factor: int | Sequence[int] | None = None,
+        size: int | Sequence[int] | None = None,
+        mode: str = "nearest",
+        align_corners: bool = False,
+    ):
+        self.name = _resolve_layer_name(name, type(self).__name__, "scale_factor")
+
+        if (scale_factor is None) == (size is None):
+            raise ValueError(
+                f"{self.name} resizes either by a factor or to an extent, so pass exactly one of "
+                f"scale_factor and size."
+            )
+        if mode not in ("nearest", self.linear_mode):
+            raise ValueError(
+                f"{self.name} interpolates either 'nearest' or '{self.linear_mode}', but got "
+                f"{mode!r}."
+            )
+        if align_corners and mode == "nearest":
+            raise ValueError(
+                f"{self.name} has no corners to align when it copies the nearest element, so "
+                f"align_corners means nothing with mode='nearest'."
+            )
+
+        self.mode = mode
+        self.align_corners = align_corners
+        self.scale_factor = (
+            None
+            if scale_factor is None
+            else _as_spatial_tuple(scale_factor, self.n_spatial, "scale_factor")
+        )
+        self.size = None if size is None else _as_spatial_tuple(size, self.n_spatial, "size")
+
+        argument, extents = (
+            ("size", self.size)
+            if self.scale_factor is None
+            else ("scale_factor", self.scale_factor)
+        )
+        assert extents is not None
+        if any(extent < 1 for extent in extents):
+            raise ValueError(
+                f"{self.name} needs a positive {argument} on every spatial axis, but got {extents}."
+            )
+
+    def _output_extents(self, X: TensorVariable) -> tuple:
+        """Output extent per spatial axis, as a Python int wherever the input's extent is known so
+        the resampled type keeps its static shape."""
+        if self.size is not None:
+            return self.size
+
+        assert self.scale_factor is not None
+        extents = []
+        for axis, factor in enumerate(self.scale_factor, start=1):
+            static_extent = X.type.shape[axis]
+            extents.append(
+                X.shape[axis] * factor if static_extent is None else static_extent * factor
+            )
+        return tuple(extents)
+
+    def __call__(self, X: pt.TensorLike) -> TensorVariable:
+        """
+        Resample the spatial axes of ``X``, of shape ``(batch, *spatial, channels)``.
+
+        Returns
+        -------
+        resampled : TensorVariable
+            Shape ``(batch, *out_spatial, channels)``, with the channel axis untouched.
+        """
+        X = pt.as_tensor(X)
+        _check_input_rank(X, self.name, self.n_spatial)
+
+        out = X
+        for axis, out_extent in enumerate(self._output_extents(X), start=1):
+            out = _resample_axis(out, axis, out_extent, self.mode, self.align_corners)
+
+        out.name = f"{self.name}_output"
+        return out
+
+
+class Upsample2D(_UpsampleNd):
+    r"""
+    Resample an image to a new spatial extent, over two spatial axes.
+
+    Takes ``(batch, height, width, channels)`` and returns ``(batch, out_height, out_width,
+    channels)``, leaving the channel axis untouched. This is a gather, not a learned operation: it
+    has no parameters, and it is what modern decoders use to raise resolution before an ordinary
+    convolution, in place of the transposed convolution :class:`ConvTranspose2D` provides.
+
+    Nearest-neighbor copies the input element at :math:`\lfloor j \cdot H / H' \rfloor` to output
+    position :math:`j`. Bilinear interpolates along each axis in turn, between the two input
+    elements the output position falls between.
+
+    Parameters
+    ----------
+    name : str or None
+        Name prefix for the layer. Defaults to the class name when None.
+    scale_factor : int or tuple of int, optional
+        Multiply each spatial extent by this, shared by both axes or given as ``(height, width)``.
+        Pass this or ``size``, never both.
+    size : int or tuple of int, optional
+        Resample to this extent instead, shared by both axes or given as ``(height, width)``. Pass
+        this or ``scale_factor``, never both.
+    mode : {"nearest", "bilinear"}, optional
+        Copy the nearest input element, or interpolate linearly along each axis. Default is
+        "nearest".
+    align_corners : bool, optional
+        Pin the outermost output elements to the outermost input elements, spreading the rest evenly
+        between them. When False, each element instead covers a unit interval and output centers map
+        to input centers, which shifts the sampled positions by half a pixel and is what torch and
+        every diffusion decoder use. Only meaningful for ``mode="bilinear"``. Default is False.
+
+    Examples
+    --------
+    Double the resolution and then convolve, which is how a decoder ordinarily upsamples. The 3x3
+    convolution is what does the learning; the resampling only supplies it a larger grid:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Conv2D, Input, Sequential, Upsample2D
+
+        X = Input("X", shape=(None, 32, 32, 64))
+        network = Sequential(
+            Upsample2D(scale_factor=2),
+            Conv2D("conv", in_channels=64, out_channels=64, kernel_size=3, padding="same"),
+        )
+
+        features = network(X)
+    """
+
+    n_spatial = 2
+    linear_mode = "bilinear"
+
+
+class Upsample1D(_UpsampleNd):
+    """
+    Resample a sequence to a new extent; see :class:`Upsample2D`.
+
+    Linear interpolation is spelled ``mode="linear"`` at this rank, as it is in torch.
+
+    Examples
+    --------
+    Stretch a sequence to twice its length, interpolating between neighboring steps rather than
+    repeating each one:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import Input, Upsample1D
+
+        X = Input("X", shape=(None, 128, 16))
+        stretched = Upsample1D(scale_factor=2, mode="linear")(X)
+    """
+
+    n_spatial = 1
+    linear_mode = "linear"
