@@ -10,7 +10,17 @@ from pytensor.graph.type import Type
 from pytensor.tensor.random.op import RandomVariable
 from pytensor.tensor.type import TensorType
 
-from pytensor_ml.activations import GELU, LeakyReLU, ReLU, Sigmoid, Softmax, SoftPlus, Swish, Tanh
+from pytensor_ml.activations import (
+    GELU,
+    LeakyReLU,
+    QuickGELU,
+    ReLU,
+    Sigmoid,
+    Softmax,
+    SoftPlus,
+    Swish,
+    Tanh,
+)
 from pytensor_ml.json_serialize import (
     deserialize_graph,
     op_from_json,
@@ -49,6 +59,7 @@ ALL_ACTIVATIONS = [
     GELU(approximate=True),
     Swish(),
     Swish(beta=1.5),
+    QuickGELU(),
 ]
 
 
@@ -87,7 +98,8 @@ def initialized_network(*layers, seed=0):
 def _activation_id(activation):
     if isinstance(activation, GELU) and activation.approximate:
         return "GELU_tanh"
-    if isinstance(activation, Swish):
+    # Exactly Swish, not QuickGELU: the suffix disambiguates instances that differ by beta.
+    if type(activation) is Swish:
         return f"Swish_beta{activation.beta}"
     return type(activation).__name__
 

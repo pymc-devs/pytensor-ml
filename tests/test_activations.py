@@ -10,6 +10,7 @@ from scipy.special import erf
 from pytensor_ml.activations import (
     GELU,
     LeakyReLU,
+    QuickGELU,
     ReLU,
     Sigmoid,
     SoftPlus,
@@ -44,6 +45,7 @@ HIDDEN_ACTIVATIONS = [
     GELU(approximate=False),
     GELU(approximate=True),
     Swish(),
+    QuickGELU(),
 ]
 
 
@@ -89,6 +91,12 @@ def test_swish_matches_reference(beta):
     np.testing.assert_allclose(f(values), values / (1 + np.exp(-beta * values)), rtol=1e-6)
 
 
+def test_quick_gelu_fixes_the_clip_beta():
+    """The constant is the whole of QuickGELU; Swish's own tests cover the expression it goes into.
+    A wrong one gives CLIP weights slightly wrong activations and no error."""
+    assert QuickGELU().beta == 1.702
+
+
 @pytest.mark.parametrize("activation", HIDDEN_ACTIVATIONS, ids=_activation_id)
 def test_activation_names_its_output_for_its_class(activation):
     """The name is what a printed graph shows, so a subclass that inherits its parent's `__call__`
@@ -131,7 +139,8 @@ def _parametrized_activation_id(activation):
     base = _activation_id(activation)
     if isinstance(activation, LeakyReLU):
         return f"{base}_{activation.negative_slope}"
-    if isinstance(activation, Swish):
+    # Exactly Swish, not QuickGELU: the suffix disambiguates instances that differ by beta.
+    if type(activation) is Swish:
         return f"{base}_{activation.beta}"
     return base
 

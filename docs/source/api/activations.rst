@@ -10,6 +10,7 @@ Activations
     ReLU
     LeakyReLU
     GELU
+    QuickGELU
     Swish
     Sigmoid
     SoftPlus
