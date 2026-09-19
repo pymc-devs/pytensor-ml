@@ -2,4 +2,5 @@
 # marker op that gets a kernel, mirroring the layout under pytensor_ml/layers.
 import pytensor_ml.dispatch.mlx.attention
 import pytensor_ml.dispatch.mlx.conv
+import pytensor_ml.dispatch.mlx.lbfgs
 import pytensor_ml.dispatch.mlx.pooling

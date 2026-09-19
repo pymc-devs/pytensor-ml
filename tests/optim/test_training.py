@@ -218,6 +218,24 @@ def test_state_for_requires_named_parameter():
         state_for(anonymous, "adam/first_moment")
 
 
+def test_state_for_history_stacks_a_leading_axis():
+    # The stack carries the parameter's static shape as well as its value's, so a write of the parameter
+    # itself into one slot type-checks; a `(?,)`-typed buffer would refuse a `(3,)`-typed parameter.
+    parameter = trainable(np.ones(3, dtype=config.floatX), name="w")
+
+    stack = state_for(parameter, "lbfgs/value_differences", history_size=4)
+
+    assert stack.type.shape == (4, 3)
+    assert stack.get_value().shape == (4, 3)
+    assert stack.get_value().dtype == parameter.get_value().dtype
+
+
+def test_state_for_rejects_an_empty_history():
+    parameter = trainable(np.ones(3, dtype=config.floatX), name="w")
+    with pytest.raises(ValueError, match="history_size must be at least 1"):
+        state_for(parameter, "lbfgs/value_differences", history_size=0)
+
+
 def test_compile_train_rejects_duplicate_parameter_names():
     # Two parameters sharing a name give their optimizer state colliding names; compile_train refuses to
     # build a training step whose checkpointed state cannot be told apart.

@@ -8,7 +8,7 @@ channels:
 dependencies:
   - python>=3.12
   # Runtime deps: autodoc imports pytensor_ml, so the full runtime stack has to be in scope.
-  - pytensor>=3.3.0,<3.4.0
+  - pytensor>=3.3.2,<3.4.0
   - numpy
   - safetensors
   # The gallery extension renders notebook thumbnails with matplotlib.

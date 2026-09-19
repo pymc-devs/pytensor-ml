@@ -14,6 +14,7 @@ from pytensor_ml.optim.rules import (
     adam_updates,
     adamax_updates,
     adamw_updates,
+    lbfgs_updates,
     nadam_updates,
     rmsprop_updates,
     rprop_updates,
@@ -351,6 +352,55 @@ def rprop(
             eta_plus=eta_plus,
             step_min=step_min,
             step_max=step_max,
+            namespace=namespace,
+        )
+
+    return rule
+
+
+def lbfgs(
+    learning_rate: LearningRate = 1.0,
+    memory_size: int = 10,
+    scale_init_precond: bool = True,
+    *,
+    namespace: str = "lbfgs",
+) -> Transform:
+    """
+    L-BFGS optimizer. See :func:`~pytensor_ml.optim.rules.lbfgs_updates` for the update rule.
+
+    ``learning_rate`` accepts a float, a scalar shared variable, any scalar graph, or a schedule, and
+    ``namespace`` prefixes the state this rule allocates; see :func:`sgd`.
+
+    Examples
+    --------
+    A quasi-Newton direction from a memory of recent parameter and gradient differences, taken at a
+    fixed fraction. It reads the change between consecutive gradients as curvature, so the loss has to
+    be the same function from one step to the next: full batch, no dropout.
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import compile_train, lbfgs
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
+
+        step = compile_train(loss, lbfgs(learning_rate=0.5, memory_size=10))
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
+    """
+
+    def rule(
+        loss_gradients_or_updates: LossGradientsOrUpdates, parameters: Sequence[Parameter]
+    ) -> Updates:
+        return lbfgs_updates(
+            loss_gradients_or_updates,
+            parameters,
+            learning_rate=learning_rate,
+            memory_size=memory_size,
+            scale_init_precond=scale_init_precond,
             namespace=namespace,
         )
 

@@ -35,7 +35,7 @@ keywords = [
 ]
 
 dependencies = [
-  "pytensor>=3.2.3,<4.0.0",
+  "pytensor>=3.3.2,<4.0.0",
   "numpy",
 ]
 
@@ -163,7 +163,7 @@ platforms = ["osx-arm64", "linux-64", "win-64"]
 # the two lists have to move together.
 [tool.pixi.feature.docs.dependencies]
 python = ">=3.12"
-pytensor = ">=3.3.0,<3.4.0"
+pytensor = ">=3.3.2,<3.4.0"
 numpy = "*"
 safetensors = "*"
 # The gallery extension renders notebook thumbnails with matplotlib.

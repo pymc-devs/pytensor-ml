@@ -152,7 +152,7 @@ jobs:
       run: |
         conda activate pytensor_ml
         if [[ $INSTALL_JAX == "1" ]]; then pip install "jax>=0.8,<0.9.1" jaxlib; fi
-        if [[ $INSTALL_MLX == "1" ]]; then pip install "mlx>=0.30,<0.32"; fi
+        if [[ $INSTALL_MLX == "1" ]]; then pip install "mlx>=0.32.2,<0.33"; fi
         if [[ $INSTALL_TORCH == "1" ]]; then pip install torch --index-url https://download.pytorch.org/whl/cpu; fi
       env:
         INSTALL_JAX: ${{ matrix.install-jax }}

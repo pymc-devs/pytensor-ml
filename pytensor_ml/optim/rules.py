@@ -1,5 +1,6 @@
 from collections.abc import Callable, Sequence
 
+import numpy as np
 import pytensor.tensor as pt
 
 from pytensor import config
@@ -16,9 +17,11 @@ from pytensor_ml.optim.base import (
     gradients_to_descend,
     rate_on,
     read_rate,
+    scalar_state,
     state_for,
     to_floatx,
 )
+from pytensor_ml.optim.lbfgs import LBFGSDirection, flat_dot
 from pytensor_ml.params import step_counter
 
 
@@ -898,5 +901,154 @@ def rprop_updates(
         updates[step_size] = new_step_size
         updates[previous_gradient] = effective_gradient
         updates[parameter] = parameter - pt.sign(effective_gradient) * new_step_size
+
+    return updates
+
+
+def lbfgs_updates(
+    loss_gradients_or_updates: LossGradientsOrUpdates,
+    parameters: Sequence[Parameter],
+    learning_rate: LearningRate = 1.0,
+    memory_size: int = 10,
+    scale_init_precond: bool = True,
+    namespace: str = "lbfgs",
+) -> Updates:
+    r"""
+    L-BFGS: descend along the gradient multiplied by a limited-memory inverse-Hessian approximation.
+
+    The approximation is built from the last ``memory_size`` accepted pairs of parameter differences
+    :math:`s = p_{k+1} - p_k` and gradient differences :math:`y = g_{k+1} - g_k`, applied to the gradient
+    by the two-loop recursion of :class:`~pytensor_ml.optim.lbfgs.LBFGSDirection` starting from
+    :math:`\gamma I`, with :math:`\gamma = s^\top y / y^\top y` for the newest pair. A pair enters the
+    memory only when :math:`y^\top s > \epsilon\, y^\top y`, which keeps the approximation positive
+    definite, so a step through a non-convex region leaves the memory as it was. Before any pair is
+    accepted :math:`\gamma = \min(1, 1 / \|g\|)`, which keeps the first step inside the unit ball. The
+    step is :math:`p \leftarrow p - \eta H g`.
+
+    The direction is well scaled once the memory holds a pair, so :math:`\eta = 1` is the natural rate
+    and a line search the natural way to back off from it. Consecutive gradients have to be measured on
+    the same objective for their difference to be curvature, so the rule assumes a deterministic,
+    full-batch loss.
+
+    Parameters
+    ----------
+    loss_gradients_or_updates : TensorVariable, sequence of TensorVariable, or Updates
+        Scalar loss to differentiate, precomputed gradients, or the updates dict an earlier transform in
+        a chain produced.
+    parameters : sequence of shared tensor variable
+        Parameters to update.
+    learning_rate : float or shared tensor variable
+        Step size :math:`\eta`. Default 1.0.
+    memory_size : int
+        Number of pairs the memory holds. Default 10.
+    scale_init_precond : bool
+        Start the recursion from :math:`\gamma I` as above. When False it starts from the identity, and
+        the first step is the raw gradient. Default True.
+
+    namespace : str
+        Prefix for every state slot this rule allocates, so two rules in one graph keep separate state
+        rather than reusing each other's. Default is the rule's own name.
+
+    Returns
+    -------
+    updates : Updates
+        Mapping from each parameter and its memory buffers to their next values.
+
+    Examples
+    --------
+    Compile the step yourself rather than going through :func:`~pytensor_ml.optim.train.compile_train`.
+    The rule returns the updates dict directly, with no line search:
+
+    .. code-block:: python
+
+        import numpy as np
+
+        from pytensor_ml.layers import Input, Linear
+        from pytensor_ml.loss import SquaredError, supervised_loss
+        from pytensor_ml.optim import lbfgs_updates
+        from pytensor_ml.pytensorf import collect_trainable_params, function
+
+        X = Input("X", shape=(None, 4))
+        loss, target = supervised_loss(Linear("fc", n_in=4, n_out=1)(X), SquaredError())
+
+        updates = lbfgs_updates(loss, collect_trainable_params(loss), learning_rate=0.5)
+        step = function([X, target], loss, updates=updates)
+        loss_value = step(np.zeros((8, 4)), np.zeros((8, 1)))
+    """
+    if memory_size < 1:
+        raise ValueError(f"memory_size must be at least 1, got {memory_size}.")
+
+    incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, namespace)
+    step_count = step_counter(f"{namespace}/step_count")
+    learning_rate = to_floatx(rate_on(learning_rate, step_count))
+
+    pairs_written = scalar_state(f"{namespace}/pairs_written", dtype="int64")
+    previous_values = [state_for(p, f"{namespace}/previous_value") for p in parameters]
+    previous_gradients = [state_for(p, f"{namespace}/previous_gradient") for p in parameters]
+    value_memory = [
+        state_for(p, f"{namespace}/value_differences", history_size=memory_size) for p in parameters
+    ]
+    gradient_memory = [
+        state_for(p, f"{namespace}/gradient_differences", history_size=memory_size)
+        for p in parameters
+    ]
+
+    # The buffers hold zeros before the first step, so the differences read off them are meaningless
+    # until a previous point exists; the guard below never lets those into the memory.
+    value_differences = [p - previous for p, previous in zip(parameters, previous_values)]
+    gradient_differences = [g - previous for g, previous in zip(gradients, previous_gradients)]
+    curvature = flat_dot(gradient_differences, value_differences)
+    gradient_change = flat_dot(gradient_differences, gradient_differences)
+    epsilon = max(np.finfo(gradient.dtype).eps for gradient in gradients)
+    accept = (step_count > 0) & (curvature > epsilon * gradient_change)
+
+    # Rejection rewrites the slot with itself, so the write stays in place and unconditional; only the
+    # count decides whether the slot is now part of the memory. The slot is a one-element index vector
+    # rather than a scalar because mlx cannot trace a scalar index (pymc-devs/pytensor#2422).
+    slot = (pairs_written % memory_size)[None]
+    new_value_memory = [
+        pt.set_subtensor(memory[slot], pt.switch(accept, s[None], memory[slot]))
+        for memory, s in zip(value_memory, value_differences)
+    ]
+    new_gradient_memory = [
+        pt.set_subtensor(memory[slot], pt.switch(accept, y[None], memory[slot]))
+        for memory, y in zip(gradient_memory, gradient_differences)
+    ]
+    new_pairs_written = pairs_written + accept.astype(pairs_written.dtype)
+
+    if scale_init_precond:
+        has_pair = new_pairs_written > 0
+        newest = ((new_pairs_written - 1) % memory_size)[None]
+        newest_s = [memory[newest] for memory in new_value_memory]
+        newest_y = [memory[newest] for memory in new_gradient_memory]
+        newest_curvature = flat_dot(newest_s, newest_y)
+        newest_change = pt.switch(has_pair, flat_dot(newest_y, newest_y), 1.0)
+        gradient_norm = pt.sqrt(flat_dot(gradients, gradients))
+        identity_scale = pt.switch(
+            has_pair,
+            newest_curvature / newest_change,
+            pt.minimum(1.0, 1.0 / pt.switch(gradient_norm > 0, gradient_norm, 1.0)),
+        )
+    else:
+        identity_scale = 1.0
+
+    directions = LBFGSDirection(n_parameters=len(parameters), memory_size=memory_size)(
+        new_pairs_written,
+        identity_scale,
+        *gradients,
+        *new_value_memory,
+        *new_gradient_memory,
+        return_list=True,
+    )
+
+    updates: Updates = Steps(incoming)
+    updates[step_count] = step_count + 1
+    updates[pairs_written] = new_pairs_written
+    for index, parameter in enumerate(parameters):
+        updates[previous_values[index]] = parameter
+        updates[previous_gradients[index]] = gradients[index]
+        updates[value_memory[index]] = new_value_memory[index]
+        updates[gradient_memory[index]] = new_gradient_memory[index]
+        updates[parameter] = parameter - learning_rate * directions[index]
 
     return updates

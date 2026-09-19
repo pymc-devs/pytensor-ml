@@ -481,9 +481,11 @@ def _unreachable_parameter_names(
     ]
 
 
-def state_for(parameter: Parameter, slot: str, fill_value: float = 0.0) -> Parameter:
+def state_for(
+    parameter: Parameter, slot: str, fill_value: float = 0.0, history_size: int | None = None
+) -> Parameter:
     """
-    Return the optimizer-state shared variable shaped and typed like ``parameter``.
+    Return the optimizer-state shared variable typed like ``parameter``, or a stack of them.
 
     The variable is named ``"{parameter.name}/{slot}"`` and carries the parameter's layer, so a checkpoint
     numbers it where it numbers the parameter. The name is never used to *find* the variable at runtime --
@@ -501,6 +503,9 @@ def state_for(parameter: Parameter, slot: str, fill_value: float = 0.0) -> Param
         A short role tag for the slot, e.g. ``"adam/first_moment"`` or ``"trace/velocity"``.
     fill_value : float
         Constant to initialize the state with. Default 0.0.
+    history_size : int, optional
+        Number of past values to stack along a new leading axis, so the state is shaped
+        ``(history_size, *parameter.shape)``. Omitted, the state has the parameter's own shape.
 
     Returns
     -------
@@ -527,9 +532,21 @@ def state_for(parameter: Parameter, slot: str, fill_value: float = 0.0) -> Param
             f"Cannot allocate optimizer state {slot!r} for an unnamed parameter. Stateful optimizers rely on "
             "parameter names to identify their state at serialization boundaries; give the parameter a name."
         )
+    if history_size is not None and history_size < 1:
+        raise ValueError(f"history_size must be at least 1, got {history_size}.")
 
     value = parameter.get_value(borrow=True)
-    state = pytensor.shared(np.full_like(value, fill_value), name=f"{parameter.name}/{slot}")
+    shape = value.shape if history_size is None else (history_size, *value.shape)
+    static_shape = (
+        parameter.type.shape if history_size is None else (history_size, *parameter.type.shape)
+    )
+    # The declared dtype rather than the value's: after a step on mlx the value is a device array
+    # whose dtype numpy cannot read.
+    state = pytensor.shared(
+        np.full(shape, fill_value, dtype=parameter.type.dtype),
+        name=f"{parameter.name}/{slot}",
+        shape=static_shape,
+    )
     # Keeps `Linear_1_W` and `Linear_1_W/adam/first_moment` numbered onto the same layer.
     state.layer_name = getattr(parameter, "layer_name", None)
     return state
