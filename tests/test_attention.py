@@ -50,13 +50,15 @@ def sdpa_np(q, k, v, *, is_causal=False, mask=None, scale=None):
 @pytest.mark.parametrize("is_causal", [False, True], ids=["full", "causal"])
 def test_sdpa_matches_reference(is_causal, scale, rng):
     b, n_head, seq, qk_dim, v_dim = 2, 3, 5, 4, 6
-    q = rng.normal(size=(b, n_head, seq, qk_dim)).astype(floatX)
-    k = rng.normal(size=(b, n_head, seq, qk_dim)).astype(floatX)
-    v = rng.normal(size=(b, n_head, seq, v_dim)).astype(floatX)
+    q = rng.normal(size=(b, n_head, seq, qk_dim)).astype("float32")
+    k = rng.normal(size=(b, n_head, seq, qk_dim)).astype("float32")
+    v = rng.normal(size=(b, n_head, seq, v_dim)).astype("float32")
 
-    out = scaled_dot_product_attention(q, k, v, is_causal=is_causal, scale=scale).eval()
+    with pytensor.config.change_flags(floatX="float64"):
+        out = scaled_dot_product_attention(q, k, v, is_causal=is_causal, scale=scale).eval()
 
     assert out.shape == (b, n_head, seq, v_dim)
+    assert out.dtype == q.dtype
     np.testing.assert_allclose(out, sdpa_np(q, k, v, is_causal=is_causal, scale=scale), atol=1e-5)
 
 
@@ -74,13 +76,15 @@ def test_sdpa_grouped_query(rng):
 @pytest.mark.parametrize("is_causal", [False, True], ids=["mask_only", "mask_and_causal"])
 def test_sdpa_additive_mask(is_causal, rng):
     b, n_head, seq, dim = 2, 3, 5, 4
-    q = rng.normal(size=(b, n_head, seq, dim)).astype(floatX)
-    k = rng.normal(size=(b, n_head, seq, dim)).astype(floatX)
-    v = rng.normal(size=(b, n_head, seq, dim)).astype(floatX)
-    mask = np.where(rng.normal(size=(b, n_head, seq, seq)) > 0, 0.0, -1e9).astype(floatX)
+    q = rng.normal(size=(b, n_head, seq, dim)).astype("float32")
+    k = rng.normal(size=(b, n_head, seq, dim)).astype("float32")
+    v = rng.normal(size=(b, n_head, seq, dim)).astype("float32")
+    mask = np.where(rng.normal(size=(b, n_head, seq, seq)) > 0, 0.0, -1e9).astype("float32")
 
-    out = scaled_dot_product_attention(q, k, v, mask=mask, is_causal=is_causal).eval()
+    with pytensor.config.change_flags(floatX="float64"):
+        out = scaled_dot_product_attention(q, k, v, mask=mask, is_causal=is_causal).eval()
 
+    assert out.dtype == q.dtype
     np.testing.assert_allclose(out, sdpa_np(q, k, v, mask=mask, is_causal=is_causal), atol=1e-5)
 
 
