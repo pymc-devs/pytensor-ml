@@ -72,6 +72,19 @@ def test_sdpa_causal_query_shorter_than_its_keys_sees_the_whole_prefix(rng):
     np.testing.assert_allclose(out, sdpa_np(q, k, v, is_causal=True), atol=1e-5)
 
 
+@pytest.mark.parametrize("scale", [None, 0.5], ids=["default_scale", "custom_scale"])
+@pytest.mark.parametrize("is_causal", [False, True], ids=["full", "causal"])
+def test_sdpa_keeps_single_precision_under_a_double_precision_floatx(is_causal, scale):
+    """The scale and the causal mask follow the queries' dtype. Built at floatX's float64, they would
+    promote a float32 attention, and everything after it, to float64."""
+    q = pt.tensor("q", shape=(1, 2, 3, 4), dtype="float32")
+
+    with pytensor.config.change_flags(floatX="float64"):
+        out = scaled_dot_product_attention(q, q, q, is_causal=is_causal, scale=scale)
+
+    assert out.dtype == "float32"
+
+
 def test_sdpa_grouped_query(rng):
     b, n_head, n_kv_head, seq, dim = 2, 6, 2, 4, 5
     q = rng.normal(size=(b, n_head, seq, dim)).astype(floatX)
