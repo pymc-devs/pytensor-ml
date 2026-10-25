@@ -18,13 +18,14 @@ Setting up
     pip install -e ".[dev]"
     pre-commit install
 
-The conda environments under ``conda_envs/`` are what CI installs, pinned
-harder than the package metadata. Reach for one when a failure reproduces in CI
-but not locally:
+CI installs the pixi environments locked in ``pixi.lock``, pinned harder than
+the package metadata. Reach for one when a failure reproduces in CI but not
+locally:
 
 .. code-block:: bash
 
-    conda env create -f conda_envs/pytensor_ml.yml
+    pixi run -e test pytest             # the core jobs; test-jax, test-mlx, test-torch for a backend
+    pixi run -e mypy python scripts/run_mypy.py
 
 Docs are built with pixi, which owns its own environment:
 
