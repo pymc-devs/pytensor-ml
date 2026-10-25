@@ -1,0 +1,20 @@
+name: pytensor_ml-gpu_metal
+channels:
+- conda-forge
+- nodefaults
+dependencies:
+- safetensors *
+- scikit-learn *
+- cloudpickle *
+- pytest *
+- pytest-cov *
+- pytest-xdist *
+- pytest-benchmark *
+- pytest-mock *
+- pyyaml *
+- mypy >=2.4.0,<2.5.0
+- pre-commit *
+- mlx >=0.32.4,<0.33
+- pytensor >=3.3.3,<3.4.0
+- numpy *
+- python >=3.12

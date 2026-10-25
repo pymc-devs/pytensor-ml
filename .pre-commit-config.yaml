@@ -32,6 +32,31 @@ repos:
 
 - repo: local
   hooks:
+    - id: pixi-lock-check
+      name: pixi.lock is in sync with pyproject.toml
+      entry: pixi lock --check
+      language: system
+      files: ^(pyproject\.toml|pixi\.lock)$
+      pass_filenames: false
+
+    - id: pixi-export-dev
+      name: conda_envs/pytensor_ml.yml is exported from the pixi dev environment
+      # Called directly rather than through a pixi task so the hook reads the manifest only; `pixi run`
+      # would re-solve the lock file and install the environment first. --no-pypi drops the editable
+      # install, because conda runs pip from the env file's directory, where `-e .` names conda_envs/.
+      # -p pins the export to one platform, so it does not depend on the machine running the hook.
+      entry: pixi workspace export conda-environment -e dev -n pytensor_ml -p linux-64 --no-pypi conda_envs/pytensor_ml.yml
+      language: system
+      files: ^(pyproject\.toml|pixi\.lock|conda_envs/pytensor_ml\.yml)$
+      pass_filenames: false
+
+    - id: pixi-export-docs
+      name: conda_envs/environment-docs.yml is exported from the pixi docs environment
+      entry: pixi workspace export conda-environment -e docs -n pytensor_ml-docs -p linux-64 --no-pypi conda_envs/environment-docs.yml
+      language: system
+      files: ^(pyproject\.toml|pixi\.lock|conda_envs/environment-docs\.yml)$
+      pass_filenames: false
+
     - id: notebook_name
       entry: '\(notebook_name\)='
       language: pygrep
