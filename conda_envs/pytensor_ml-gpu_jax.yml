@@ -1,42 +1,22 @@
-name: pytensor_ml
+name: pytensor_ml-gpu_jax
 channels:
-  - conda-forge
-  - nvidia
-  - nodefaults
-
+- conda-forge
+- nodefaults
 dependencies:
-  - python>=3.12
-  - pytensor>=3.3.3,<4.0.0
-  - numpy
-  - scikit-learn
-
-  # GPU Stuff
-  - jax
-  - numpyro
-  - blackjax
-  - jaxlib=*=*cuda*
-  - cuda-nvcc
-
-  # For testing
-  - coveralls
-  - diff-cover
-  - pytest
-  - pytest-cov
-  - pytest-xdist
-  - pytest-benchmark
-  - pytest-mock
-
-  # For building docs
-  - sphinx
-  - sphinx_rtd_theme
-  - pygments
-  - pydot
-  - ipython
-
-  # code style
-  - ruff
-
-  # developer tools
-  - pre-commit
-  - packaging
-  - typing_extensions
+- safetensors *
+- scikit-learn *
+- cloudpickle *
+- pytest *
+- pytest-cov *
+- pytest-xdist *
+- pytest-benchmark *
+- pytest-mock *
+- pyyaml *
+- mypy >=2.4.0,<2.5.0
+- pre-commit *
+- jax >=0.12,<0.13
+- jaxlib >=0.12,<0.13 cuda*
+- cuda-nvcc *
+- pytensor >=3.3.3,<3.4.0
+- numpy *
+- python >=3.12

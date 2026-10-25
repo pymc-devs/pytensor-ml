@@ -156,14 +156,16 @@ files = ["pytensor_ml"]
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
-# The named entry carries the virtual package mlx needs: conda-forge builds it against macOS 14.5,
-# above pixi's default osx-arm64 target. Every environment gets every platform listed here unless a
-# feature narrows it, so the environments that are not for mlx take the cpu feature below.
+# The named entries carry the virtual packages the GPU builds need: conda-forge builds mlx against
+# macOS 14.5, above pixi's default osx-arm64 target, and the CUDA jaxlib needs a CUDA driver. Every
+# environment gets every platform listed here unless a feature narrows it, so the environments that
+# are not for a GPU take the cpu feature below.
 platforms = [
     "osx-arm64",
     "linux-64",
     "win-64",
     { name = "osx-arm64-mlx", platform = "osx-arm64", macos = "14.5" },
+    { name = "linux-64-cuda", platform = "linux-64", cuda = "12.9" },
 ]
 
 # Conda specs for the runtime dependencies, which pixi would otherwise install from PyPI wheels.
@@ -178,8 +180,8 @@ numpy = "*"
 platforms = ["osx-arm64", "linux-64", "win-64"]
 
 # Autodoc imports pytensor_ml, so the docs environment needs the runtime stack alongside sphinx.
-# Read the Docs cannot read a pixi environment, so it builds from conda_envs/environment-docs.yml;
-# the two lists have to move together.
+# Read the Docs cannot read a pixi environment, so it builds from conda_envs/environment-docs.yml,
+# which a pre-commit hook exports from this one.
 [tool.pixi.feature.docs.dependencies]
 safetensors = "*"
 # The gallery extension renders notebook thumbnails with matplotlib.
@@ -247,6 +249,16 @@ platforms = ["osx-arm64-mlx"]
 [tool.pixi.feature.mlx.dependencies]
 mlx = ">=0.32.4,<0.33"
 
+# The CUDA build of jaxlib, for running on an NVIDIA GPU. The jax feature above stays CPU-only so CI
+# never needs a GPU.
+[tool.pixi.feature.jax-cuda]
+platforms = ["linux-64-cuda"]
+
+[tool.pixi.feature.jax-cuda.dependencies]
+jax = ">=0.12,<0.13"
+jaxlib = { version = ">=0.12,<0.13", build = "cuda*" }
+cuda-nvcc = "*"
+
 [tool.pixi.feature.torch]
 platforms = ["linux-64", "osx-arm64"]
 
@@ -258,6 +270,14 @@ pytorch = { version = "*", build = "cpu*" }
 [tool.pixi.feature.mypy.dependencies]
 mypy = ">=2.4.0,<2.5.0"
 
+# conda_envs/pytensor_ml.yml is exported from dev by a pre-commit hook, for contributors who set up
+# with conda. The gpu-jax and gpu-metal files are kept by hand: `pixi workspace export
+# conda-environment -p` takes only a bare subdir, and exporting for one drops the features bound to
+# a named platform. A feature named `dev` would also pull in the `dev` extra from
+# [project.optional-dependencies], jax with it.
+[tool.pixi.feature.tools.dependencies]
+pre-commit = "*"
+
 [tool.pixi.environments]
 default = { features = ["cpu"] }
 docs = { features = ["cpu", "docs"] }
@@ -266,3 +286,7 @@ test-jax = { features = ["cpu", "test", "jax"] }
 test-mlx = { features = ["test", "mlx"] }
 test-torch = { features = ["cpu", "test", "torch"] }
 mypy = { features = ["cpu", "test", "mypy"] }
+dev = { features = ["cpu", "test", "mypy", "tools"] }
+gpu-jax = { features = ["test", "mypy", "tools", "jax-cuda"] }
+# mlx is the backend that runs on Apple's GPU, through Metal.
+gpu-metal = { features = ["test", "mypy", "tools", "mlx"] }

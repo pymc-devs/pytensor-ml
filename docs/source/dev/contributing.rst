@@ -27,6 +27,15 @@ locally:
     pixi run -e test pytest             # the core jobs; test-jax, test-mlx, test-torch for a backend
     pixi run -e mypy python scripts/run_mypy.py
 
+``conda_envs/pytensor_ml.yml`` is exported from the pixi ``dev`` environment by a
+pre-commit hook, for setting up with conda instead:
+
+.. code-block:: bash
+
+    conda env create -f conda_envs/pytensor_ml.yml
+    conda activate pytensor_ml
+    pip install -e .
+
 Docs are built with pixi, which owns its own environment:
 
 .. code-block:: bash
