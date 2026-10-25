@@ -156,15 +156,31 @@ files = ["pytensor_ml"]
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
+# The named entry carries the virtual package mlx needs: conda-forge builds it against macOS 14.5,
+# above pixi's default osx-arm64 target. Every environment gets every platform listed here unless a
+# feature narrows it, so the environments that are not for mlx take the cpu feature below.
+platforms = [
+    "osx-arm64",
+    "linux-64",
+    "win-64",
+    { name = "osx-arm64-mlx", platform = "osx-arm64", macos = "14.5" },
+]
+
+# Conda specs for the runtime dependencies, which pixi would otherwise install from PyPI wheels.
+# With a named platform in the workspace, `pixi lock --check` checks those wheels against the wrong
+# platform's virtual packages and fails at random: https://github.com/prefix-dev/pixi/issues/7040.
+[tool.pixi.dependencies]
+pytensor = ">=3.3.3,<3.4.0"
+numpy = "*"
+
+# Listing a platform by its exact name excludes the named variants on the same platform.
+[tool.pixi.feature.cpu]
 platforms = ["osx-arm64", "linux-64", "win-64"]
 
 # Autodoc imports pytensor_ml, so the docs environment needs the runtime stack alongside sphinx.
 # Read the Docs cannot read a pixi environment, so it builds from conda_envs/environment-docs.yml;
 # the two lists have to move together.
 [tool.pixi.feature.docs.dependencies]
-python = ">=3.12"
-pytensor = ">=3.3.3,<3.4.0"
-numpy = "*"
 safetensors = "*"
 # The gallery extension renders notebook thumbnails with matplotlib.
 matplotlib = "*"
@@ -199,5 +215,54 @@ docs-serve = { cmd = """\
     --ignore '*/source/api/generated/*'\
 """, cwd = "docs" }
 
+# The run_tests and mypy workflows install from these.
+[tool.pixi.feature.test.dependencies]
+safetensors = "*"
+scikit-learn = "*"
+# tests/optim/test_composition.py ships a configured rule to a worker.
+cloudpickle = "*"
+pytest = "*"
+pytest-cov = "*"
+pytest-xdist = "*"
+pytest-benchmark = "*"
+pytest-mock = "*"
+# tests/test_workflow_groups.py reads the CI matrix.
+pyyaml = "*"
+
+[tool.pixi.feature.test.pypi-dependencies]
+pytensor_ml = { path = ".", editable = true }
+
+# Each backend gets an environment of its own, so a dispatch job proves its backend works alone and
+# the plain test environment proves the library runs with none.
+[tool.pixi.feature.jax]
+platforms = ["linux-64", "osx-arm64"]
+
+[tool.pixi.feature.jax.dependencies]
+jax = ">=0.12,<0.13"
+jaxlib = { version = ">=0.12,<0.13", build = "cpu*" }
+
+[tool.pixi.feature.mlx]
+platforms = ["osx-arm64-mlx"]
+
+[tool.pixi.feature.mlx.dependencies]
+mlx = ">=0.32.4,<0.33"
+
+[tool.pixi.feature.torch]
+platforms = ["linux-64", "osx-arm64"]
+
+[tool.pixi.feature.torch.dependencies]
+pytorch = { version = "*", build = "cpu*" }
+
+# Pinned rather than floated: a local run that disagrees with CI about the version is a local run
+# that cannot predict CI.
+[tool.pixi.feature.mypy.dependencies]
+mypy = ">=2.4.0,<2.5.0"
+
 [tool.pixi.environments]
-docs = { features = ["docs"] }
+default = { features = ["cpu"] }
+docs = { features = ["cpu", "docs"] }
+test = { features = ["cpu", "test"] }
+test-jax = { features = ["cpu", "test", "jax"] }
+test-mlx = { features = ["test", "mlx"] }
+test-torch = { features = ["cpu", "test", "torch"] }
+mypy = { features = ["cpu", "test", "mypy"] }

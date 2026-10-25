@@ -32,6 +32,13 @@ repos:
 
 - repo: local
   hooks:
+    - id: pixi-lock-check
+      name: pixi.lock is in sync with pyproject.toml
+      entry: pixi lock --check
+      language: system
+      files: ^(pyproject\.toml|pixi\.lock)$
+      pass_filenames: false
+
     - id: notebook_name
       entry: '\(notebook_name\)='
       language: pygrep
