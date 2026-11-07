@@ -3,6 +3,7 @@ import pytensor.tensor as pt
 
 from pytensor.tensor.variable import TensorVariable
 
+from pytensor_ml.activations import _constant_like
 from pytensor_ml.base import Layer, UnaryLayerOp, _resolve_layer_name
 from pytensor_ml.layers.linear import Linear
 from pytensor_ml.state import Initializer
@@ -40,9 +41,9 @@ def _sdpa_graph(
     k = _repeat_kv(k, q.type.shape[-3], k.type.shape[-3])
     v = _repeat_kv(v, q.type.shape[-3], v.type.shape[-3])
 
-    # Built at the queries' dtype, so float32 attention stays float32 whatever floatX is
+    # Built at the queries' dtype, so attention keeps it whatever floatX is
     if scale is None:
-        scale_t = 1.0 / pt.sqrt(q.shape[-1].astype(q.dtype))
+        scale_t = _constant_like(1.0, q) / pt.sqrt(q.shape[-1].astype(q.dtype))
     else:
         scale_t = pt.as_tensor(scale, dtype=q.dtype)
 

@@ -72,17 +72,18 @@ def test_sdpa_causal_query_shorter_than_its_keys_sees_the_whole_prefix(rng):
     np.testing.assert_allclose(out, sdpa_np(q, k, v, is_causal=True), atol=1e-5)
 
 
+@pytest.mark.parametrize("dtype", ["float16", "float32"])
 @pytest.mark.parametrize("scale", [None, 0.5], ids=["default_scale", "custom_scale"])
 @pytest.mark.parametrize("is_causal", [False, True], ids=["full", "causal"])
-def test_sdpa_keeps_single_precision_under_a_double_precision_floatx(is_causal, scale):
-    """The scale and the causal mask follow the queries' dtype. Built at floatX's float64, they would
-    promote a float32 attention, and everything after it, to float64."""
-    q = pt.tensor("q", shape=(1, 2, 3, 4), dtype="float32")
+def test_sdpa_keeps_the_query_dtype_under_a_double_precision_floatx(is_causal, scale, dtype):
+    """The scale and the causal mask follow the queries' dtype. Built at floatX's float64, or from a
+    bare literal's float32, they would widen a narrower attention and everything after it."""
+    q = pt.tensor("q", shape=(1, 2, 3, 4), dtype=dtype)
 
     with pytensor.config.change_flags(floatX="float64"):
         out = scaled_dot_product_attention(q, q, q, is_causal=is_causal, scale=scale)
 
-    assert out.dtype == "float32"
+    assert out.dtype == dtype
 
 
 def test_sdpa_grouped_query(rng):

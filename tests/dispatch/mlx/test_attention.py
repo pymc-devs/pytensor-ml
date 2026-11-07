@@ -7,8 +7,11 @@ import pytest
 
 pytest.importorskip("mlx.core")
 
+from pytensor.compile.mode import MLX
+
 from pytensor_ml.layers.attention import scaled_dot_product_attention
 from tests.dispatch.mlx.test_basic import compare_mlx_and_py
+from tests.test_attention import sdpa_np
 
 floatX = pytensor.config.floatX
 # mlx computes in float32 on Metal, so compare against the float64 py oracle with a loose tolerance.
@@ -21,7 +24,7 @@ def rng():
 
 
 def symbolic_like(*arrays):
-    return [pt.tensor(name, shape=a.shape) for name, a in zip("qkv", arrays)]
+    return [pt.tensor(name, shape=a.shape, dtype=a.dtype) for name, a in zip("qkv", arrays)]
 
 
 @pytest.mark.parametrize("scale", [None, 0.5], ids=["default_scale", "custom_scale"])
@@ -31,6 +34,22 @@ def test_attention_matches_py(is_causal, scale, rng):
     q_sym, k_sym, v_sym = symbolic_like(q, k, v)
     out = scaled_dot_product_attention(q_sym, k_sym, v_sym, is_causal=is_causal, scale=scale)
     compare_mlx_and_py([q_sym, k_sym, v_sym], out, [q, k, v], assert_fn=assert_close)
+
+
+@pytest.mark.parametrize("scale", [None, 0.5], ids=["default_scale", "custom_scale"])
+@pytest.mark.parametrize("is_causal", [False, True], ids=["full", "causal"])
+def test_attention_keeps_float16(is_causal, scale, rng):
+    """mlx executes float16 natively, which numba cannot, so the values can only be checked here."""
+    q, k, v = (rng.normal(size=(2, 3, 5, 4)).astype("float16") for _ in range(3))
+    q_sym, k_sym, v_sym = symbolic_like(q, k, v)
+
+    out = scaled_dot_product_attention(q_sym, k_sym, v_sym, is_causal=is_causal, scale=scale)
+    computed = np.asarray(pytensor.function([q_sym, k_sym, v_sym], out, mode=MLX)(q, k, v))
+
+    assert out.dtype == computed.dtype == "float16"
+    expected = sdpa_np(*(a.astype("float64") for a in (q, k, v)), is_causal=is_causal, scale=scale)
+    # float16 resolves about 1e-3 at these magnitudes, which sets the floor on this tolerance.
+    np.testing.assert_allclose(computed.astype("float64"), expected, atol=5e-3)
 
 
 def test_grouped_query(rng):
