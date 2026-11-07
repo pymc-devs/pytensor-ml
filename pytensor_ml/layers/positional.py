@@ -92,7 +92,7 @@ def rotary_embedding(
     x = pt.as_tensor(x)
     position_ids = pt.as_tensor(position_ids)
 
-    _validate_options(pairing=pairing, scaling=scaling, scaling_factor=scaling_factor)
+    _validate_options(pairing=pairing, scaling=scaling, base=base, scaling_factor=scaling_factor)
     _validate_inputs(x=x, position_ids=position_ids)
 
     rotated = RotaryEmbeddingLayer(
@@ -156,7 +156,9 @@ class RotaryEmbedding:
         scaling: Scaling = "none",
         scaling_factor: float = 1.0,
     ):
-        _validate_options(pairing=pairing, scaling=scaling, scaling_factor=scaling_factor)
+        _validate_options(
+            pairing=pairing, scaling=scaling, base=base, scaling_factor=scaling_factor
+        )
 
         self.name = _resolve_layer_name(name, type(self).__name__, "base")
         self.base = base
@@ -227,12 +229,14 @@ class RotaryEmbeddingLayer(UnaryLayerOp):
         return [rotated]
 
 
-def _validate_options(pairing: str, scaling: str, scaling_factor: float) -> None:
-    """Reject unknown pairing and scaling options, and a scaling factor that is not positive."""
+def _validate_options(pairing: str, scaling: str, base: float, scaling_factor: float) -> None:
+    """Reject unknown pairing and scaling options, and frequencies that are not positive."""
     if pairing not in _PAIRINGS:
         raise ValueError(f"pairing must be one of {_PAIRINGS}, got {pairing!r}")
     if scaling not in _SCALINGS:
         raise ValueError(f"scaling must be one of {_SCALINGS}, got {scaling!r}")
+    if not base > 0:
+        raise ValueError(f"base must be positive, got {base}. Llama uses 10000.0.")
     if scaling != "none" and not scaling_factor > 0:
         raise ValueError(f"scaling_factor must be positive, got {scaling_factor}")
 
@@ -247,6 +251,11 @@ def _validate_inputs(x: TensorVariable, position_ids: TensorVariable) -> None:
 
     n_position_axes = position_ids.type.ndim
     n_non_feature_axes = x.type.ndim - 1
+    if n_position_axes == 0 and n_non_feature_axes > 0:
+        raise ValueError(
+            "position_ids is a scalar, but x has a sequence axis. Pass a vector with one position "
+            "per token, such as a one-element vector for a single token."
+        )
     if n_position_axes > n_non_feature_axes:
         raise ValueError(
             f"position_ids has {n_position_axes} dimensions, more than the {n_non_feature_axes} "
@@ -258,6 +267,17 @@ def _validate_inputs(x: TensorVariable, position_ids: TensorVariable) -> None:
         raise ValueError(
             f"RotaryEmbedding rotates channel pairs, so head_dim must be even, got {head_dim}. "
             "Project x to an even width first."
+        )
+
+    if n_position_axes == 0:
+        return
+
+    n_positions = position_ids.type.shape[-1]
+    n_tokens = x.type.shape[-2]
+    if n_positions is not None and n_tokens is not None and n_positions != n_tokens:
+        raise ValueError(
+            f"position_ids has {n_positions} entries for a sequence of {n_tokens} tokens. Pass one "
+            "position per token."
         )
 
 

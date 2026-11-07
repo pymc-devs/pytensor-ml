@@ -284,6 +284,11 @@ def test_unknown_head_dimension_is_supported(pairing, rng):
     )
 
 
+def test_scalar_position_with_a_sequence_axis_raises():
+    with pytest.raises(ValueError, match="one-element vector"):
+        rotary_embedding(pt.tensor("x", shape=(4, 8)), pt.lscalar("position"))
+
+
 def test_scalar_position_rotates_a_single_token(rng):
     x_np = rng.normal(size=8).astype(floatX)
     x = pt.tensor("x", shape=x_np.shape)
@@ -292,6 +297,19 @@ def test_scalar_position_rotates_a_single_token(rng):
     rotated = rotary_embedding(x, position).eval({x: x_np, position: 3})
 
     np.testing.assert_allclose(rotated, rope_np(x_np[None], np.array([3]))[0], atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "n_tokens, positions, match",
+    [
+        (5, np.array([3]), "1 entries for a sequence of 5 tokens"),
+        (1, np.arange(6), "6 entries for a sequence of 1 tokens"),
+    ],
+    ids=["one_position", "one_token"],
+)
+def test_static_position_count_must_match_the_sequence(n_tokens, positions, match):
+    with pytest.raises(ValueError, match=match):
+        rotary_embedding(pt.tensor("x", shape=(n_tokens, 8)), positions)
 
 
 def test_odd_head_dimension_raises():
@@ -316,8 +334,10 @@ def test_positions_wider_than_input_raises():
         ({"scaling": "yarn"}, "scaling must be one of"),
         ({"scaling": "linear", "scaling_factor": 0.0}, "scaling_factor must be positive"),
         ({"scaling": "linear", "scaling_factor": float("nan")}, "scaling_factor must be positive"),
+        ({"base": 0.0}, "base must be positive"),
+        ({"base": float("nan")}, "base must be positive"),
     ],
-    ids=["bad_pairing", "bad_scaling", "bad_factor", "nan_factor"],
+    ids=["bad_pairing", "bad_scaling", "bad_factor", "nan_factor", "zero_base", "nan_base"],
 )
 def test_invalid_options_raise(kwargs, match):
     with pytest.raises(ValueError, match=match):
