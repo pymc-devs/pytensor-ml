@@ -1,10 +1,10 @@
 import warnings
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Container, Iterable, Mapping, Sequence
 
 import numpy as np
 
-from pytensor.compile import SharedVariable
+from pytensor.compile import In, SharedVariable
 from pytensor.compile.builders import OpFromGraph
 from pytensor.graph import FunctionGraph, graph_inputs
 from pytensor.graph.basic import Apply, equal_computations
@@ -251,3 +251,80 @@ def collect_default_updates(
             rng_updates[input_rng] = default_update
 
     return rng_updates
+
+
+def collect_generator_updates(
+    outputs: Variable | Sequence[Variable],
+    *,
+    inputs: Sequence[Variable | In] | None = None,
+    already_written: Container[SharedVariable] = (),
+) -> dict[SharedVariable, Variable]:
+    """
+    Collect the next state of every generator the graph draws from, refusing one nothing can advance.
+
+    A draw inside a scan needs :func:`~pytensor_ml.pytensorf.rewrite.hoist_scan_draws` applied to ``outputs``
+    first, since a generator a loop cannot advance has no next state to collect.
+
+    Parameters
+    ----------
+    outputs : Variable or sequence of Variable
+        Graph outputs to trace back from.
+    inputs : sequence of Variable or In, optional
+        Inputs above which updates are not collected. Defaults to the graph roots.
+    already_written : container of shared variable, optional
+        The variables the caller writes themselves, typically the ``updates`` mapping itself. Any generator
+        among them is left out of the result and exempt from the check. Default is empty.
+
+    Returns
+    -------
+    generator_updates : dict
+        Mapping from each generator to the expression for its next state.
+
+    Examples
+    --------
+    Collect what a graph with a draw has to write so that the next call draws fresh values:
+
+    .. code-block:: python
+
+        import numpy as np
+        import pytensor
+        import pytensor.tensor as pt
+
+        from pytensor_ml.pytensorf.rng import collect_generator_updates
+
+        rng = pytensor.shared(np.random.default_rng(0), name="rng")
+        _, noise = pt.random.normal(size=(3,), rng=rng, return_next_rng=True)
+
+        generator_updates = collect_generator_updates(noise)
+    """
+    output_list = atleast_list(outputs)
+    input_variables = [inp.variable if isinstance(inp, In) else inp for inp in inputs or []]
+
+    # This warns for a generator with several distinct draws and returns no update for it. The check below
+    # reports the same thing better, but only for a generator the caller has not written an update for, so
+    # the warning is held rather than dropped and re-raised if that check stays quiet.
+    with warnings.catch_warnings(record=True) as multiple_client_warnings:
+        warnings.simplefilter("always", UserWarning)
+        generator_updates = collect_default_updates(output_list, inputs=input_variables)
+
+    frozen = [
+        generator
+        for generator in find_generators_drawn_from(output_list)
+        if generator not in generator_updates and generator not in already_written
+    ]
+    if frozen:
+        raise ValueError(
+            f"The graph draws from {[str(generator.name or generator) for generator in frozen]}, which "
+            "nothing advances, so every call repeats the same values. Two draws off one generator is the "
+            "cause: give each draw its own, or thread one through with `next_rng, draw = "
+            "pt.random.normal(rng=rng, return_next_rng=True)`."
+        )
+
+    for caught in multiple_client_warnings:
+        warnings.warn(caught.message, caught.category, stacklevel=3)
+
+    return {
+        generator: next_state
+        for generator, next_state in generator_updates.items()
+        if isinstance(generator, SharedVariable) and generator not in already_written
+    }
