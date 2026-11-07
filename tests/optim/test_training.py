@@ -1,26 +1,31 @@
 import numpy as np
+import pytensor
 import pytensor.tensor as pt
 import pytest
 
 from pytensor import config, shared
 from pytensor.gradient import DisconnectedInputError, disconnected_grad, grad, zero_grad
+from pytensor.scan import scan
 from sklearn.datasets import load_digits, make_regression
 from sklearn.preprocessing import MinMaxScaler, OneHotEncoder, StandardScaler
 
 from pytensor_ml.activations import LeakyReLU, Tanh
-from pytensor_ml.layers import BatchNorm, Linear, Sequential
+from pytensor_ml.checkpoint import load_state, save_state
+from pytensor_ml.layers import BatchNorm, Dropout, Input, Linear, Sequential
 from pytensor_ml.loss import CrossEntropy, SquaredError, supervised_loss
 from pytensor_ml.optim import (
     adam,
     adamw,
+    build_train_updates,
     chain,
     clip_by_global_norm,
     compile_train,
     cosine_schedule,
+    scale_by_schedule,
     sgd,
 )
 from pytensor_ml.optim.base import state_for
-from pytensor_ml.params import step_counter, trainable
+from pytensor_ml.params import StepCounter, step_counter, trainable
 from pytensor_ml.pytensorf import collect_non_trainable_params, collect_trainable_params
 from pytensor_ml.state import initialize_params
 from pytensor_ml.util import DataLoader
@@ -601,3 +606,142 @@ def test_compile_kwargs_is_not_mutated():
 
     assert "updates" in compile_kwargs
     assert float(call_count.get_value()) == 1.0
+
+
+def test_build_train_updates_is_the_step_compile_train_runs():
+    # `pytensor.function` threads nothing in, so only the returned updates can move the parameter, its
+    # momentum, or the clock the schedule reads.
+    p = trainable(np.array([2.0]), name="w")
+    loss = 0.5 * (p**2).sum()
+    rule = chain(adam(1.0), scale_by_schedule(cosine_schedule(1e-1, 10)))
+
+    step_loss, updates = build_train_updates(loss, rule, parameters=[p])
+    pytensor.function([], step_loss, updates=updates)()
+
+    twin = trainable(np.array([2.0]), name="w")
+    twin_loss = 0.5 * (twin**2).sum()
+    compile_train(twin_loss, rule, parameters=[twin], inputs=[])()
+
+    clocks = [variable for variable in updates if isinstance(variable, StepCounter)]
+    assert {int(clock.get_value()) for clock in clocks} == {1}
+    np.testing.assert_allclose(p.get_value(), twin.get_value())
+
+
+def test_build_train_updates_lists_what_only_an_extra_output_reads():
+    # A clock read by a diagnostic alone is still step state, so it has to be in the keys a checkpoint uses.
+    p = trainable(np.array([2.0]), name="w")
+    clock = step_counter(name="training_step")
+    loss = 0.5 * (p**2).sum()
+
+    _, updates = build_train_updates(loss, sgd(1e-1))
+    _, updates_with_diagnostic = build_train_updates(loss, sgd(1e-1), extra_outputs=[clock * 1.0])
+
+    assert clock not in updates
+    assert clock in updates_with_diagnostic
+
+
+def test_build_train_updates_runs_the_checks_of_compile_train():
+    p = trainable(np.array([2.0]), name="w")
+    loss = 0.5 * (p**2).sum()
+
+    with pytest.raises(ValueError, match="writes a variable the training step already"):
+        build_train_updates(loss, sgd(1e-1), extra_updates={p: p + 1.0})
+
+
+def test_build_train_updates_advances_a_generator_under_a_plain_compiler():
+    p = trainable(np.array([2.0]), name="w")
+    rng = shared(np.random.default_rng(0), name="rng")
+    _, noise = pt.random.normal(size=(1,), rng=rng, return_next_rng=True)
+    loss = (p * noise).sum()
+
+    step_loss, updates = build_train_updates(loss, sgd(0.0))
+    step = pytensor.function([], step_loss, updates=updates)
+
+    assert rng in updates
+    assert step() != step()
+
+
+def test_build_train_updates_lists_a_generator_drawn_inside_a_scan():
+    # The loop cannot advance this generator, so it has no next state until the draw is lifted out. The
+    # step's noise lives in the lifted graph, so the returned loss has to read it where `loss` does not.
+    p = trainable(np.array([2.0]), name="w")
+    rng = shared(np.random.default_rng(0), name="rng")
+
+    def one_step(total):
+        _, noise = pt.random.normal(size=(1,), rng=rng, return_next_rng=True)
+        return total + (p * noise).sum()
+
+    loss = scan(one_step, outputs_info=[pt.zeros(())], n_steps=5, return_updates=False)[-1]
+
+    step_loss, updates = build_train_updates(loss, sgd(0.0))
+    plain = pytensor.function([], step_loss, updates=updates)()
+    rng.set_value(np.random.default_rng(0))
+    compiled = compile_train(loss, sgd(0.0), inputs=[])()
+
+    assert rng in updates
+    np.testing.assert_allclose(plain, compiled)
+
+
+def test_build_train_updates_rejects_two_draws_off_one_generator():
+    p = trainable(np.array([2.0]), name="w")
+    rng = shared(np.random.default_rng(0), name="rng")
+    _, first = pt.random.normal(size=(1,), rng=rng, return_next_rng=True)
+    _, second = pt.random.uniform(size=(1,), rng=rng, return_next_rng=True)
+    loss = (p * first * second).sum()
+
+    with pytest.raises(ValueError, match="nothing advances"):
+        build_train_updates(loss, sgd(1e-1))
+
+
+def test_generators_sharing_a_name_are_not_a_state_name_collision():
+    # Unnamed dropout layers name their generators alike, and save_state numbers the repeats, so the step
+    # has to accept them.
+    X = Input("X", shape=(None, 4))
+    prediction = Sequential(Linear("fc", n_in=4, n_out=4), Dropout(p=0.5), Dropout(p=0.5))(X)
+    loss = (prediction**2).sum()
+
+    _, updates = build_train_updates(loss, sgd(1e-1), inputs=[X])
+
+    generators = [variable for variable in updates if variable.name.endswith("rng_0")]
+    assert len(generators) == 2
+    assert generators[0].name == generators[1].name
+
+
+def test_updates_from_build_train_updates_are_accepted_back_as_a_rule():
+    # `compile_train` takes an updates dict as a rule so two functions can share momentum. Generators are
+    # keys of that dict, and the state-name check has to accept unnamed dropout layers naming theirs alike.
+    X = Input("X", shape=(None, 4))
+    prediction = Sequential(
+        Linear("fc", n_in=4, n_out=4), BatchNorm("bn", n_in=4), Dropout(p=0.5), Dropout(p=0.5)
+    )(X)
+    loss = (prediction**2).sum()
+
+    _, updates = build_train_updates(loss, adam(1e-3), inputs=[X])
+    step = compile_train(loss, updates, inputs=[X])
+    _, rebuilt = build_train_updates(loss, updates, inputs=[X])
+
+    generators = [variable for variable in updates if variable.name.endswith("rng_0")]
+    before = [generator.get_value().bit_generator.state for generator in generators]
+    step(np.ones((8, 4)))
+    after = [generator.get_value().bit_generator.state for generator in generators]
+
+    assert rebuilt.keys() == updates.keys()
+    assert all(first != second for first, second in zip(before, after))
+
+
+def test_generators_sharing_a_name_survive_a_checkpoint_of_the_updates(tmp_path):
+    pytest.importorskip("safetensors")
+    X = Input("X", shape=(None, 4))
+    prediction = Sequential(Linear("fc", n_in=4, n_out=4), Dropout(p=0.5), Dropout(p=0.5))(X)
+    _, updates = build_train_updates((prediction**2).sum(), sgd(1e-1), inputs=[X])
+    state = list(updates)
+    generators = [variable for variable in state if variable.name.endswith("rng_0")]
+    saved = [generator.get_value().bit_generator.state for generator in generators]
+
+    save_state(state, tmp_path / "state.safetensors")
+    for generator in generators:
+        generator.set_value(np.random.default_rng(99))
+    load_state(state, tmp_path / "state.safetensors")
+
+    assert [generator.get_value().bit_generator.state for generator in generators] == saved
+    assert saved[0] != saved[1]

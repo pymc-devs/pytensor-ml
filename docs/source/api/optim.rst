@@ -10,6 +10,7 @@ Training
     :toctree: generated/
 
     compile_train
+    build_train_updates
 
 Update rules
 ------------

@@ -59,7 +59,7 @@ from pytensor_ml.optim.schedules import (
     polynomial_schedule,
     step_decay,
 )
-from pytensor_ml.optim.train import compile_train
+from pytensor_ml.optim.train import build_train_updates, compile_train
 from pytensor_ml.optim.transform import (
     add_weight_decay,
     scale,
@@ -90,6 +90,7 @@ __all__ = [
     "adamw_updates",
     "add_weight_decay",
     "apply_if_finite",
+    "build_train_updates",
     "chain",
     "clip_by_global_norm",
     "clip_by_value",
