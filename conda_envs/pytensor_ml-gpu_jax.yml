@@ -17,6 +17,6 @@ dependencies:
 - jax >=0.12,<0.13
 - jaxlib >=0.12,<0.13 cuda*
 - cuda-nvcc *
-- pytensor >=3.3.3,<3.4.0
+- pytensor >=3.3.7,<3.4.0
 - numpy *
 - python >=3.12

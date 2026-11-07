@@ -14,6 +14,6 @@ dependencies:
 - pyyaml *
 - mypy >=2.4.0,<2.5.0
 - pre-commit *
-- pytensor >=3.3.3,<3.4.0
+- pytensor >=3.3.7,<3.4.0
 - numpy *
 - python >=3.12
