@@ -1,4 +1,5 @@
 from collections.abc import Callable, Sequence
+from typing import NamedTuple
 
 import numpy as np
 import pytensor
@@ -6,6 +7,7 @@ import pytensor.tensor as pt
 
 from pytensor import config
 from pytensor.compile.sharedvalue import SharedVariable
+from pytensor.conditional import ifelse
 from pytensor.graph.basic import Variable
 from pytensor.scalar import upcast
 from pytensor.tensor import TensorVariable
@@ -24,7 +26,7 @@ from pytensor_ml.optim.base import (
     to_floatx,
 )
 from pytensor_ml.optim.lbfgs import LBFGSDirection, flat_dot
-from pytensor_ml.optim.line_search import LineSearch, search_along
+from pytensor_ml.optim.line_search import LineSearch, SearchResult, search_along
 from pytensor_ml.params import step_counter
 
 
@@ -947,6 +949,14 @@ def lbfgs_updates(
     with ``set_value`` for instance, forms a pair from a move the rule did not make, and that pair stays
     in the memory for up to ``memory_size`` steps.
 
+    With a search, the rule keeps the loss and gradients at the point it moved to, and the next step reuses
+    those gradients when its parameters equal what was kept and its loss agrees with it to within 1024
+    machine epsilons, relative to the kept loss. A step therefore runs one forward pass and one gradient
+    per trial. A clip after the rule, a ``set_value``, new data or a changed shared variable fails that
+    comparison and costs one more gradient, but a change that moves the loss by less than that tolerance
+    passes it. On mlx both sides of that choice run, so the gradients at the current point are computed
+    on every step.
+
     Parameters
     ----------
     loss_gradients_or_updates : TensorVariable, sequence of TensorVariable, or Updates
@@ -968,8 +978,9 @@ def lbfgs_updates(
         so a bound such as ``max_learning_rate`` caps that multiplier. The rule records the last
         multiplier in ``{namespace}/line_search/step_size``, the last search's trial count in
         ``{namespace}/line_search/evaluations``, and the number of searches that have failed so far in
-        ``{namespace}/line_search/failures``. Default None, which takes every step at
-        ``learning_rate``. The :func:`~pytensor_ml.optim.lbfgs` alias searches by default.
+        ``{namespace}/line_search/failures``. The trial it keeps is in the ``evaluated``, ``value``,
+        ``point`` and ``gradient`` slots of ``{namespace}/line_search``. Default None, which takes every
+        step at ``learning_rate``. The :func:`~pytensor_ml.optim.lbfgs` alias searches by default.
     namespace : str
         Prefix for every state slot this rule allocates, so two rules in one graph keep separate state
         rather than reusing each other's. Default is the rule's own name.
@@ -1016,6 +1027,11 @@ def lbfgs_updates(
     incoming, gradients = gradients_to_descend(loss_gradients_or_updates, parameters, namespace)
     step_count = step_counter(f"{namespace}/step_count")
     learning_rate = to_floatx(rate_on(learning_rate, step_count))
+
+    loss_gradients = gradients
+    if line_search is not None and loss is not None:
+        kept = _allocate_kept_trial(loss, parameters, namespace)
+        gradients = _reuse_kept_gradients(kept, loss, parameters, loss_gradients)
 
     pairs_written = scalar_state(f"{namespace}/pairs_written", dtype="int64")
     previous_values = [state_for(p, f"{namespace}/previous_value") for p in parameters]
@@ -1119,9 +1135,18 @@ def lbfgs_updates(
             updates[parameter] = parameter + step
         return updates
 
-    search = search_along(loss, parameters, gradients, steps, line_search)
+    search = search_along(
+        loss,
+        parameters,
+        loss_gradients,
+        steps,
+        line_search,
+        start_gradients=gradients,
+    )
     for parameter, step in zip(parameters, steps):
         updates[parameter] = parameter + search.step_size.astype(parameter.dtype) * step
+
+    _keep_last_trial(updates, kept, search, parameters)
 
     step_size = scalar_state(f"{namespace}/line_search/step_size", fill_value=1.0)
     evaluations = scalar_state(f"{namespace}/line_search/evaluations", dtype="int64")
@@ -1131,3 +1156,63 @@ def lbfgs_updates(
     updates[failures] = failures + search.failed.astype(failures.dtype)
 
     return updates
+
+
+class _KeptTrial(NamedTuple):
+    """The point a search last moved to, with the loss and gradients measured there."""
+
+    evaluated: Parameter
+    value: Parameter
+    points: list[Parameter]
+    gradients: list[Parameter]
+
+
+def _allocate_kept_trial(
+    loss: TensorVariable, parameters: Sequence[Parameter], namespace: str
+) -> _KeptTrial:
+    return _KeptTrial(
+        evaluated=scalar_state(f"{namespace}/line_search/evaluated", dtype="bool"),
+        value=scalar_state(f"{namespace}/line_search/value", dtype=loss.dtype),
+        points=[state_for(p, f"{namespace}/line_search/point") for p in parameters],
+        gradients=[state_for(p, f"{namespace}/line_search/gradient") for p in parameters],
+    )
+
+
+def _reuse_kept_gradients(
+    kept: _KeptTrial,
+    loss: TensorVariable,
+    parameters: Sequence[Parameter],
+    gradients: Sequence[TensorVariable],
+) -> list[TensorVariable]:
+    # Equal parameters are not enough: the loss also reads data and shared variables, and comparing the
+    # loss is what lets a changed objective, or a NaN batch, reach the search and a guard. The kept value
+    # comes out of the search's own compiled graph, so it agrees with `loss` only up to rounding.
+    rounding = 1024 * np.finfo(loss.dtype).eps
+    reusable = kept.evaluated & pt.isclose(loss, kept.value, rtol=rounding, atol=0.0)
+    for parameter, point in zip(parameters, kept.points):
+        reusable = reusable & pt.all(pt.eq(parameter, point))
+    reused: list[TensorVariable] = [
+        old.astype(fresh.dtype) for old, fresh in zip(kept.gradients, gradients)
+    ]
+    return ifelse(reusable, reused, list(gradients))  # type: ignore[return-value]
+
+
+def _keep_last_trial(
+    updates: Updates,
+    kept: _KeptTrial,
+    search: SearchResult,
+    parameters: Sequence[Parameter],
+) -> None:
+    # A search that fell back moved short of its last trial, so what is kept stays as it was. It still
+    # describes the point it was measured at, which the next step compares against.
+    took_last_trial = pt.eq(search.step_size, search.trial_step)
+    updates[kept.evaluated] = kept.evaluated | took_last_trial
+    updates[kept.value] = pt.switch(took_last_trial, search.trial_value, kept.value).astype(
+        kept.value.dtype
+    )
+    for index, parameter in enumerate(parameters):
+        point, gradient = kept.points[index], kept.gradients[index]
+        updates[point] = pt.switch(took_last_trial, updates[parameter], point)
+        updates[gradient] = pt.switch(
+            took_last_trial, search.trial_gradients[index], gradient
+        ).astype(gradient.dtype)
