@@ -32,6 +32,7 @@ jobs:
             paths: |
               tests/test_transformer.py
               tests/test_layers.py
+              tests/test_positional.py
           - name: recurrent
             paths: |
               tests/test_recurrent.py

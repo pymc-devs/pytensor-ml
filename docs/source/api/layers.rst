@@ -72,6 +72,7 @@ Normalization and regularization
 
     BatchNorm
     LayerNorm
+    RMSNorm
     GroupNorm
     Dropout
 
@@ -102,3 +103,5 @@ Attention and transformers
     FeedForward
     TransformerBlock
     scaled_dot_product_attention
+    RotaryEmbedding
+    rotary_embedding
