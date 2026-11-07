@@ -72,6 +72,7 @@ Normalization and regularization
 
     BatchNorm
     LayerNorm
+    RMSNorm
     GroupNorm
     Dropout
 
