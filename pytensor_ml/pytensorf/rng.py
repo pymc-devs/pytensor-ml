@@ -4,7 +4,7 @@ from collections.abc import Container, Iterable, Mapping, Sequence
 
 import numpy as np
 
-from pytensor.compile import In, SharedVariable
+from pytensor.compile import SharedVariable
 from pytensor.compile.builders import OpFromGraph
 from pytensor.graph import FunctionGraph, graph_inputs
 from pytensor.graph.basic import Apply, equal_computations
@@ -256,7 +256,6 @@ def collect_default_updates(
 def collect_generator_updates(
     outputs: Variable | Sequence[Variable],
     *,
-    inputs: Sequence[Variable | In] | None = None,
     already_written: Container[SharedVariable] = (),
 ) -> dict[SharedVariable, Variable]:
     """
@@ -269,8 +268,6 @@ def collect_generator_updates(
     ----------
     outputs : Variable or sequence of Variable
         Graph outputs to trace back from.
-    inputs : sequence of Variable or In, optional
-        Inputs above which updates are not collected. Defaults to the graph roots.
     already_written : container of shared variable, optional
         The variables the caller writes themselves, typically the ``updates`` mapping itself. Any generator
         among them is left out of the result and exempt from the check. Default is empty.
@@ -298,14 +295,13 @@ def collect_generator_updates(
         generator_updates = collect_generator_updates(noise)
     """
     output_list = atleast_list(outputs)
-    input_variables = [inp.variable if isinstance(inp, In) else inp for inp in inputs or []]
 
     # This warns for a generator with several distinct draws and returns no update for it. The check below
     # reports the same thing better, but only for a generator the caller has not written an update for, so
     # the warning is held rather than dropped and re-raised if that check stays quiet.
     with warnings.catch_warnings(record=True) as multiple_client_warnings:
         warnings.simplefilter("always", UserWarning)
-        generator_updates = collect_default_updates(output_list, inputs=input_variables)
+        generator_updates = collect_default_updates(output_list)
 
     frozen = [
         generator

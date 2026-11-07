@@ -108,7 +108,7 @@ def function(
     if random_seed is not None:
         reseed_rngs(find_rng_nodes(read_variables), random_seed)
 
-    rng_updates = collect_generator_updates(read_variables, inputs=inputs, already_written=updates)
+    rng_updates = collect_generator_updates(read_variables, already_written=updates)
 
     # A clock's advance is always derivable, unlike a generator's next state, so an unwritten one is
     # threaded rather than reported.
