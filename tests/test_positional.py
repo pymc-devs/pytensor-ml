@@ -217,6 +217,21 @@ def test_rope_composes_with_attention(rng):
     np.testing.assert_allclose(result, expected, atol=1e-6)
 
 
+@pytest.mark.parametrize(
+    "floatx, dtype",
+    [("float32", "float32"), ("float64", "float32"), ("float64", "float16")],
+    ids=["at_floatx", "float32_under_float64", "float16_under_float64"],
+)
+@pytest.mark.parametrize("scaling", ["none", "linear", "ntk"])
+def test_rope_keeps_the_input_dtype(floatx, dtype, scaling):
+    with pytensor.config.change_flags(floatX=floatx):
+        x = pt.tensor("x", shape=(None, 8), dtype=dtype)
+
+        rotated = rotary_embedding(x, pt.lvector("positions"), scaling=scaling, scaling_factor=2.0)
+
+        assert rotated.dtype == dtype
+
+
 @pytest.mark.parametrize("pairing", ["half", "adjacent"])
 def test_rope_input_gradient_matches_transpose_rotation(pairing, rng):
     """Backpropagation applies the inverse rotation to the output cotangent."""

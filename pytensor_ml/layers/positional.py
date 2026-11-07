@@ -2,6 +2,7 @@ from typing import Literal, get_args
 
 import pytensor.tensor as pt
 
+from pytensor.scalar import upcast
 from pytensor.tensor.type import float_dtypes
 from pytensor.tensor.variable import TensorVariable
 
@@ -200,17 +201,20 @@ class RotaryEmbeddingLayer(UnaryLayerOp):
         head_dim = x.shape[-1] if static_head_dim is None else static_head_dim
         dtype = x.type.dtype
 
+        # float16 cannot count past 2048 exactly or hold a base past 65504, so the angles are built
+        # at float32 or wider and only their cosines and sines return to the input's dtype.
+        angle_dtype = upcast(dtype, "float32")
         angular_frequencies = _angular_frequencies(
             head_dim=head_dim,
-            dtype=dtype,
+            dtype=angle_dtype,
             base=self.base,
             scaling=self.scaling,
             scaling_factor=self.scaling_factor,
         )
-        angles = position_ids[..., None].astype(dtype) * angular_frequencies
+        angles = position_ids[..., None].astype(angle_dtype) * angular_frequencies
         angles = _add_head_axes(angles=angles, x=x, position_ids=position_ids)
-        cos = pt.cos(angles)
-        sin = pt.sin(angles)
+        cos = pt.cos(angles).astype(dtype)
+        sin = pt.sin(angles).astype(dtype)
 
         first, second = _split_pairs(x=x, pairing=self.pairing, head_dim=head_dim)
         rotated = _join_pairs(
