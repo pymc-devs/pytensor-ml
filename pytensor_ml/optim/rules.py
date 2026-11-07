@@ -1158,6 +1158,9 @@ def lbfgs_updates(
     return updates
 
 
+_KEPT_LOSS_TOLERANCE_IN_EPSILONS = 1024
+
+
 class _KeptTrial(NamedTuple):
     """The point a search last moved to, with the loss and gradients measured there."""
 
@@ -1187,8 +1190,8 @@ def _reuse_kept_gradients(
     # Equal parameters are not enough: the loss also reads data and shared variables, and comparing the
     # loss is what lets a changed objective, or a NaN batch, reach the search and a guard. The kept value
     # comes out of the search's own compiled graph, so it agrees with `loss` only up to rounding.
-    rounding = 1024 * np.finfo(loss.dtype).eps
-    reusable = kept.evaluated & pt.isclose(loss, kept.value, rtol=rounding, atol=0.0)
+    tolerance = _KEPT_LOSS_TOLERANCE_IN_EPSILONS * np.finfo(loss.dtype).eps
+    reusable = kept.evaluated & pt.isclose(loss, kept.value, rtol=tolerance, atol=0.0)
     for parameter, point in zip(parameters, kept.points):
         reusable = reusable & pt.all(pt.eq(parameter, point))
     reused: list[TensorVariable] = [
@@ -1210,9 +1213,10 @@ def _keep_last_trial(
     updates[kept.value] = pt.switch(took_last_trial, search.trial_value, kept.value).astype(
         kept.value.dtype
     )
-    for index, parameter in enumerate(parameters):
-        point, gradient = kept.points[index], kept.gradients[index]
+    for parameter, point, gradient, trial_gradient in zip(
+        parameters, kept.points, kept.gradients, search.trial_gradients
+    ):
         updates[point] = pt.switch(took_last_trial, updates[parameter], point)
-        updates[gradient] = pt.switch(
-            took_last_trial, search.trial_gradients[index], gradient
-        ).astype(gradient.dtype)
+        updates[gradient] = pt.switch(took_last_trial, trial_gradient, gradient).astype(
+            gradient.dtype
+        )

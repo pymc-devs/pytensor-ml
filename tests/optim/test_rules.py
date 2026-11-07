@@ -887,14 +887,40 @@ def test_lbfgs_measures_the_objective_of_each_step_when_data_and_shared_state_ch
         np.testing.assert_array_equal(p.get_value(), evaluating_p.get_value())
 
 
+def test_lbfgs_sees_a_change_of_the_objective_far_smaller_than_the_loss():
+    def fitted(rule):
+        p = trainable(np.array([2.0, -1.0]), name="w")
+        targets = pt.vector("targets")
+        loss = ((p - targets) ** 2).sum() + (p**4).sum()
+        return p, compile_train(loss, rule, inputs=[targets])
+
+    p, step = fitted(lbfgs(memory_size=4))
+    evaluating_p, evaluating_step = fitted(lbfgs(memory_size=4))
+    evaluated = next(
+        variable
+        for variable in evaluating_step.get_shared()
+        if "line_search/evaluated" in str(variable.name)
+    )
+    targets = np.array([1.0, 1.0], dtype=floatX)
+    for _ in range(3):
+        step(targets)
+        evaluating_step(targets)
+
+    nudged = targets + np.sqrt(np.finfo(floatX).eps)
+    evaluated.set_value(False)
+    step(nudged)
+    evaluating_step(nudged)
+
+    np.testing.assert_array_equal(p.get_value(), evaluating_p.get_value())
+
+
 def test_lbfgs_keeps_its_trial_only_when_the_search_moved_there():
     def rosenbrock(rule):
         p = trainable(np.array([-1.2, 1.0]), name="x")
         loss = (1.0 - p[0]) ** 2 + 100.0 * (p[1] - p[0] ** 2) ** 2
         return p, compile_train(loss, rule, inputs=[])
 
-    rule = lbfgs(line_search=zoom_line_search(2))
-    p, step = rosenbrock(rule)
+    p, step = rosenbrock(lbfgs(line_search=zoom_line_search(2)))
     evaluating_p, evaluating_step = rosenbrock(lbfgs(line_search=zoom_line_search(2)))
     state = {variable.name: variable for variable in evaluating_step.get_shared()}
 

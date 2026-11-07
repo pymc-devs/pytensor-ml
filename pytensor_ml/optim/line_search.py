@@ -40,7 +40,11 @@ class LineSearch(Protocol):
         slope0: TensorVariable,
         guess: TensorVariable,
     ) -> tuple[State, TensorVariable]:
-        """Evaluate one trial, calling ``value_and_slope`` once, and return the next state and whether to stop."""
+        """
+        Evaluate one trial and return the next state and whether to stop.
+
+        The search keeps the last ``value_and_slope`` call as its trial, so call it exactly once.
+        """
         ...
 
     def finalize(self, state: State) -> tuple[TensorVariable, TensorVariable]:
@@ -646,4 +650,11 @@ def search_along(
     found, did_fail, evaluations, last_step, last_value, *last_gradients = search.make_node(
         *inputs
     ).outputs
-    return SearchResult(found, did_fail, evaluations, last_step, last_value, tuple(last_gradients))
+    return SearchResult(
+        step_size=found,
+        failed=did_fail,
+        evaluations=evaluations,
+        trial_step=last_step,
+        trial_value=last_value,
+        trial_gradients=tuple(last_gradients),
+    )
