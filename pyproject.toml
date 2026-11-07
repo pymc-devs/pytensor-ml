@@ -35,7 +35,7 @@ keywords = [
 ]
 
 dependencies = [
-  "pytensor>=3.3.7,<4.0.0",
+  "pytensor>=3.3.8,<4.0.0",
   "numpy",
 ]
 
@@ -172,7 +172,7 @@ platforms = [
 # With a named platform in the workspace, `pixi lock --check` checks those wheels against the wrong
 # platform's virtual packages and fails at random: https://github.com/prefix-dev/pixi/issues/7040.
 [tool.pixi.dependencies]
-pytensor = ">=3.3.7,<3.4.0"
+pytensor = ">=3.3.8,<3.4.0"
 numpy = "*"
 
 # Listing a platform by its exact name excludes the named variants on the same platform.
