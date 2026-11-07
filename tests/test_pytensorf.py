@@ -26,6 +26,7 @@ from pytensor_ml.pytensorf import (
     rewrite_for_prediction,
     rewrite_pregrad,
 )
+from pytensor_ml.pytensorf.rng import collect_generator_updates
 from pytensor_ml.state import initialize_params
 
 
@@ -606,3 +607,23 @@ def test_one_step_advances_every_kind_of_state():
     assert [int(count) for count in counts] == [0, 1, 2]
     assert len(set(float(draw) for draw in draws)) == 3
     assert not np.allclose(running_mean.get_value(), before)
+
+
+def test_collect_generator_updates_accepts_a_bare_output():
+    rng = shared(np.random.default_rng(0), name="rng")
+    next_rng, draw = ptr.normal(rng=rng, return_next_rng=True)
+
+    assert collect_generator_updates(draw) == {rng: next_rng}
+
+
+def test_a_generator_the_caller_writes_is_left_out_and_not_refused():
+    """Two draws leave the generator with no default next state, which is the caller's to settle. The
+    refusal stands down for a generator they write, and pytensor's warning about the draws remains."""
+    rng = shared(np.random.default_rng(0), name="rng")
+    _, first = ptr.normal(rng=rng, return_next_rng=True)
+    _, second = ptr.uniform(rng=rng, return_next_rng=True)
+
+    with pytest.warns(UserWarning, match="multiple distinct clients"):
+        collected = collect_generator_updates([first, second], already_written=[rng])
+
+    assert collected == {}

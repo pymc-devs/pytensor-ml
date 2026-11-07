@@ -10,6 +10,7 @@ from pytensor.graph.op import io_connection_pattern
 from pytensor.tensor import TensorVariable
 from pytensor.tensor.sharedvar import TensorSharedVariable
 
+from pytensor_ml.checkpoint import holds_generator
 from pytensor_ml.params import StepCounter, TrainableParameter, step_counter
 from pytensor_ml.pytensorf import rewrite_pregrad
 
@@ -583,11 +584,12 @@ def scalar_state(name: str, fill_value: float = 0.0, dtype: str | None = None) -
 
 def require_unique_state_names(updates: Updates) -> None:
     """
-    Raise if two distinct shared variables in ``updates`` share a name.
+    Raise if two distinct non-generator shared variables in ``updates`` share a name.
 
     Optimizer state is matched by name at serialization boundaries, so two buffers with the same name would
     silently alias each other on save or restore. Runtime is unaffected — the updates dict is keyed by object
-    identity — so this guards only the serialization contract.
+    identity — so this guards only the serialization contract. Generators are exempt: unnamed dropout layers
+    name theirs alike, and :func:`~pytensor_ml.checkpoint.save_state` numbers the repeats.
 
     Parameters
     ----------
@@ -597,7 +599,7 @@ def require_unique_state_names(updates: Updates) -> None:
     seen: set[str] = set()
     for variable in updates:
         name = variable.name
-        if name is None:
+        if name is None or holds_generator(variable):
             continue
         if name in seen:
             raise ValueError(

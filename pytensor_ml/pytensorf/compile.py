@@ -1,5 +1,3 @@
-import warnings
-
 from collections.abc import Sequence
 
 import pytensor
@@ -21,8 +19,7 @@ from pytensor_ml.pytensorf.rewrite import (
 from pytensor_ml.pytensorf.rng import (
     SeedSequenceSeed,
     atleast_list,
-    collect_default_updates,
-    find_generators_drawn_from,
+    collect_generator_updates,
     find_rng_nodes,
     reseed_rngs,
 )
@@ -87,7 +84,6 @@ def function(
         first, second = forward(np.zeros((4, 64))), forward(np.zeros((4, 64)))
     """
     updates = dict(kwargs.pop("updates", {}))
-    input_variables = [inp.variable if isinstance(inp, pytensor.In) else inp for inp in inputs]
     # Updates count as readers: a generator a rule draws its noise from is read by the update expression
     # and often by nothing else, and one read by both an output and an update is read twice.
     read_variables = [
@@ -112,28 +108,7 @@ def function(
     if random_seed is not None:
         reseed_rngs(find_rng_nodes(read_variables), random_seed)
 
-    # This warns for a generator with several distinct draws and returns no update for it. The check below
-    # reports the same thing better, but only for a generator the caller has not written an update for, so
-    # the warning is held rather than dropped and re-raised if that check stays quiet.
-    with warnings.catch_warnings(record=True) as multiple_client_warnings:
-        warnings.simplefilter("always", UserWarning)
-        rng_updates = collect_default_updates(inputs=input_variables, outputs=read_variables)
-
-    frozen = [
-        generator
-        for generator in find_generators_drawn_from(read_variables)
-        if generator not in rng_updates and generator not in updates
-    ]
-    if frozen:
-        raise ValueError(
-            f"The graph draws from {[str(generator.name or generator) for generator in frozen]}, which "
-            "nothing advances, so every call repeats the same values. Two draws off one generator is the "
-            "cause: give each draw its own, or thread one through with `next_rng, draw = "
-            "pt.random.normal(rng=rng, return_next_rng=True)`."
-        )
-
-    for caught in multiple_client_warnings:
-        warnings.warn(caught.message, caught.category, stacklevel=2)
+    rng_updates = collect_generator_updates(read_variables, already_written=updates)
 
     # A clock's advance is always derivable, unlike a generator's next state, so an unwritten one is
     # threaded rather than reported.
