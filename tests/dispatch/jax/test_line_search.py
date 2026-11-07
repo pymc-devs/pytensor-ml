@@ -21,7 +21,7 @@ def test_the_search_takes_the_pinned_step_on_jax(case, expected):
     loss = OBJECTIVES[objective](X)
     [gradient] = pt.grad(loss, [X])
     result = search_along(loss, [X], [gradient], [D], zoom_line_search(max_steps))
-    run = pytensor.function([X, D], list(result), mode=jax_mode)
+    run = pytensor.function([X, D], list(result[:3]), mode=jax_mode)
     direction = direction_of(pytensor.function([X], gradient)(x0))
 
     step_size, failed, evaluations = run(x0, direction)
@@ -77,11 +77,14 @@ def test_the_search_on_jax_matches_the_default_backend(
     )
     direction = direction_of(pytensor.function([X], gradient)(x0))
 
-    on_jax = pytensor.function([X, D], list(result), mode=jax_mode)(x0, direction)
-    on_default = pytensor.function([X, D], list(result))(x0, direction)
+    outputs = [*result[:3], result.trial_step, result.trial_value, *result.trial_gradients]
+    on_jax = pytensor.function([X, D], outputs, mode=jax_mode)(x0, direction)
+    on_default = pytensor.function([X, D], outputs)(x0, direction)
 
     np.testing.assert_allclose(float(on_jax[0]), float(on_default[0]), rtol=1e-9)
     assert (bool(on_jax[1]), int(on_jax[2])) == (bool(on_default[1]), int(on_default[2]))
+    for trial_on_jax, trial_on_default in zip(on_jax[3:], on_default[3:]):
+        np.testing.assert_allclose(trial_on_jax, trial_on_default, rtol=1e-9, atol=1e-12)
 
 
 def test_lbfgs_with_a_line_search_follows_optax_on_jax():

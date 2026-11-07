@@ -18,7 +18,8 @@ def jax_funcify_LineSearchOp(op, node=None, **kwargs):
 
     def line_search(*inputs):
         value0, slope0 = inputs[2 * n_parameters : 2 * n_parameters + 2]
-        initial = tuple(jnp.asarray(field) for field in start(value0, slope0))
+        directions = inputs[n_parameters : 2 * n_parameters]
+        initial = tuple(jnp.asarray(field) for field in start(value0, slope0, *directions))
 
         def keep_going(carry):
             iteration, stop, _ = carry

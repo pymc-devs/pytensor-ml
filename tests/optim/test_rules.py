@@ -1,3 +1,4 @@
+import ctypes
 import inspect
 
 from itertools import pairwise
@@ -8,6 +9,9 @@ import pytensor.tensor as pt
 import pytest
 
 from pytensor.gradient import DisconnectedInputError, grad
+from pytensor.graph.basic import Apply
+from pytensor.graph.op import Op
+from pytensor.link.numba.dispatch.basic import numba_funcify, numba_njit
 
 from pytensor_ml import params
 from pytensor_ml.checkpoint import load_state, save_state
@@ -790,6 +794,186 @@ def test_lbfgs_resumes_its_trajectory_from_a_checkpoint(tmp_path, line_search):
     second = [float(step()) for _ in range(4)]
 
     np.testing.assert_array_equal(second, first)
+
+
+def _quartic(rule):
+    A = np.array([[3.0, 0.5], [0.5, 1.0]])
+    p = trainable(np.array([5.0, -3.0]), name="w")
+    loss = 0.5 * p @ pt.constant(A, dtype=floatX) @ p + (p**4).sum()
+    return p, loss, compile_train(loss, rule, inputs=[])
+
+
+class _Counted(Op):
+    """Pass a vector through and count the calls, so a test sees what a compiled step really ran."""
+
+    def __init__(self, backward=None):
+        self.calls = 0
+        self.backward = backward
+
+    def make_node(self, vector):
+        return Apply(self, [vector], [vector.type()])
+
+    def perform(self, node, inputs, outputs):
+        raise NotImplementedError("A count only means something on the backend under test.")
+
+    def pullback(self, inputs, outputs, cotangents):
+        return [self.backward(cotangents[0])]
+
+
+@numba_funcify.register(_Counted)
+def _numba_funcify_counted(op, **kwargs):
+    def count():
+        op.calls += 1
+
+    # Held on the Op because the jitted function keeps only the callback's address.
+    op.callback = ctypes.CFUNCTYPE(None)(count)
+    callback = op.callback
+
+    @numba_njit
+    def counted(vector):
+        callback()
+        return vector
+
+    return counted
+
+
+def test_a_searching_lbfgs_step_takes_one_forward_pass_and_one_gradient_per_trial():
+    """A network, because rounding separates the search's loss from the step's on a graph this size."""
+    rng = np.random.default_rng(0)
+    data = pt.constant(rng.normal(size=(32, 3)), dtype=floatX)
+    targets = pt.constant(rng.normal(size=32), dtype=floatX)
+    backward = _Counted()
+    forward = _Counted(backward)
+    p = trainable(rng.normal(size=20) / 2, name="w")
+    weights = forward(p)
+    hidden = pt.tanh(data @ weights[:12].reshape((3, 4)) + weights[12:16])
+    loss = ((pt.tanh(hidden @ weights[16:]).sum() - targets) ** 2).mean()
+    step = compile_train(loss, lbfgs(memory_size=4), inputs=[])
+    state = {variable.name: variable for variable in step.get_shared()}
+
+    trials = 0
+    for _ in range(40):
+        step()
+        trials += int(state["lbfgs/line_search/evaluations"].get_value())
+
+    # A failed search can stop short of its last trial, and the next step then has nothing to reuse.
+    failures = int(state["lbfgs/line_search/failures"].get_value())
+    assert trials + 1 <= backward.calls <= trials + 1 + failures
+    assert forward.calls == trials + 40
+
+
+def _penalized(rule):
+    p = trainable(np.array([2.0, -1.0]), name="w")
+    weight = pytensor.shared(np.array(0.5, dtype=floatX), name="weight")
+    targets = pt.vector("targets")
+    loss = ((p - targets) ** 2).sum() + weight * (p**4).sum()
+    step = compile_train(loss, rule, inputs=[targets], extra_updates={weight: weight * 1.5})
+    return p, step
+
+
+def test_lbfgs_measures_the_objective_of_each_step_when_data_and_shared_state_change():
+    p, step = _penalized(lbfgs(memory_size=4))
+    evaluating_p, evaluating_step = _penalized(lbfgs(memory_size=4))
+    evaluated = next(
+        variable
+        for variable in evaluating_step.get_shared()
+        if "line_search/evaluated" in str(variable.name)
+    )
+
+    for targets in ([1.0, 1.0], [1.0, 1.0], [-3.0, 2.0], [-3.0, 2.0], [0.0, 4.0]):
+        batch = np.array(targets, dtype=floatX)
+        evaluated.set_value(False)
+        assert float(step(batch)) == float(evaluating_step(batch))
+        np.testing.assert_array_equal(p.get_value(), evaluating_p.get_value())
+
+
+def test_lbfgs_sees_a_change_of_the_objective_far_smaller_than_the_loss():
+    def fitted(rule):
+        p = trainable(np.array([2.0, -1.0]), name="w")
+        targets = pt.vector("targets")
+        loss = ((p - targets) ** 2).sum() + (p**4).sum()
+        return p, compile_train(loss, rule, inputs=[targets])
+
+    p, step = fitted(lbfgs(memory_size=4))
+    evaluating_p, evaluating_step = fitted(lbfgs(memory_size=4))
+    evaluated = next(
+        variable
+        for variable in evaluating_step.get_shared()
+        if "line_search/evaluated" in str(variable.name)
+    )
+    targets = np.array([1.0, 1.0], dtype=floatX)
+    for _ in range(3):
+        step(targets)
+        evaluating_step(targets)
+
+    nudged = targets + np.sqrt(np.finfo(floatX).eps)
+    evaluated.set_value(False)
+    step(nudged)
+    evaluating_step(nudged)
+
+    np.testing.assert_array_equal(p.get_value(), evaluating_p.get_value())
+
+
+def test_lbfgs_keeps_its_trial_only_when_the_search_moved_there():
+    def rosenbrock(rule):
+        p = trainable(np.array([-1.2, 1.0]), name="x")
+        loss = (1.0 - p[0]) ** 2 + 100.0 * (p[1] - p[0] ** 2) ** 2
+        return p, compile_train(loss, rule, inputs=[])
+
+    p, step = rosenbrock(lbfgs(line_search=zoom_line_search(2)))
+    evaluating_p, evaluating_step = rosenbrock(lbfgs(line_search=zoom_line_search(2)))
+    state = {variable.name: variable for variable in evaluating_step.get_shared()}
+
+    for _ in range(40):
+        step()
+        state["lbfgs/line_search/evaluated"].set_value(False)
+        evaluating_step()
+
+    assert state["lbfgs/line_search/failures"].get_value() > 0
+    np.testing.assert_allclose(p.get_value(), evaluating_p.get_value(), rtol=1e-10)
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [[], [clip_by_global_norm(0.5)]],
+    ids=["kept_point_is_the_next_point", "clip_moves_off_the_kept_point"],
+)
+def test_lbfgs_takes_the_steps_of_a_rule_that_evaluates_at_every_step(tail):
+    p, _, step = _quartic(chain(lbfgs(memory_size=4), *tail))
+    evaluating_p, _, evaluating_step = _quartic(chain(lbfgs(memory_size=4), *tail))
+    evaluated = next(
+        variable
+        for variable in evaluating_step.get_shared()
+        if "line_search/evaluated" in str(variable.name)
+    )
+
+    for _ in range(8):
+        step()
+        evaluated.set_value(False)
+        evaluating_step()
+
+    np.testing.assert_allclose(p.get_value(), evaluating_p.get_value(), rtol=1e-10)
+
+
+def test_lbfgs_does_not_read_the_kept_gradient_after_set_value():
+    p, _, step = _quartic(lbfgs(memory_size=4))
+    evaluating_p, _, evaluating_step = _quartic(lbfgs(memory_size=4))
+    evaluated = next(
+        variable
+        for variable in evaluating_step.get_shared()
+        if "line_search/evaluated" in str(variable.name)
+    )
+    for _ in range(3):
+        step()
+        evaluating_step()
+
+    for parameter in (p, evaluating_p):
+        parameter.set_value(np.array([2.0, 1.0], dtype=floatX))
+    evaluated.set_value(False)
+    step()
+    evaluating_step()
+
+    np.testing.assert_array_equal(p.get_value(), evaluating_p.get_value())
 
 
 # optax.lbfgs() on Rosenbrock from (-1.2, 1), whose default search is the same zoom with a first trial of
