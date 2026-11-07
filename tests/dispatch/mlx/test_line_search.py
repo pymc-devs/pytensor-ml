@@ -65,12 +65,15 @@ def test_the_search_takes_the_default_backends_step(case, arguments, guess, use_
     direction = direction_of(pytensor.function([X], gradient)(x0)).astype("float32")
     mode = Mode(linker=MLXLinker(use_compile=use_compile), optimizer="fast_run")
 
+    outputs = [*result[:3], result.trial_step, result.trial_value, *result.trial_gradients]
     with mx.stream(device):
-        on_mlx = pytensor.function([X, D], list(result), mode=mode)(x0, direction)
-    on_default = pytensor.function([X, D], list(result))(x0, direction)
+        on_mlx = pytensor.function([X, D], outputs, mode=mode)(x0, direction)
+    on_default = pytensor.function([X, D], outputs)(x0, direction)
 
     np.testing.assert_allclose(float(on_mlx[0]), float(on_default[0]), rtol=1e-4)
     assert (bool(on_mlx[1]), int(on_mlx[2])) == (bool(on_default[1]), int(on_default[2]))
+    for trial_on_mlx, trial_on_default in zip(on_mlx[3:], on_default[3:]):
+        np.testing.assert_allclose(np.asarray(trial_on_mlx), trial_on_default, rtol=1e-3, atol=1e-3)
 
 
 def test_a_double_precision_search_takes_the_default_backends_step():
@@ -85,8 +88,8 @@ def test_a_double_precision_search_takes_the_default_backends_step():
     direction = direction_of(pytensor.function([X], gradient)(x0))
     mode = Mode(linker=MLXLinker(), optimizer="fast_run")
 
-    on_mlx = pytensor.function([X, D], list(result), mode=mode)(x0, direction)
-    on_default = pytensor.function([X, D], list(result))(x0, direction)
+    on_mlx = pytensor.function([X, D], list(result[:3]), mode=mode)(x0, direction)
+    on_default = pytensor.function([X, D], list(result[:3]))(x0, direction)
 
     np.testing.assert_allclose(float(on_mlx[0]), float(on_default[0]), rtol=1e-4)
     assert (bool(on_mlx[1]), int(on_mlx[2])) == (bool(on_default[1]), int(on_default[2]))
@@ -102,7 +105,7 @@ def test_the_dispatch_runs_the_pieces_the_compile_mode_rewrote():
     mode = Mode(linker=MLXLinker(), optimizer="fast_run")
 
     def step_nodes_under(mode):
-        compiled = pytensor.function([X, D], list(result), mode=mode)
+        compiled = pytensor.function([X, D], list(result[:3]), mode=mode)
         [search] = [
             node.op
             for node in compiled.maker.fgraph.apply_nodes

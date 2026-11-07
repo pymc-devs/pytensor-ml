@@ -159,7 +159,7 @@ _ZOOM_SOURCE = """
     bool use_quadratic =
         !use_cubic && quadratic > left + 0.1f * next_width && quadratic < right - 0.1f * next_width;
     float middle = use_cubic ? cubic : (use_quadratic ? quadratic : (new_low + new_high) / 2.0f);
-    next_trial[0] = interval_found ? middle : bracketing_trial;
+    next_trial[0] = (done || failed) ? t : (interval_found ? middle : bracketing_trial);
 """
 
 
@@ -207,7 +207,9 @@ def mlx_funcify_LineSearchOp(op, node=None, **kwargs):
     search = op.line_search
     n_parameters = op.n_parameters
     declared = [variable.type.dtype for variable in finish_op.inner_inputs]
-    field_dtypes = [getattr(mx, "bool_" if dtype == "bool" else dtype) for dtype in declared]
+    field_dtypes = [
+        getattr(mx, "bool_" if dtype == "bool" else dtype) for dtype in declared[: len(_FIELD)]
+    ]
     # Decided from the declared dtype: mlx quietly computes a float64 graph at single precision on the
     # GPU, so the arrays reaching the loop would claim float32 for a search declared in float64.
     single_precision = declared[_FIELD["value"]] == "float32"
@@ -236,12 +238,16 @@ def mlx_funcify_LineSearchOp(op, node=None, **kwargs):
         moved = (*inputs[: 2 * n_parameters], *inputs[2 * n_parameters + 3 :])
         value0, slope0, guess = inputs[2 * n_parameters : 2 * n_parameters + 3]
         anchor = mx.stack([value0, slope0, guess]).astype(mx.float32)
-        packed = mx.stack([field.astype(mx.float32) for field in state])
+        packed = mx.stack([field.astype(mx.float32) for field in state[: len(_ZOOM_FIELDS)]])
+        record = state[len(_ZOOM_FIELDS) :]
         stepsize = guess.astype(mx.float32)
         if search.max_learning_rate is not None:
             stepsize = mx.minimum(stepsize, search.max_learning_rate)
         for _ in range(search.max_steps):
-            value, slope = trial(stepsize, *moved)
+            # Once the kernel holds a finished search it proposes the same step, so the last pass
+            # evaluates the trial the search ended on.
+            value, slope, *gradients = trial(stepsize, *moved)
+            record = [stepsize, value, *gradients]
             packed, next_trial = kernel(
                 inputs=[packed, mx.stack([stepsize, value, slope]).astype(mx.float32), anchor],
                 grid=(1, 1, 1),
@@ -250,11 +256,13 @@ def mlx_funcify_LineSearchOp(op, node=None, **kwargs):
                 output_dtypes=[mx.float32, mx.float32],
             )
             stepsize = next_trial[0]
-        return [packed[index].astype(dtype) for index, dtype in enumerate(field_dtypes)]
+        fields = [packed[index].astype(dtype) for index, dtype in enumerate(field_dtypes)]
+        return [*fields, *(new.astype(old.dtype) for new, old in zip(record, state[len(fields) :]))]
 
     def line_search(*inputs):
         value0, slope0 = inputs[2 * n_parameters : 2 * n_parameters + 2]
-        state = list(start(value0, slope0))
+        directions = inputs[n_parameters : 2 * n_parameters]
+        state = list(start(value0, slope0, *directions))
         state = stepped(inputs, state) if kernel is None else fused(inputs, state)
         return tuple(finish(*state))
 

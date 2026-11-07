@@ -37,7 +37,7 @@ def compiled(objective, max_steps=20):
     loss = OBJECTIVES[objective](X)
     [gradient] = pt.grad(loss, [X])
     result = search_along(loss, [X], [gradient], [D], zoom_line_search(max_steps))
-    return pytensor.function([X, D], list(result)), pytensor.function([X], gradient)
+    return pytensor.function([X, D], list(result[:3])), pytensor.function([X], gradient)
 
 
 def search(objective, x0, direction_of, max_steps=20):
@@ -149,7 +149,7 @@ def test_the_first_trial_follows_the_guess_and_the_cap(case, expected):
         loss, [X], [pt.grad(loss, X)], [D], zoom_line_search(**arguments), guess=guess
     )
 
-    step_size, failed, evaluations = pytensor.function([X, D], list(result))(
+    step_size, failed, evaluations = pytensor.function([X, D], list(result[:3]))(
         np.zeros(2), np.ones(2)
     )
 
@@ -211,8 +211,8 @@ def test_a_single_precision_search_stays_in_single_precision():
     x0 = ROSENBROCK_START.astype("float32")
     direction = np.full(2, 1e-3, dtype="float32")
 
-    step_size, failed, evaluations = pytensor.function([x, d], list(result))(x0, direction)
-    expected = pytensor.function([X, D], list(in_double))(x0, direction)
+    step_size, failed, evaluations = pytensor.function([x, d], list(result[:3]))(x0, direction)
+    expected = pytensor.function([X, D], list(in_double[:3]))(x0, direction)
 
     step = find_piece(result.step_size.owner.op, STEP)
     assert not [variable for variable in step.fgraph.variables if variable.type.dtype == "float64"]
@@ -227,7 +227,7 @@ def test_the_search_moves_shared_parameters_along_a_direction_of_them():
     [gradient] = pt.grad(loss, [point])
     result = search_along(loss, [point], [gradient], [-gradient], zoom_line_search())
 
-    step_size, failed, evaluations = pytensor.function([], list(result))()
+    step_size, failed, evaluations = pytensor.function([], list(result[:3]))()
 
     expected = PINNED["zooms_into_a_bracket"][1]
     np.testing.assert_allclose(step_size, expected[0], rtol=1e-9)

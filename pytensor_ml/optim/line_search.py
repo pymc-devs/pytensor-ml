@@ -40,7 +40,7 @@ class LineSearch(Protocol):
         slope0: TensorVariable,
         guess: TensorVariable,
     ) -> tuple[State, TensorVariable]:
-        """Evaluate one trial step and return the next state and whether to stop."""
+        """Evaluate one trial, calling ``value_and_slope`` once, and return the next state and whether to stop."""
         ...
 
     def finalize(self, state: State) -> tuple[TensorVariable, TensorVariable]:
@@ -359,18 +359,19 @@ class LineSearchOp(OpFromGraph):
     One line search as a single node, built by :func:`search_along`.
 
     Inputs are the parameters, the directions, the loss and slope at the current point, the first trial
-    step, and everything else the loss reads; outputs are the step size, whether the search failed, and
-    how many trials it took. The inner graph runs ``finish(scan(step, start(...)))``, the ``scan``
-    stopping at the first trial the search accepts, and every ``step`` evaluates the loss through one
-    ``trial`` node. Each of those pieces is a named ``OpFromGraph``, so a backend that cannot run the
-    ``scan`` finds them with :func:`find_piece` in the graph its linker has already rewritten.
+    step, and everything else the loss reads; outputs are the step size, whether the search failed, how
+    many trials it took, and the step, loss and gradients of the last trial. The inner graph runs
+    ``finish(scan(step, start(...)))``, the ``scan`` stopping at the first trial the search accepts, and
+    every ``step`` evaluates the loss through one ``trial`` node. Each of those pieces is a named
+    ``OpFromGraph``, so a backend that cannot run the ``scan`` finds them with :func:`find_piece` in the
+    graph its linker has already rewritten.
 
     Parameters
     ----------
     inputs : list of Variable
         The inputs described above, in that order.
     outputs : list of Variable
-        The step size, the failure flag and the trial count.
+        The step size, the failure flag, the trial count and the last trial.
     line_search : LineSearch
         The search the inner graph runs.
     n_parameters : int
@@ -402,9 +403,11 @@ class LineSearchOp(OpFromGraph):
 
 
 # The pieces of a `LineSearchOp`'s inner graph, by name. `start` takes the loss and slope at the current
-# point to the first state; `step` takes a state and then every input of the search to the next state and
-# whether to stop; `trial` takes a step size, the parameters, the directions and every input after the
-# first trial step to the loss and its slope there; `finish` takes the final state to the outputs.
+# point and the directions to the first state; `step` takes a state and then every input of the search to
+# the next state and whether to stop; `trial` takes a step size, the parameters, the directions and every
+# input after the first trial step to the loss, its slope and its gradients there; `finish` takes the
+# final state to the outputs. A state is the search's own fields followed by the last trial's step, loss
+# and gradients, which no search reads.
 START = "line_search_start"
 STEP = "line_search_step"
 TRIAL = "line_search_trial"
@@ -456,11 +459,21 @@ class SearchResult(NamedTuple):
         Whether the search ran out of trials, or narrowed below its precision, without accepting one.
     evaluations : TensorVariable
         How many trial steps it evaluated.
+    trial_step : TensorVariable
+        The last step it evaluated. A failed search can take an earlier one, so ``trial_value`` and
+        ``trial_gradients`` describe the point it moved to only when this equals ``step_size``.
+    trial_value : TensorVariable
+        The loss at the last step it evaluated.
+    trial_gradients : tuple of TensorVariable
+        The gradients at the last step it evaluated, one per parameter.
     """
 
     step_size: TensorVariable
     failed: TensorVariable
     evaluations: TensorVariable
+    trial_step: TensorVariable
+    trial_value: TensorVariable
+    trial_gradients: tuple[TensorVariable, ...]
 
 
 def search_along(
@@ -470,6 +483,8 @@ def search_along(
     directions: Sequence[TensorVariable],
     line_search: LineSearch,
     guess: float | TensorVariable = 1.0,
+    *,
+    start_gradients: Sequence[TensorVariable] | None = None,
 ) -> SearchResult:
     """
     Search for a step size along ``directions`` from the current ``parameters``.
@@ -495,11 +510,14 @@ def search_along(
         The search to run, for example :func:`zoom_line_search`.
     guess : float or TensorVariable
         The first trial step. Default 1.0.
+    start_gradients : sequence of TensorVariable, optional
+        The gradients at the current point, when the caller already has them. Default None, which reads
+        ``gradients``.
 
     Returns
     -------
     result : SearchResult
-        The step size, whether the search failed, and how many trials it took.
+        The step size, whether the search failed, how many trials it took, and its last trial.
     """
     generators = find_generators_drawn_from([loss])
     if generators:
@@ -521,7 +539,9 @@ def search_along(
 
     dtype = loss.dtype
     value0 = loss
-    slope0 = flat_dot(gradients, directions).astype(dtype)
+    slope0 = flat_dot(gradients if start_gradients is None else start_gradients, directions).astype(
+        dtype
+    )
     first_trial = pt.as_tensor_variable(guess).astype(dtype)
 
     # Each piece is built on stand-ins for what it receives, so it is a graph of its own inputs rather
@@ -529,9 +549,6 @@ def search_along(
     start_value, start_slope, first_guess = value0.type(), slope0.type(), first_trial.type()
     initial = line_search.init(start_value, start_slope)
     fields = list(initial)
-    start = OpFromGraph(
-        [start_value, start_slope], [initial[field] for field in fields], name=START
-    )
 
     trial_step = first_trial.type()
     moved: dict[Variable, Variable] = {
@@ -542,6 +559,7 @@ def search_along(
     trial_outputs = [
         trial_value,
         flat_dot(trial_gradients, directions).astype(dtype),  # type: ignore[arg-type]
+        *trial_gradients,
     ]
     moving = [trial_step, *parameters, *directions]
     others = [
@@ -551,23 +569,65 @@ def search_along(
     ]
     trial = OpFromGraph([*moving, *others], trial_outputs, name=TRIAL)
 
+    # The last trial travels beside the search's state, because a search only reads scalars and the
+    # gradients have to outlive the loop.
+    direction_standins = [direction.type() for direction in directions]
+    first_record = [
+        pt.zeros((), dtype=first_trial.dtype),
+        pt.zeros((), dtype=loss.dtype),
+        *(
+            pt.zeros_like(direction).astype(gradient.dtype)
+            for direction, gradient in zip(direction_standins, gradients)
+        ),
+    ]
+    start = OpFromGraph(
+        [start_value, start_slope, *direction_standins],
+        [*(initial[field] for field in fields), *first_record],
+        name=START,
+    )
+
+    last_trial: list[TensorVariable] = []
+
     def value_and_slope(stepsize):
-        return tuple(trial(stepsize, *parameters, *directions, *others, return_list=True))
+        value, slope, *gradients_there = trial(
+            stepsize, *parameters, *directions, *others, return_list=True
+        )
+        last_trial[:] = [stepsize, value, *gradients_there]
+        return value, slope
 
     state = {field: initial[field].type() for field in fields}
+    record = [variable.type() for variable in first_record]
     next_state, stop = line_search.step(
         state, value_and_slope, start_value, start_slope, first_guess
     )
     inputs = [*parameters, *directions, value0, slope0, first_trial, *others]
     step = OpFromGraph(
-        [*state.values(), *parameters, *directions, start_value, start_slope, first_guess, *others],
-        [*(next_state[field] for field in fields), stop],
+        [
+            *state.values(),
+            *record,
+            *parameters,
+            *directions,
+            start_value,
+            start_slope,
+            first_guess,
+            *others,
+        ],
+        [
+            *(next_state[field] for field in fields),
+            *(new.astype(old.dtype) for new, old in zip(last_trial, record)),
+            stop,
+        ],
         name=STEP,
     )
 
     final = {field: initial[field].type() for field in fields}
+    final_record = [variable.type() for variable in first_record]
     step_size, failed = line_search.finalize(final)
-    finish = OpFromGraph(list(final.values()), [step_size, failed, final["count"]], name=FINISH)
+    finish = OpFromGraph(
+        [*final.values(), *final_record],
+        [step_size, failed, final["count"], *final_record],
+        name=FINISH,
+    )
 
     def iterate(*carry_and_inputs):
         *next_carry, stop_here = step(*carry_and_inputs, return_list=True)
@@ -575,7 +635,7 @@ def search_along(
 
     trace = pytensor.scan(
         iterate,
-        outputs_info=start(value0, slope0, return_list=True),
+        outputs_info=start(value0, slope0, *directions, return_list=True),
         non_sequences=inputs,
         n_steps=line_search.max_steps,
         return_updates=False,
@@ -583,4 +643,7 @@ def search_along(
     outputs = finish.make_node(*(values[-1] for values in trace)).outputs
 
     search = LineSearchOp(inputs, outputs, line_search=line_search, n_parameters=len(parameters))
-    return SearchResult(*search.make_node(*inputs).outputs)
+    found, did_fail, evaluations, last_step, last_value, *last_gradients = search.make_node(
+        *inputs
+    ).outputs
+    return SearchResult(found, did_fail, evaluations, last_step, last_value, tuple(last_gradients))
