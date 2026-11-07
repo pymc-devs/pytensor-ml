@@ -41,7 +41,6 @@ def build_train_updates(
     rule: Transform | Updates,
     *,
     parameters: Sequence[Parameter] | None = None,
-    inputs: Sequence[Variable] | None = None,
     extra_outputs: Sequence[Variable] | None = None,
     extra_updates: dict[SharedVariable, TensorVariable] | None = None,
 ) -> tuple[TensorVariable, dict[SharedVariable, Variable]]:
@@ -69,9 +68,6 @@ def build_train_updates(
     parameters : sequence of shared tensor variable, optional
         Parameters to optimize. Collected from ``loss`` with :func:`collect_differentiable_params` when
         omitted, as in :func:`compile_train`.
-    inputs : sequence of Variable, optional
-        Data inputs of the compiled function. A generator read only above one of these is not advanced.
-        Default is the graph roots.
     extra_outputs : sequence of Variable, optional
         Diagnostics the step will return alongside the loss. The only updates they contribute are the advance
         of a training clock or a generator that only they read.
@@ -165,11 +161,9 @@ def build_train_updates(
     # A generator a loop cannot advance has no next state until its draw is out of the loop.
     read_variables = hoist_scan_draws([loss, *extra_outputs, *updates.values()])
     assembled = dict(zip(updates, read_variables[1 + len(extra_outputs) :]))
+    generator_updates = collect_generator_updates(read_variables, already_written=assembled)
 
-    return read_variables[0], {
-        **assembled,
-        **collect_generator_updates(read_variables, inputs=inputs, already_written=assembled),
-    }
+    return read_variables[0], {**assembled, **generator_updates}
 
 
 def compile_train(
@@ -275,7 +269,6 @@ def compile_train(
         loss,
         rule,
         parameters=parameters,
-        inputs=inputs,
         extra_outputs=extra_outputs,
         extra_updates=extra_updates,
     )

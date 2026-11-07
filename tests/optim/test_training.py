@@ -693,20 +693,6 @@ def test_build_train_updates_rejects_two_draws_off_one_generator():
         build_train_updates(loss, sgd(1e-1))
 
 
-def test_generators_sharing_a_name_are_not_a_state_name_collision():
-    # Unnamed dropout layers name their generators alike, and save_state numbers the repeats, so the step
-    # has to accept them.
-    X = Input("X", shape=(None, 4))
-    prediction = Sequential(Linear("fc", n_in=4, n_out=4), Dropout(p=0.5), Dropout(p=0.5))(X)
-    loss = (prediction**2).sum()
-
-    _, updates = build_train_updates(loss, sgd(1e-1), inputs=[X])
-
-    generators = [variable for variable in updates if variable.name.endswith("rng_0")]
-    assert len(generators) == 2
-    assert generators[0].name == generators[1].name
-
-
 def test_updates_from_build_train_updates_are_accepted_back_as_a_rule():
     # `compile_train` takes an updates dict as a rule so two functions can share momentum. Generators are
     # keys of that dict, and the state-name check has to accept unnamed dropout layers naming theirs alike.
@@ -716,9 +702,9 @@ def test_updates_from_build_train_updates_are_accepted_back_as_a_rule():
     )(X)
     loss = (prediction**2).sum()
 
-    _, updates = build_train_updates(loss, adam(1e-3), inputs=[X])
+    _, updates = build_train_updates(loss, adam(1e-3))
     step = compile_train(loss, updates, inputs=[X])
-    _, rebuilt = build_train_updates(loss, updates, inputs=[X])
+    _, rebuilt = build_train_updates(loss, updates)
 
     generators = [variable for variable in updates if variable.name.endswith("rng_0")]
     before = [generator.get_value().bit_generator.state for generator in generators]
@@ -726,6 +712,7 @@ def test_updates_from_build_train_updates_are_accepted_back_as_a_rule():
     after = [generator.get_value().bit_generator.state for generator in generators]
 
     assert rebuilt.keys() == updates.keys()
+    assert len(generators) == 2
     assert all(first != second for first, second in zip(before, after))
 
 
@@ -733,7 +720,7 @@ def test_generators_sharing_a_name_survive_a_checkpoint_of_the_updates(tmp_path)
     pytest.importorskip("safetensors")
     X = Input("X", shape=(None, 4))
     prediction = Sequential(Linear("fc", n_in=4, n_out=4), Dropout(p=0.5), Dropout(p=0.5))(X)
-    _, updates = build_train_updates((prediction**2).sum(), sgd(1e-1), inputs=[X])
+    _, updates = build_train_updates((prediction**2).sum(), sgd(1e-1))
     state = list(updates)
     generators = [variable for variable in state if variable.name.endswith("rng_0")]
     saved = [generator.get_value().bit_generator.state for generator in generators]
