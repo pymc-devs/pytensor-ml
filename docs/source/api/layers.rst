@@ -103,3 +103,5 @@ Attention and transformers
     FeedForward
     TransformerBlock
     scaled_dot_product_attention
+    RotaryEmbedding
+    rotary_embedding
