@@ -312,6 +312,45 @@ def test_static_position_count_must_match_the_sequence(n_tokens, positions, matc
         rotary_embedding(pt.tensor("x", shape=(n_tokens, 8)), positions)
 
 
+@pytest.mark.parametrize("pairing", ["half", "adjacent"])
+@pytest.mark.parametrize(
+    "x_shape, n_tokens, n_positions",
+    [((None, 8), 5, 1), ((None, 8), 1, 6), ((1, 8), 1, 6), ((None, 8), 5, 4)],
+    ids=["one_position", "one_token", "static_token", "shorter"],
+)
+def test_position_count_is_checked_at_run_time(pairing, x_shape, n_tokens, n_positions):
+    x = pt.tensor("x", shape=x_shape)
+    positions = pt.lvector("positions")
+    out = rotary_embedding(x, positions, pairing=pairing)
+
+    with pytest.raises((AssertionError, ValueError), match="shape"):
+        out.eval({x: np.ones((n_tokens, 8), dtype=floatX), positions: np.arange(n_positions)})
+
+
+@pytest.mark.parametrize("pairing", ["half", "adjacent"])
+@pytest.mark.parametrize(
+    "x_shape, x_value_shape",
+    [((None, None, 8), (2, 5, 8)), ((None, 4, None, 8), (2, 4, 5, 8))],
+    ids=["no_head_axis", "head_axis"],
+)
+def test_per_sequence_position_count_is_checked_at_run_time(pairing, x_shape, x_value_shape):
+    x = pt.tensor("x", shape=x_shape)
+    positions = pt.lmatrix("positions")
+    out = rotary_embedding(x, positions, pairing=pairing)
+
+    with pytest.raises((AssertionError, ValueError), match="shape"):
+        out.eval({x: np.ones(x_value_shape, dtype=floatX), positions: np.array([[3], [4]])})
+
+
+@pytest.mark.parametrize("pairing", ["half", "adjacent"])
+def test_static_position_does_not_broadcast_over_a_dynamic_sequence(pairing):
+    x = pt.tensor("x", shape=(None, 8))
+    out = rotary_embedding(x, np.array([3]), pairing=pairing)
+
+    with pytest.raises((AssertionError, ValueError), match="shape"):
+        out.eval({x: np.ones((5, 8), dtype=floatX)})
+
+
 def test_odd_head_dimension_raises():
     with pytest.raises(ValueError, match="head_dim must be even"):
         rotary_embedding(pt.tensor("x", shape=(4, 7)), pt.lvector("positions"))

@@ -199,6 +199,11 @@ class RotaryEmbeddingLayer(UnaryLayerOp):
     __props__ = ("base", "pairing", "scaling", "scaling_factor")
 
     def build_inner_graph(self, x, position_ids):
+        if position_ids.type.ndim > 0:
+            # The static check cannot see a length only known at run time, and a length of one would
+            # then broadcast: every token gets the same rotation, or the sequence silently grows.
+            position_ids = pt.specify_shape(position_ids, shape=(..., x.shape[-2]))
+
         static_head_dim = x.type.shape[-1]
         head_dim = x.shape[-1] if static_head_dim is None else static_head_dim
         dtype = x.type.dtype
