@@ -39,6 +39,7 @@ from pytensor_ml.layers import (
     GroupNorm,
     LayerNorm,
     Linear,
+    Reshape,
     RMSNorm,
     Sequential,
     Squeeze,
@@ -193,6 +194,13 @@ def test_squeeze_roundtrips():
 def test_flatten_roundtrips():
     X = pt.tensor("X", shape=(None, 3, 4))
     assert_outputs_roundtrip([X], Flatten(X), [np.random.default_rng(0).normal(size=(5, 3, 4))])
+
+
+def test_reshape_roundtrips():
+    X = pt.tensor("X", shape=(None, 12))
+    assert_outputs_roundtrip(
+        [X], Reshape(shape=(3, 4))(X), [np.random.default_rng(0).normal(size=(5, 12))]
+    )
 
 
 def test_concatenate_roundtrips():

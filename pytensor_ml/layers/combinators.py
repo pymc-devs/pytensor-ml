@@ -2,6 +2,8 @@ from collections.abc import Callable, Sequence
 
 import pytensor.tensor as pt
 
+from pytensor_ml.base import Layer, _resolve_layer_name
+
 
 def Input(name: str, shape: tuple[int | None, ...], dtype: str | None = None) -> pt.TensorVariable:
     """
@@ -98,6 +100,48 @@ def Flatten(X: pt.TensorLike) -> pt.TensorVariable:
         logits = Linear("logits", n_in=8 * 13 * 13, n_out=10)(Flatten(features))
     """
     return pt.join_dims(X, start_axis=1)
+
+
+class Reshape(Layer):
+    """
+    Reshape everything after the batch axis, so a dense layer can feed a convolution stack.
+
+    Parameters
+    ----------
+    name : str, optional
+        Name of the layer, used to name its output. Default "Reshape".
+    shape : sequence of int
+        Target shape of each example, leaving out the batch axis. One entry may be -1, which is
+        inferred from the others.
+
+    Examples
+    --------
+    The inverse of :func:`Flatten`, which is how a generator turns a projected noise vector into the
+    feature map its transposed convolutions grow:
+
+    .. code-block:: python
+
+        from pytensor_ml.layers import ConvTranspose2D, Input, Linear, Reshape, Sequential
+
+        noise = Input("noise", shape=(None, 16))
+        network = Sequential(
+            Linear("project", n_in=16, n_out=7 * 7 * 8),
+            Reshape(shape=(7, 7, 8)),
+            ConvTranspose2D("up", in_channels=8, out_channels=1, kernel_size=4, stride=2, padding=1),
+        )
+
+        images = network(noise)
+    """
+
+    def __init__(self, name: str | None = None, *, shape: Sequence[int]):
+        self.name = _resolve_layer_name(name, type(self).__name__, "shape")
+        self.shape = tuple(shape)
+
+    def __call__(self, X: pt.TensorLike) -> pt.TensorVariable:
+        X = pt.as_tensor(X)
+        out = X.reshape((X.shape[0], *self.shape))
+        out.name = f"{self.name}_output"
+        return out
 
 
 def Squeeze(X: pt.TensorLike, axis: int | Sequence[int] | None = None) -> pt.TensorVariable:
