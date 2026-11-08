@@ -1,3 +1,5 @@
+from functools import cache
+
 import numpy as np
 import pytensor
 import pytensor.tensor as pt
@@ -79,17 +81,37 @@ def test_a_scalar_parameter_has_vector_stacks():
     )
 
 
-def test_an_empty_memory_scales_the_gradient():
-    # Built at float32 whatever floatX is, so the Python-float gamma has a narrower dtype to upcast.
-    rng = np.random.default_rng(1)
-    g = rng.normal(size=5).astype("float32")
-    S = np.zeros((3, 5), dtype="float32")
-    Y = np.zeros((3, 5), dtype="float32")
+@cache
+def one_vector_direction():
+    """One compiled direction over a single vector parameter and three slots, shared by every test that
+    needs no other shape, so they pay for one scan compile between them."""
+    count = pt.scalar("count", dtype="int64")
+    gamma = pt.scalar("gamma", dtype=floatX)
+    rho = pt.vector("rho", shape=(3,), dtype=floatX)
+    g = pt.vector("g", dtype=floatX)
+    S = pt.tensor("S", shape=(3, None), dtype=floatX)
+    Y = pt.tensor("Y", shape=(3, None), dtype=floatX)
+    direction = LBFGSDirection(n_parameters=1, memory_size=3)(count, gamma, rho, g, S, Y)
+    return function([count, gamma, rho, g, S, Y], direction)
 
-    d = LBFGSDirection(n_parameters=1, memory_size=3)(0, 0.25, np.zeros(3), g, S, Y)
+
+def test_an_empty_memory_keeps_a_narrower_dtype():
+    # Built at float32 whatever floatX is, so the Python-float gamma has a narrower dtype to upcast.
+    g = np.zeros(5, dtype="float32")
+    S = np.zeros((3, 5), dtype="float32")
+
+    d = LBFGSDirection(n_parameters=1, memory_size=3)(0, 0.25, np.zeros(3), g, S, S)
 
     assert d.dtype == "float32"
-    np.testing.assert_allclose(d.eval(), 0.25 * g, rtol=1e-6)
+
+
+def test_an_empty_memory_scales_the_gradient():
+    g = np.random.default_rng(1).normal(size=5).astype(floatX)
+    S = np.zeros((3, 5), dtype=floatX)
+
+    d = one_vector_direction()(0, 0.25, np.zeros(3, dtype=floatX), g, S, S)
+
+    np.testing.assert_allclose(d, 0.25 * g, rtol=RTOL)
 
 
 def test_a_zero_curvature_retires_its_slot_whatever_the_stacks_hold():
@@ -99,12 +121,12 @@ def test_a_zero_curvature_retires_its_slot_whatever_the_stacks_hold():
     g = rng.normal(size=4).astype(floatX)
     s = rng.normal(size=4).astype(floatX)
     y = (s + 0.5 * rng.normal(size=4)).astype(floatX)
-    S = np.stack([s, np.zeros_like(s)])
-    Y = np.stack([y, np.zeros_like(y)])
+    S = np.stack([s, np.zeros_like(s), np.zeros_like(s)])
+    Y = np.stack([y, np.zeros_like(y), np.zeros_like(y)])
 
-    d = LBFGSDirection(n_parameters=1, memory_size=2)(1, 0.5, np.zeros(2), g, S, Y)
+    d = one_vector_direction()(1, 0.5, np.zeros(3, dtype=floatX), g, S, Y)
 
-    np.testing.assert_allclose(d.eval(), 0.5 * g, rtol=RTOL)
+    np.testing.assert_allclose(d, 0.5 * g, rtol=RTOL)
 
 
 @pytest.mark.parametrize(
