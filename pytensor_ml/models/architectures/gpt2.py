@@ -125,3 +125,5 @@ def _bind_block(keys: KeyMap, block: TransformerBlock) -> None:
     bind_linear(keys, block.attn.out_proj, "attn", "c_proj")
     bind_linear(keys, block.ff.fc_in, "mlp", "c_fc")
     bind_linear(keys, block.ff.fc_out, "mlp", "c_proj")
+    # Hugging Face saves the causal mask as a buffer named "bias". The attention builds its own mask.
+    keys.ignore("attn", "bias")

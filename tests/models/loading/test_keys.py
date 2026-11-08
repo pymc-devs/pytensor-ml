@@ -162,6 +162,32 @@ def test_load_reports_a_surplus_tensor_and_proceeds():
     np.testing.assert_array_equal(layer.W.get_value(), np.ones((4, 3)))
 
 
+@pytest.mark.parametrize(
+    "checkpoint_prefix",
+    ["", "transformer."],
+    ids=["published", "saved_from_the_head_class"],
+)
+def test_load_skips_an_ignored_key_without_reporting_it(checkpoint_prefix):
+    """GPT-2 checkpoints store each layer's causal mask as a buffer. An ignored key takes the same
+    prefix the bound keys resolve to, and its absence is not an error."""
+    layer = Linear("fc", n_in=2, n_out=2)
+    keys = KeyMap()
+    with keys.scope("h", "0"):
+        keys.bind(layer.W, "weight")
+        keys.bind(layer.b, "bias")
+        keys.ignore("attn", "bias")
+
+    checkpoint = {
+        f"{checkpoint_prefix}h.0.weight": np.ones((2, 2), dtype="float32"),
+        f"{checkpoint_prefix}h.0.bias": np.zeros(2, dtype="float32"),
+        f"{checkpoint_prefix}h.0.attn.bias": np.tril(np.ones((4, 4), dtype="float32")),
+    }
+
+    assert keys.load(checkpoint.__getitem__, checkpoint) == []
+    del checkpoint[f"{checkpoint_prefix}h.0.attn.bias"]
+    assert keys.load(checkpoint.__getitem__, checkpoint) == []
+
+
 def test_load_reports_a_dtype_numpy_cannot_read():
     """safetensors raises a bare TypeError for bfloat16, which says nothing about what to do next."""
     keys = KeyMap()
