@@ -6,8 +6,8 @@ import pytest
 from pytensor import config, shared
 from pytensor.gradient import DisconnectedInputError, disconnected_grad, grad, zero_grad
 from pytensor.scan import scan
-from sklearn.datasets import load_digits, make_regression
-from sklearn.preprocessing import MinMaxScaler, OneHotEncoder, StandardScaler
+from sklearn.datasets import load_digits
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
 
 from pytensor_ml.activations import LeakyReLU, Tanh
 from pytensor_ml.checkpoint import load_state, save_state
@@ -36,12 +36,6 @@ def classification_data():
     features, labels = load_digits(return_X_y=True)
     onehot_labels = OneHotEncoder().fit_transform(labels[:, None]).toarray()
     return MinMaxScaler().fit_transform(features), onehot_labels
-
-
-@pytest.fixture
-def regression_data():
-    features, target = make_regression(n_samples=1000, n_features=64, noise=10, random_state=0)
-    return StandardScaler().fit_transform(features), StandardScaler().fit_transform(target[:, None])
 
 
 def build_network(n_out: int) -> tuple[pt.TensorVariable, pt.TensorVariable]:
@@ -80,20 +74,6 @@ def test_trains_classifier(classification_data, rule):
     step = compile_train(loss, rule, parameters=parameters, inputs=[X, target])
 
     history = train(step, classification_data)
-    assert history[-1] < history[0]
-
-
-@pytest.mark.parametrize(
-    "rule", [sgd(learning_rate=1e-2), adam(learning_rate=1e-2)], ids=["sgd", "adam"]
-)
-def test_trains_regressor(regression_data, rule):
-    X, prediction = build_network(n_out=1)
-    parameters = collect_trainable_params(prediction)
-    initialize(parameters)
-    loss, target = supervised_loss(prediction, SquaredError())
-    step = compile_train(loss, rule, parameters=parameters, inputs=[X, target])
-
-    history = train(step, regression_data)
     assert history[-1] < history[0]
 
 

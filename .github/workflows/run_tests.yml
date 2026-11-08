@@ -107,15 +107,20 @@ jobs:
         activate-environment: true
         locked: true
         cache: true
+    # A saved cache entry is immutable, so a key without the commit would freeze the cache at the first
+    # run on each lockfile, and every graph changed after it would compile cold on every run. Keying on
+    # the commit saves a fresh entry each run, and the restore keys pick up the newest one.
     - name: Cache the pytensor compile directory
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       env:
         CACHE_NUMBER: 0
       with:
-        path: ~/.pytensor
+        # pytensor compiles into %LOCALAPPDATA%\PyTensor on Windows and ~/.pytensor elsewhere.
+        path: ${{ runner.os == 'Windows' && '~/AppData/Local/PyTensor' || '~/.pytensor' }}
         key: ${{ runner.os }}-pytensor-${{ env.CACHE_NUMBER }}-${{
-          matrix.test-subset.name }}-${{ hashFiles('pixi.lock') }}
+          matrix.test-subset.name }}-${{ hashFiles('pixi.lock') }}-${{ github.sha }}
         restore-keys: |
+          ${{ runner.os }}-pytensor-${{ env.CACHE_NUMBER }}-${{ matrix.test-subset.name }}-${{ hashFiles('pixi.lock') }}-
           ${{ runner.os }}-pytensor-${{ env.CACHE_NUMBER }}-${{ matrix.test-subset.name }}-
 
     - name: Run tests

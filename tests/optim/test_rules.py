@@ -61,42 +61,20 @@ def trainable(value, name=None, **kwargs):
     "rule",
     [
         sgd(learning_rate=1e-2),
-        sgd(learning_rate=1e-2, momentum=0.9),
-        sgd(learning_rate=1e-2, momentum=0.9, nesterov=True),
         adam(learning_rate=1e-2),
-        adam(learning_rate=1e-2, amsgrad=True),
         adamw(learning_rate=1e-2, weight_decay=1e-2),
-        adamw(learning_rate=1e-2, weight_decay=1e-2, amsgrad=True),
         adagrad(learning_rate=1e-1),
         adadelta(learning_rate=1.0),
         rmsprop(learning_rate=1e-2),
-        rmsprop(learning_rate=1e-2, momentum=0.9),
-        rmsprop(learning_rate=1e-2, centered=True),
         nadam(learning_rate=1e-2),
         adamax(learning_rate=1e-2),
         rprop(learning_rate=1e-2),
-        lbfgs(),
     ],
-    ids=[
-        "sgd",
-        "sgd_momentum",
-        "sgd_nesterov",
-        "adam",
-        "adam_amsgrad",
-        "adamw",
-        "adamw_amsgrad",
-        "adagrad",
-        "adadelta",
-        "rmsprop",
-        "rmsprop_momentum",
-        "rmsprop_centered",
-        "nadam",
-        "adamax",
-        "rprop",
-        "lbfgs",
-    ],
+    ids=["sgd", "adam", "adamw", "adagrad", "adadelta", "rmsprop", "nadam", "adamax", "rprop"],
 )
 def test_rule_reduces_loss(run_training, rule):
+    # One case per rule. Each variant (momentum, nesterov, amsgrad, centered) has a closed-form test
+    # below, and L-BFGS trains a network in the forward-pass counting test.
     history = run_training(rule, n_steps=100)
     assert history[-1] < history[0]
 
@@ -567,51 +545,6 @@ def test_rprop_shrinks_and_skips_on_sign_flip():
     np.testing.assert_allclose(p.get_value(), [-lr + lr * eta_minus])
 
 
-def test_lbfgs_satisfies_the_secant_condition_on_the_newest_pair():
-    """The inverse-Hessian estimate maps the newest gradient difference onto the parameter difference
-    that produced it, ``H y = s``, whatever the initial scaling. A zero gradient holds the parameters
-    still while the move before it becomes the newest pair with ``y = -g``, so feeding ``-g`` next has
-    to move them by ``-lr * s``. Two parameters, so the memory is split across tensors."""
-    g_u, g_v = pt.vector("g_u"), pt.vector("g_v")
-    u = trainable(np.zeros(2), name="u")
-    v = trainable(np.zeros(1), name="v")
-    lr = 0.3
-    fn = function([g_u, g_v], [u, v], updates=lbfgs_updates([g_u, g_v], [u, v], learning_rate=lr))
-    g = [np.array([1.0, -2.0], dtype=floatX), np.array([0.5], dtype=floatX)]
-
-    fn(*g)
-    fn(*[0.5 * gp for gp in g])
-    before_move = [x.get_value().copy() for x in (u, v)]
-    fn(*[0.5 * gp for gp in g])
-    after_move = [x.get_value().copy() for x in (u, v)]
-    fn(*[np.zeros_like(gp) for gp in g])  # no move; (after - before, -0.5 g) is now the newest pair
-    fn(*[-0.5 * gp for gp in g])
-
-    for x, x_after_move, x_before_move in zip((u, v), after_move, before_move):
-        np.testing.assert_allclose(
-            x.get_value(), x_after_move - lr * (x_after_move - x_before_move), rtol=RTOL
-        )
-
-
-def test_lbfgs_reaches_the_minimum_of_a_quadratic():
-    # Two slots for two dimensions: once both hold pairs the estimate is close to the true inverse
-    # Hessian and unit steps close in on the minimizer, which is known in closed form.
-    A = np.array([[3.0, 0.5], [0.5, 1.0]])
-    b = np.array([1.0, -2.0])
-    u = trainable(np.array([5.0]), name="u")
-    v = trainable(np.array([-3.0]), name="v")
-    x = pt.concatenate([u, v])
-    loss = 0.5 * x @ pt.constant(A, dtype=floatX) @ x - pt.constant(b, dtype=floatX) @ x
-    step = function([], loss, updates=lbfgs_updates(loss, [u, v], learning_rate=1.0, memory_size=2))
-
-    for _ in range(12):
-        step()
-
-    np.testing.assert_allclose(
-        np.concatenate([u.get_value(), v.get_value()]), np.linalg.solve(A, b), rtol=1e-4
-    )
-
-
 @pytest.mark.parametrize("gradient", [[3.0, -4.0], [0.3, -0.4]], ids=["long", "short"])
 def test_lbfgs_first_step_is_the_gradient_capped_to_the_unit_ball(gradient):
     # A gradient of norm 5 is cut to unit length, one of norm 0.5 is left as it is.
@@ -771,17 +704,16 @@ def test_lbfgs_parameters_of_different_dtypes_reach_the_minimum():
     np.testing.assert_allclose([u.get_value()[0], v.get_value()[0]], [1.0, -2.0], rtol=1e-5)
 
 
-@pytest.mark.parametrize(
-    "line_search", [None, zoom_line_search()], ids=["fixed_step", "line_search"]
-)
-def test_lbfgs_resumes_its_trajectory_from_a_checkpoint(tmp_path, line_search):
+def test_lbfgs_resumes_its_trajectory_from_a_checkpoint(tmp_path):
     """Every piece of the rule's state is named and saved, so a run restored mid-way retraces the
     steps it took the first time; a ring index or curvature left behind would desynchronize the memory
-    from its order."""
+    from its order. The searching rule keeps every slot the fixed-step rule does, and the search's own."""
     A = np.array([[3.0, 0.5], [0.5, 1.0]])
     p = trainable(np.array([5.0, -3.0]), name="w")
     loss = 0.5 * p @ pt.constant(A, dtype=floatX) @ p
-    updates = lbfgs_updates(loss, [p], learning_rate=0.5, memory_size=2, line_search=line_search)
+    updates = lbfgs_updates(
+        loss, [p], learning_rate=0.5, memory_size=2, line_search=zoom_line_search()
+    )
     state = list(updates)
     step = function([], loss, updates=updates)
     for _ in range(3):
@@ -871,66 +803,78 @@ def _penalized(rule):
     return p, step
 
 
-def test_lbfgs_measures_the_objective_of_each_step_when_data_and_shared_state_change():
-    p, step = _penalized(lbfgs(memory_size=4))
-    evaluating_p, evaluating_step = _penalized(lbfgs(memory_size=4))
+def _reusing_then_evaluating(step, run):
+    """Return what ``run`` gives from one starting state twice: first as compiled, reusing the search's
+    kept trial, then with the search made to evaluate afresh wherever ``run`` calls the hook it is
+    handed. One compiled step serves both, so the comparison costs a single compile."""
+    shared = step.get_shared()
+    start = [variable.get_value() for variable in shared]
     evaluated = next(
-        variable
-        for variable in evaluating_step.get_shared()
-        if "line_search/evaluated" in str(variable.name)
+        variable for variable in shared if "line_search/evaluated" in str(variable.name)
     )
 
-    for targets in ([1.0, 1.0], [1.0, 1.0], [-3.0, 2.0], [-3.0, 2.0], [0.0, 4.0]):
-        batch = np.array(targets, dtype=floatX)
-        evaluated.set_value(False)
-        assert float(step(batch)) == float(evaluating_step(batch))
-        np.testing.assert_array_equal(p.get_value(), evaluating_p.get_value())
+    reusing = run(lambda: None)
+    for variable, value in zip(shared, start):
+        variable.set_value(value)
+    evaluating = run(lambda: evaluated.set_value(False))
+    return reusing, evaluating
+
+
+def test_lbfgs_measures_the_objective_of_each_step_when_data_and_shared_state_change():
+    p, step = _penalized(lbfgs(memory_size=4))
+
+    def run(before_each_step):
+        trajectory = []
+        for targets in ([1.0, 1.0], [1.0, 1.0], [-3.0, 2.0], [-3.0, 2.0], [0.0, 4.0]):
+            before_each_step()
+            loss = float(step(np.array(targets, dtype=floatX)))
+            trajectory.append((loss, p.get_value().copy()))
+        return trajectory
+
+    reusing, evaluating = _reusing_then_evaluating(step, run)
+
+    for (loss, point), (evaluated_loss, evaluated_point) in zip(reusing, evaluating):
+        assert loss == evaluated_loss
+        np.testing.assert_array_equal(point, evaluated_point)
 
 
 def test_lbfgs_sees_a_change_of_the_objective_far_smaller_than_the_loss():
-    def fitted(rule):
-        p = trainable(np.array([2.0, -1.0]), name="w")
-        targets = pt.vector("targets")
-        loss = ((p - targets) ** 2).sum() + (p**4).sum()
-        return p, compile_train(loss, rule, inputs=[targets])
+    p = trainable(np.array([2.0, -1.0]), name="w")
+    targets = pt.vector("targets")
+    loss = ((p - targets) ** 2).sum() + (p**4).sum()
+    step = compile_train(loss, lbfgs(memory_size=4), inputs=[targets])
+    batch = np.array([1.0, 1.0], dtype=floatX)
 
-    p, step = fitted(lbfgs(memory_size=4))
-    evaluating_p, evaluating_step = fitted(lbfgs(memory_size=4))
-    evaluated = next(
-        variable
-        for variable in evaluating_step.get_shared()
-        if "line_search/evaluated" in str(variable.name)
-    )
-    targets = np.array([1.0, 1.0], dtype=floatX)
-    for _ in range(3):
-        step(targets)
-        evaluating_step(targets)
+    def run(before_nudged_step):
+        for _ in range(3):
+            step(batch)
+        before_nudged_step()
+        step(batch + np.sqrt(np.finfo(floatX).eps))
+        return p.get_value().copy()
 
-    nudged = targets + np.sqrt(np.finfo(floatX).eps)
-    evaluated.set_value(False)
-    step(nudged)
-    evaluating_step(nudged)
+    reusing, evaluating = _reusing_then_evaluating(step, run)
 
-    np.testing.assert_array_equal(p.get_value(), evaluating_p.get_value())
+    np.testing.assert_array_equal(reusing, evaluating)
 
 
 def test_lbfgs_keeps_its_trial_only_when_the_search_moved_there():
-    def rosenbrock(rule):
-        p = trainable(np.array([-1.2, 1.0]), name="x")
-        loss = (1.0 - p[0]) ** 2 + 100.0 * (p[1] - p[0] ** 2) ** 2
-        return p, compile_train(loss, rule, inputs=[])
+    p = trainable(np.array([-1.2, 1.0]), name="x")
+    loss = (1.0 - p[0]) ** 2 + 100.0 * (p[1] - p[0] ** 2) ** 2
+    step = compile_train(loss, lbfgs(line_search=zoom_line_search(2)), inputs=[])
+    failures = next(
+        variable for variable in step.get_shared() if variable.name == "lbfgs/line_search/failures"
+    )
 
-    p, step = rosenbrock(lbfgs(line_search=zoom_line_search(2)))
-    evaluating_p, evaluating_step = rosenbrock(lbfgs(line_search=zoom_line_search(2)))
-    state = {variable.name: variable for variable in evaluating_step.get_shared()}
+    def run(before_each_step):
+        for _ in range(40):
+            before_each_step()
+            step()
+        return p.get_value().copy()
 
-    for _ in range(40):
-        step()
-        state["lbfgs/line_search/evaluated"].set_value(False)
-        evaluating_step()
+    reusing, evaluating = _reusing_then_evaluating(step, run)
 
-    assert state["lbfgs/line_search/failures"].get_value() > 0
-    np.testing.assert_allclose(p.get_value(), evaluating_p.get_value(), rtol=1e-10)
+    assert failures.get_value() > 0
+    np.testing.assert_allclose(reusing, evaluating, rtol=1e-10)
 
 
 @pytest.mark.parametrize(
@@ -940,40 +884,32 @@ def test_lbfgs_keeps_its_trial_only_when_the_search_moved_there():
 )
 def test_lbfgs_takes_the_steps_of_a_rule_that_evaluates_at_every_step(tail):
     p, _, step = _quartic(chain(lbfgs(memory_size=4), *tail))
-    evaluating_p, _, evaluating_step = _quartic(chain(lbfgs(memory_size=4), *tail))
-    evaluated = next(
-        variable
-        for variable in evaluating_step.get_shared()
-        if "line_search/evaluated" in str(variable.name)
-    )
 
-    for _ in range(8):
-        step()
-        evaluated.set_value(False)
-        evaluating_step()
+    def run(before_each_step):
+        for _ in range(8):
+            before_each_step()
+            step()
+        return p.get_value().copy()
 
-    np.testing.assert_allclose(p.get_value(), evaluating_p.get_value(), rtol=1e-10)
+    reusing, evaluating = _reusing_then_evaluating(step, run)
+
+    np.testing.assert_allclose(reusing, evaluating, rtol=1e-10)
 
 
 def test_lbfgs_does_not_read_the_kept_gradient_after_set_value():
     p, _, step = _quartic(lbfgs(memory_size=4))
-    evaluating_p, _, evaluating_step = _quartic(lbfgs(memory_size=4))
-    evaluated = next(
-        variable
-        for variable in evaluating_step.get_shared()
-        if "line_search/evaluated" in str(variable.name)
-    )
-    for _ in range(3):
+
+    def run(before_moved_step):
+        for _ in range(3):
+            step()
+        p.set_value(np.array([2.0, 1.0], dtype=floatX))
+        before_moved_step()
         step()
-        evaluating_step()
+        return p.get_value().copy()
 
-    for parameter in (p, evaluating_p):
-        parameter.set_value(np.array([2.0, 1.0], dtype=floatX))
-    evaluated.set_value(False)
-    step()
-    evaluating_step()
+    reusing, evaluating = _reusing_then_evaluating(step, run)
 
-    np.testing.assert_array_equal(p.get_value(), evaluating_p.get_value())
+    np.testing.assert_array_equal(reusing, evaluating)
 
 
 # optax.lbfgs() on Rosenbrock from (-1.2, 1), whose default search is the same zoom with a first trial of

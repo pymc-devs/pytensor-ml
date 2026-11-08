@@ -19,6 +19,6 @@ dependencies:
 - sphinx-autobuild *
 - jupyter-sphinx *
 - sphinxcontrib-bibtex *
-- pytensor >=3.3.7,<3.4.0
+- pytensor >=3.3.8,<3.4.0
 - numpy *
 - python >=3.12
