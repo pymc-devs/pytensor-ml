@@ -1,5 +1,5 @@
 # Sphinx plugin that stages every notebook under examples/ into the docs tree, extracts a thumbnail
-# from its last image output, and emits the grid-card gallery page. Categories come from the
+# from its tagged or last image output, and emits the grid-card gallery page. Categories come from the
 # subdirectory a notebook sits in; see docs/source/dev/docs.rst.
 # Adapted from gEconpy, which adapted it from PyMC / seaborn / mpld3.
 
@@ -41,6 +41,10 @@ CATCH_ALL_PAGE = "gallery"
 # title-casing the folder name would get it wrong.
 SECTION_ORDER: tuple[str, ...] = ()
 SECTION_TITLES: dict[str, str] = {"feed_forward": "Feed-forward"}
+
+# Cell tag that picks the cell whose first image becomes the notebook's gallery thumbnail. Tag the same
+# cell `remove-cell` to keep it off the rendered page; its output stays in the notebook for extraction.
+THUMBNAIL_TAG = "gallery-thumbnail"
 
 PAGE_TITLE = """
 {title}
@@ -93,6 +97,14 @@ def is_tracked_by_git(filepath):
         return result.returncode == 0
 
 
+def _cell_images(cell):
+    return [
+        output["data"]["image/png"]
+        for output in cell.get("outputs", [])
+        if "image/png" in output.get("data", {})
+    ]
+
+
 def create_thumbnail(infile, width=275, height=275, cx=0.5, cy=0.5, border=4):
     im = image.imread(infile)
     rows, cols = im.shape[:2]
@@ -136,13 +148,24 @@ class NotebookGenerator:
         shutil.copyfile(self.src_nb, self.staged_nb)
 
     def extract_preview_pic(self):
-        pic = None
-        for cell in self.json_source["cells"]:
-            for output in cell.get("outputs", []):
-                if "image/png" in output.get("data", []):
-                    pic = output["data"]["image/png"]
-        if pic is not None:
-            return base64.b64decode(pic)
+        """Return the first image of the cell tagged ``THUMBNAIL_TAG``, or else the last image."""
+        cells = self.json_source["cells"]
+        tagged_cells = [
+            cell for cell in cells if THUMBNAIL_TAG in cell.get("metadata", {}).get("tags", [])
+        ]
+        if tagged_cells:
+            tagged_pics = _cell_images(tagged_cells[0])
+            if tagged_pics:
+                return base64.b64decode(tagged_pics[0])
+            logger.warning(
+                f"The cell tagged {THUMBNAIL_TAG!r} in {self.src_nb.name} has no image output, "
+                f"using the last image",
+                type="thumbnail_extractor",
+            )
+
+        pics = [pic for cell in cells for pic in _cell_images(cell)]
+        if pics:
+            return base64.b64decode(pics[-1])
         return None
 
     def gen_previews(self):
