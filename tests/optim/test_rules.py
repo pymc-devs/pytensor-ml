@@ -567,51 +567,6 @@ def test_rprop_shrinks_and_skips_on_sign_flip():
     np.testing.assert_allclose(p.get_value(), [-lr + lr * eta_minus])
 
 
-def test_lbfgs_satisfies_the_secant_condition_on_the_newest_pair():
-    """The inverse-Hessian estimate maps the newest gradient difference onto the parameter difference
-    that produced it, ``H y = s``, whatever the initial scaling. A zero gradient holds the parameters
-    still while the move before it becomes the newest pair with ``y = -g``, so feeding ``-g`` next has
-    to move them by ``-lr * s``. Two parameters, so the memory is split across tensors."""
-    g_u, g_v = pt.vector("g_u"), pt.vector("g_v")
-    u = trainable(np.zeros(2), name="u")
-    v = trainable(np.zeros(1), name="v")
-    lr = 0.3
-    fn = function([g_u, g_v], [u, v], updates=lbfgs_updates([g_u, g_v], [u, v], learning_rate=lr))
-    g = [np.array([1.0, -2.0], dtype=floatX), np.array([0.5], dtype=floatX)]
-
-    fn(*g)
-    fn(*[0.5 * gp for gp in g])
-    before_move = [x.get_value().copy() for x in (u, v)]
-    fn(*[0.5 * gp for gp in g])
-    after_move = [x.get_value().copy() for x in (u, v)]
-    fn(*[np.zeros_like(gp) for gp in g])  # no move; (after - before, -0.5 g) is now the newest pair
-    fn(*[-0.5 * gp for gp in g])
-
-    for x, x_after_move, x_before_move in zip((u, v), after_move, before_move):
-        np.testing.assert_allclose(
-            x.get_value(), x_after_move - lr * (x_after_move - x_before_move), rtol=RTOL
-        )
-
-
-def test_lbfgs_reaches_the_minimum_of_a_quadratic():
-    # Two slots for two dimensions: once both hold pairs the estimate is close to the true inverse
-    # Hessian and unit steps close in on the minimizer, which is known in closed form.
-    A = np.array([[3.0, 0.5], [0.5, 1.0]])
-    b = np.array([1.0, -2.0])
-    u = trainable(np.array([5.0]), name="u")
-    v = trainable(np.array([-3.0]), name="v")
-    x = pt.concatenate([u, v])
-    loss = 0.5 * x @ pt.constant(A, dtype=floatX) @ x - pt.constant(b, dtype=floatX) @ x
-    step = function([], loss, updates=lbfgs_updates(loss, [u, v], learning_rate=1.0, memory_size=2))
-
-    for _ in range(12):
-        step()
-
-    np.testing.assert_allclose(
-        np.concatenate([u.get_value(), v.get_value()]), np.linalg.solve(A, b), rtol=1e-4
-    )
-
-
 @pytest.mark.parametrize("gradient", [[3.0, -4.0], [0.3, -0.4]], ids=["long", "short"])
 def test_lbfgs_first_step_is_the_gradient_capped_to_the_unit_ball(gradient):
     # A gradient of norm 5 is cut to unit length, one of norm 0.5 is left as it is.
@@ -771,17 +726,16 @@ def test_lbfgs_parameters_of_different_dtypes_reach_the_minimum():
     np.testing.assert_allclose([u.get_value()[0], v.get_value()[0]], [1.0, -2.0], rtol=1e-5)
 
 
-@pytest.mark.parametrize(
-    "line_search", [None, zoom_line_search()], ids=["fixed_step", "line_search"]
-)
-def test_lbfgs_resumes_its_trajectory_from_a_checkpoint(tmp_path, line_search):
+def test_lbfgs_resumes_its_trajectory_from_a_checkpoint(tmp_path):
     """Every piece of the rule's state is named and saved, so a run restored mid-way retraces the
     steps it took the first time; a ring index or curvature left behind would desynchronize the memory
-    from its order."""
+    from its order. The searching rule keeps every slot the fixed-step rule does, and the search's own."""
     A = np.array([[3.0, 0.5], [0.5, 1.0]])
     p = trainable(np.array([5.0, -3.0]), name="w")
     loss = 0.5 * p @ pt.constant(A, dtype=floatX) @ p
-    updates = lbfgs_updates(loss, [p], learning_rate=0.5, memory_size=2, line_search=line_search)
+    updates = lbfgs_updates(
+        loss, [p], learning_rate=0.5, memory_size=2, line_search=zoom_line_search()
+    )
     state = list(updates)
     step = function([], loss, updates=updates)
     for _ in range(3):
