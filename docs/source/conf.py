@@ -46,6 +46,8 @@ extensions = [
     "sphinx_copybutton",
     "sphinx_codeautolink",
     "sphinx_sitemap",
+    # Needs no ogp_site_url: on Read the Docs it reads the canonical URL from the build environment.
+    "sphinxext.opengraph",
     "notfound.extension",
     "jupyter_sphinx",
     "sphinxcontrib.bibtex",

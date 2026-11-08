@@ -15,6 +15,7 @@ dependencies:
 - sphinx-design *
 - sphinx-codeautolink *
 - sphinx-sitemap *
+- sphinxext-opengraph *
 - sphinx-notfound-page *
 - sphinx-autobuild *
 - jupyter-sphinx *
