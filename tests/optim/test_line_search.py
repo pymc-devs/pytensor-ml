@@ -96,7 +96,7 @@ def test_the_search_agrees_with_scipys_strong_wolfe_search(name):
     step_size, _, _, direction = search(*case)
 
     f = OBJECTIVES[objective]
-    gradient = pytensor.function([X], pt.grad(OBJECTIVES[objective](X), X))
+    _, gradient = compiled(objective, max_steps)
     expected = scipy_line_search(
         lambda x: float(f(x, np)), gradient, x0, direction, c1=1e-4, c2=0.9, maxiter=max_steps
     )[0]
@@ -111,10 +111,10 @@ def test_an_accepted_step_satisfies_the_strong_wolfe_conditions(name):
     """Checked directly on the objective rather than against another search: sufficient decrease, by
     Armijo or by the approximate Wolfe test, and a slope flattened to within ``curv_rtol``."""
     case, _ = PINNED[name]
-    objective, x0, _, _ = case
+    objective, x0, _, max_steps = case
     step_size, failed, _, direction = search(*case)
     f = OBJECTIVES[objective]
-    gradient = pytensor.function([X], pt.grad(OBJECTIVES[objective](X), X))
+    _, gradient = compiled(objective, max_steps)
 
     value0, slope0 = f(x0, np), gradient(x0) @ direction
     value, slope = (
