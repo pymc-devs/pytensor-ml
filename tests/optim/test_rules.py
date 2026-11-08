@@ -61,42 +61,20 @@ def trainable(value, name=None, **kwargs):
     "rule",
     [
         sgd(learning_rate=1e-2),
-        sgd(learning_rate=1e-2, momentum=0.9),
-        sgd(learning_rate=1e-2, momentum=0.9, nesterov=True),
         adam(learning_rate=1e-2),
-        adam(learning_rate=1e-2, amsgrad=True),
         adamw(learning_rate=1e-2, weight_decay=1e-2),
-        adamw(learning_rate=1e-2, weight_decay=1e-2, amsgrad=True),
         adagrad(learning_rate=1e-1),
         adadelta(learning_rate=1.0),
         rmsprop(learning_rate=1e-2),
-        rmsprop(learning_rate=1e-2, momentum=0.9),
-        rmsprop(learning_rate=1e-2, centered=True),
         nadam(learning_rate=1e-2),
         adamax(learning_rate=1e-2),
         rprop(learning_rate=1e-2),
-        lbfgs(),
     ],
-    ids=[
-        "sgd",
-        "sgd_momentum",
-        "sgd_nesterov",
-        "adam",
-        "adam_amsgrad",
-        "adamw",
-        "adamw_amsgrad",
-        "adagrad",
-        "adadelta",
-        "rmsprop",
-        "rmsprop_momentum",
-        "rmsprop_centered",
-        "nadam",
-        "adamax",
-        "rprop",
-        "lbfgs",
-    ],
+    ids=["sgd", "adam", "adamw", "adagrad", "adadelta", "rmsprop", "nadam", "adamax", "rprop"],
 )
 def test_rule_reduces_loss(run_training, rule):
+    # One case per rule. Each variant (momentum, nesterov, amsgrad, centered) has a closed-form test
+    # below, and L-BFGS trains a network in the forward-pass counting test.
     history = run_training(rule, n_steps=100)
     assert history[-1] < history[0]
 
