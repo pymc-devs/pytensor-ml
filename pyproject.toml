@@ -200,7 +200,8 @@ sphinxext-opengraph = "*"
 sphinx-notfound-page = "*"
 sphinx-autobuild = "*"
 jupyter-sphinx = "*"
-sphinxcontrib-bibtex = "*"
+# docs/sphinxext/simplebib.py parses references.bib with pybtex.
+pybtex = "*"
 
 [tool.pixi.feature.docs.pypi-dependencies]
 pytensor_ml = { path = ".", editable = true }

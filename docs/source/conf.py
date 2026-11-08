@@ -50,15 +50,14 @@ extensions = [
     "sphinxext.opengraph",
     "notfound.extension",
     "jupyter_sphinx",
-    "sphinxcontrib.bibtex",
+    "simplebib",
     "generate_gallery",
 ]
 
-# Bibliographic citations: drop new entries into docs/source/references.bib
-# and cite from prose with `{cite:t}` (textual) or `{cite:p}` (parenthetical).
-bibtex_bibfiles = ["references.bib"]
-bibtex_default_style = "unsrt"
-bibtex_reference_style = "author_year"
+# Bibliographic citations: drop new entries into docs/source/references.bib and cite from prose with
+# `{cite:t}` / `{cite:p}`. Each page renders its own numbered reference list via `{bibliography}` (see
+# docs/sphinxext/simplebib.py); the autosummary templates add one to every API page.
+simplebib_bibfiles = ["references.bib"]
 
 # Use the document path as prefix for autosectionlabel anchors so the same
 # section title in two files doesn't collide.

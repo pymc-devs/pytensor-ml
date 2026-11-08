@@ -19,7 +19,7 @@ dependencies:
 - sphinx-notfound-page *
 - sphinx-autobuild *
 - jupyter-sphinx *
-- sphinxcontrib-bibtex *
+- pybtex *
 - pytensor >=3.3.8,<3.4.0
 - numpy *
 - python >=3.12
