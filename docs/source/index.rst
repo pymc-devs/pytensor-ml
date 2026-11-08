@@ -73,8 +73,9 @@ Quick example
 
     predictions = model.predict(X).argmax(axis=-1)
 
-See the :doc:`example gallery <examples/gallery>` for full end-to-end
-walkthroughs.
+The :ref:`digits classifier example <digits_feed_forward>` extends this network with batch
+normalization, dropout, and a held-out test set. See the :doc:`example gallery <examples/gallery>`
+for full end-to-end walkthroughs.
 
 .. toctree::
    :maxdepth: 1
