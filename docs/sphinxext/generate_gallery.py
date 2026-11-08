@@ -24,10 +24,12 @@ logger = sphinx.util.logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 NOTEBOOKS_ROOT = REPO_ROOT / "examples"
 
-# A notebook's path under examples/ decides where it lands: `examples/<page>/<section>/nb.ipynb`
-# puts it in a named section of that page, `examples/<page>/nb.ipynb` puts it on the page with no
-# section heading, and a notebook at the top level falls to CATCH_ALL_PAGE. Pages appear in the order
-# listed here; a page with no notebooks writes no file at all.
+# A notebook's path under examples/ decides where it lands. A folder named here is a page:
+# `examples/<page>/nb.ipynb` puts the notebook on that page with no section heading, and
+# `examples/<page>/<section>/nb.ipynb` puts it in a named section of the page. Any other folder is a
+# section of CATCH_ALL_PAGE, so `examples/<section>/nb.ipynb` lands there under that heading, and a
+# notebook at the top level lands on CATCH_ALL_PAGE with no heading. Pages appear in the order listed
+# here; a page with no notebooks writes no file at all.
 GALLERY_PAGES = (
     ("getting_started", "Getting Started", "getting_started"),
     ("gallery", "Example Gallery", "gallery"),
@@ -38,7 +40,7 @@ CATCH_ALL_PAGE = "gallery"
 # it sits on the page (anything unlisted follows, alphabetically), and give it a title only when
 # title-casing the folder name would get it wrong.
 SECTION_ORDER: tuple[str, ...] = ()
-SECTION_TITLES: dict[str, str] = {}
+SECTION_TITLES: dict[str, str] = {"feed_forward": "Feed-forward"}
 
 PAGE_TITLE = """
 {title}
@@ -173,18 +175,21 @@ def discover_notebooks() -> dict[tuple[str, str | None], list[Path]]:
     -------
     grouped : dict mapping tuple to list of pathlib.Path
         Notebook paths keyed by ``(page, section)``, where ``section`` is None for a notebook that
-        sits directly in a page's folder.
+        sits directly in a page's folder or at the top level of ``examples/``.
     """
     if not NOTEBOOKS_ROOT.exists():
         return {}
 
+    known_pages = {page for page, _, _ in GALLERY_PAGES}
     grouped: dict[tuple[str, str | None], list[Path]] = {}
     for path in sorted(NOTEBOOKS_ROOT.rglob("*.ipynb")):
         if ".ipynb_checkpoints" in path.parts:
             continue
-        parts = path.relative_to(NOTEBOOKS_ROOT).parts
-        page = parts[0] if len(parts) > 1 else CATCH_ALL_PAGE
-        section = parts[1] if len(parts) > 2 else None
+        folders = path.relative_to(NOTEBOOKS_ROOT).parts[:-1]
+        if folders and folders[0] in known_pages:
+            page, section = folders[0], (folders[1] if len(folders) > 1 else None)
+        else:
+            page, section = CATCH_ALL_PAGE, (folders[0] if folders else None)
         grouped.setdefault((page, section), []).append(path)
     return grouped
 
