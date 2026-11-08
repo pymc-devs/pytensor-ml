@@ -803,66 +803,78 @@ def _penalized(rule):
     return p, step
 
 
-def test_lbfgs_measures_the_objective_of_each_step_when_data_and_shared_state_change():
-    p, step = _penalized(lbfgs(memory_size=4))
-    evaluating_p, evaluating_step = _penalized(lbfgs(memory_size=4))
+def _reusing_then_evaluating(step, run):
+    """Return what ``run`` gives from one starting state twice: first as compiled, reusing the search's
+    kept trial, then with the search made to evaluate afresh wherever ``run`` calls the hook it is
+    handed. One compiled step serves both, so the comparison costs a single compile."""
+    shared = step.get_shared()
+    start = [variable.get_value() for variable in shared]
     evaluated = next(
-        variable
-        for variable in evaluating_step.get_shared()
-        if "line_search/evaluated" in str(variable.name)
+        variable for variable in shared if "line_search/evaluated" in str(variable.name)
     )
 
-    for targets in ([1.0, 1.0], [1.0, 1.0], [-3.0, 2.0], [-3.0, 2.0], [0.0, 4.0]):
-        batch = np.array(targets, dtype=floatX)
-        evaluated.set_value(False)
-        assert float(step(batch)) == float(evaluating_step(batch))
-        np.testing.assert_array_equal(p.get_value(), evaluating_p.get_value())
+    reusing = run(lambda: None)
+    for variable, value in zip(shared, start):
+        variable.set_value(value)
+    evaluating = run(lambda: evaluated.set_value(False))
+    return reusing, evaluating
+
+
+def test_lbfgs_measures_the_objective_of_each_step_when_data_and_shared_state_change():
+    p, step = _penalized(lbfgs(memory_size=4))
+
+    def run(before_each_step):
+        trajectory = []
+        for targets in ([1.0, 1.0], [1.0, 1.0], [-3.0, 2.0], [-3.0, 2.0], [0.0, 4.0]):
+            before_each_step()
+            loss = float(step(np.array(targets, dtype=floatX)))
+            trajectory.append((loss, p.get_value().copy()))
+        return trajectory
+
+    reusing, evaluating = _reusing_then_evaluating(step, run)
+
+    for (loss, point), (evaluated_loss, evaluated_point) in zip(reusing, evaluating):
+        assert loss == evaluated_loss
+        np.testing.assert_array_equal(point, evaluated_point)
 
 
 def test_lbfgs_sees_a_change_of_the_objective_far_smaller_than_the_loss():
-    def fitted(rule):
-        p = trainable(np.array([2.0, -1.0]), name="w")
-        targets = pt.vector("targets")
-        loss = ((p - targets) ** 2).sum() + (p**4).sum()
-        return p, compile_train(loss, rule, inputs=[targets])
+    p = trainable(np.array([2.0, -1.0]), name="w")
+    targets = pt.vector("targets")
+    loss = ((p - targets) ** 2).sum() + (p**4).sum()
+    step = compile_train(loss, lbfgs(memory_size=4), inputs=[targets])
+    batch = np.array([1.0, 1.0], dtype=floatX)
 
-    p, step = fitted(lbfgs(memory_size=4))
-    evaluating_p, evaluating_step = fitted(lbfgs(memory_size=4))
-    evaluated = next(
-        variable
-        for variable in evaluating_step.get_shared()
-        if "line_search/evaluated" in str(variable.name)
-    )
-    targets = np.array([1.0, 1.0], dtype=floatX)
-    for _ in range(3):
-        step(targets)
-        evaluating_step(targets)
+    def run(before_nudged_step):
+        for _ in range(3):
+            step(batch)
+        before_nudged_step()
+        step(batch + np.sqrt(np.finfo(floatX).eps))
+        return p.get_value().copy()
 
-    nudged = targets + np.sqrt(np.finfo(floatX).eps)
-    evaluated.set_value(False)
-    step(nudged)
-    evaluating_step(nudged)
+    reusing, evaluating = _reusing_then_evaluating(step, run)
 
-    np.testing.assert_array_equal(p.get_value(), evaluating_p.get_value())
+    np.testing.assert_array_equal(reusing, evaluating)
 
 
 def test_lbfgs_keeps_its_trial_only_when_the_search_moved_there():
-    def rosenbrock(rule):
-        p = trainable(np.array([-1.2, 1.0]), name="x")
-        loss = (1.0 - p[0]) ** 2 + 100.0 * (p[1] - p[0] ** 2) ** 2
-        return p, compile_train(loss, rule, inputs=[])
+    p = trainable(np.array([-1.2, 1.0]), name="x")
+    loss = (1.0 - p[0]) ** 2 + 100.0 * (p[1] - p[0] ** 2) ** 2
+    step = compile_train(loss, lbfgs(line_search=zoom_line_search(2)), inputs=[])
+    failures = next(
+        variable for variable in step.get_shared() if variable.name == "lbfgs/line_search/failures"
+    )
 
-    p, step = rosenbrock(lbfgs(line_search=zoom_line_search(2)))
-    evaluating_p, evaluating_step = rosenbrock(lbfgs(line_search=zoom_line_search(2)))
-    state = {variable.name: variable for variable in evaluating_step.get_shared()}
+    def run(before_each_step):
+        for _ in range(40):
+            before_each_step()
+            step()
+        return p.get_value().copy()
 
-    for _ in range(40):
-        step()
-        state["lbfgs/line_search/evaluated"].set_value(False)
-        evaluating_step()
+    reusing, evaluating = _reusing_then_evaluating(step, run)
 
-    assert state["lbfgs/line_search/failures"].get_value() > 0
-    np.testing.assert_allclose(p.get_value(), evaluating_p.get_value(), rtol=1e-10)
+    assert failures.get_value() > 0
+    np.testing.assert_allclose(reusing, evaluating, rtol=1e-10)
 
 
 @pytest.mark.parametrize(
@@ -872,40 +884,32 @@ def test_lbfgs_keeps_its_trial_only_when_the_search_moved_there():
 )
 def test_lbfgs_takes_the_steps_of_a_rule_that_evaluates_at_every_step(tail):
     p, _, step = _quartic(chain(lbfgs(memory_size=4), *tail))
-    evaluating_p, _, evaluating_step = _quartic(chain(lbfgs(memory_size=4), *tail))
-    evaluated = next(
-        variable
-        for variable in evaluating_step.get_shared()
-        if "line_search/evaluated" in str(variable.name)
-    )
 
-    for _ in range(8):
-        step()
-        evaluated.set_value(False)
-        evaluating_step()
+    def run(before_each_step):
+        for _ in range(8):
+            before_each_step()
+            step()
+        return p.get_value().copy()
 
-    np.testing.assert_allclose(p.get_value(), evaluating_p.get_value(), rtol=1e-10)
+    reusing, evaluating = _reusing_then_evaluating(step, run)
+
+    np.testing.assert_allclose(reusing, evaluating, rtol=1e-10)
 
 
 def test_lbfgs_does_not_read_the_kept_gradient_after_set_value():
     p, _, step = _quartic(lbfgs(memory_size=4))
-    evaluating_p, _, evaluating_step = _quartic(lbfgs(memory_size=4))
-    evaluated = next(
-        variable
-        for variable in evaluating_step.get_shared()
-        if "line_search/evaluated" in str(variable.name)
-    )
-    for _ in range(3):
+
+    def run(before_moved_step):
+        for _ in range(3):
+            step()
+        p.set_value(np.array([2.0, 1.0], dtype=floatX))
+        before_moved_step()
         step()
-        evaluating_step()
+        return p.get_value().copy()
 
-    for parameter in (p, evaluating_p):
-        parameter.set_value(np.array([2.0, 1.0], dtype=floatX))
-    evaluated.set_value(False)
-    step()
-    evaluating_step()
+    reusing, evaluating = _reusing_then_evaluating(step, run)
 
-    np.testing.assert_array_equal(p.get_value(), evaluating_p.get_value())
+    np.testing.assert_array_equal(reusing, evaluating)
 
 
 # optax.lbfgs() on Rosenbrock from (-1.2, 1), whose default search is the same zoom with a first trial of
