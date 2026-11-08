@@ -71,6 +71,8 @@ exclude_patterns = [
     "*/autosummary/*.rst",
     "Thumbs.db",
     ".DS_Store",
+    # Fragments that pages pull in with an include, never pages of their own.
+    "_includes/*",
 ]
 
 source_suffix = {
@@ -157,6 +159,15 @@ myst_enable_extensions = [
     "substitution",
 ]
 myst_dmath_double_inline = True
+
+# Defaults for the extra-dependencies callout in _includes/extra_installs.md. A notebook names its
+# packages by setting ``extra_dependencies`` under ``myst.substitutions`` in its metadata, and can add a
+# note with ``extra_install_notes``.
+myst_substitutions = {
+    "pip_dependencies": "{{ extra_dependencies }}",
+    "conda_dependencies": "{{ extra_dependencies }}",
+    "extra_install_notes": "",
+}
 
 # Notebooks ship pre-rendered. Re-executing them on RTD would require pinning
 # every numerical dep and would slow the build significantly; flip this to
