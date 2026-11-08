@@ -40,7 +40,7 @@ CATCH_ALL_PAGE = "gallery"
 # Sections are the folders themselves, titled by their folder name. List a folder here to pin where
 # it sits on the page (anything unlisted follows, alphabetically), and give it a title only when
 # title-casing the folder name would get it wrong.
-SECTION_ORDER: tuple[str, ...] = ()
+SECTION_ORDER: tuple[str, ...] = ("feed_forward", "convolutional", "transformers")
 SECTION_TITLES: dict[str, str] = {"feed_forward": "Feed-forward"}
 
 # Cell tag that picks the cell whose first image becomes the notebook's gallery thumbnail. Tag the same
