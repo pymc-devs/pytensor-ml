@@ -33,8 +33,8 @@ class LBFGSDirection(SymbolicOp):
         r &\leftarrow \gamma q \\
         \beta_i &= \rho_i y_i^\top r, \quad r \leftarrow r + (\alpha_i - \beta_i) s_i \quad \text{oldest to newest}
 
-    and :math:`d = r`. Both loops run as a ``scan`` over the ring order, so the inner graph runs on any backend
-    with a scan dispatch, and a backend without one registers its own implementation of this op.
+    and :math:`d = r`. Both loops run as a ``scan`` over the ring order, so the inner graph runs on any
+    backend with a scan dispatch, and a backend without one registers its own implementation of this op.
 
     Parameters
     ----------
