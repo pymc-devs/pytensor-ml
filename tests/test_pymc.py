@@ -4,8 +4,8 @@ import pytest
 from pytensor.graph.traversal import ancestors
 
 from pytensor_ml.activations import Tanh
-from pytensor_ml.layers import Input, Linear, Sequential
-from pytensor_ml.pytensorf import collect_trainable_params
+from pytensor_ml.layers import BatchNorm, Input, Linear, Sequential
+from pytensor_ml.pytensorf import collect_non_trainable_params, collect_trainable_params
 
 pm = pytest.importorskip("pymc")
 
@@ -34,6 +34,23 @@ def test_replace_with_model_variables_swaps_in_priors_and_data_by_name():
     assert X not in graph
     assert X_data in graph and all(prior in graph for prior in priors)
     assert np.isfinite(model.compile_logp()(model.initial_point()))
+
+
+def test_replace_with_model_variables_keeps_running_statistics():
+    X = Input("X", shape=(None, 2))
+    prediction = Sequential(Linear("fc", n_in=2, n_out=3), BatchNorm(name="bn", n_in=3))(X)
+    running_statistics = collect_non_trainable_params(prediction)
+
+    with pm.Model():
+        pm.Data("X", np.ones((4, 2)))
+        pm.Normal("fc_W", shape=(2, 3))
+        pm.Normal("fc_b", shape=(3,))
+        pm.Normal("bn_scale", shape=(3,))
+        pm.Normal("bn_loc", shape=(3,))
+        replaced = replace_with_model_variables(prediction)
+
+    assert collect_trainable_params(replaced) == []
+    assert set(collect_non_trainable_params(replaced)) == set(running_statistics)
 
 
 def test_replace_with_model_variables_names_every_input_the_model_lacks():
