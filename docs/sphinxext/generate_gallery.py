@@ -143,8 +143,8 @@ class NotebookGenerator:
         self.staged_nb = examples_dir / category / f"{self.stripped_name}.ipynb"
         self.png_path = thumbnails_dir / category / f"{self.stripped_name}.png"
 
-        with src_nb.open(encoding="utf-8") as fid:
-            self.json_source = json.load(fid)
+        with src_nb.open(encoding="utf-8") as notebook_file:
+            self.json_source = json.load(notebook_file)
 
     def stage_notebook(self):
         self.staged_nb.parent.mkdir(parents=True, exist_ok=True)
@@ -183,8 +183,8 @@ class NotebookGenerator:
 
         preview = self.extract_preview_pic()
         if preview is not None:
-            with self.png_path.open("wb") as buff:
-                buff.write(preview)
+            with self.png_path.open("wb") as png_file:
+                png_file.write(preview)
             create_thumbnail(self.png_path)
         else:
             logger.warning(
@@ -308,20 +308,20 @@ def main(app):
                 # Staged under the same folders it came from, so two notebooks sharing a name in
                 # different sections cannot collide.
                 relative_dir = nb_path.parent.relative_to(NOTEBOOKS_ROOT)
-                nbg = NotebookGenerator(
+                generator = NotebookGenerator(
                     src_nb=nb_path,
                     category=str(relative_dir) if relative_dir.parts else CATCH_ALL_PAGE,
                     examples_dir=examples_dir,
                     thumbnails_dir=thumbnails_dir,
                 )
-                nbg.stage_notebook()
-                nbg.gen_previews()
+                generator.stage_notebook()
+                generator.gen_previews()
 
-                doc_name = f"{nbg.category}/{nbg.stripped_name}"
+                doc_name = f"{generator.category}/{generator.stripped_name}"
                 toctree_entries.append(doc_name)
-                # Relative to docs/source/ — the leading slash makes Sphinx resolve it from the source
+                # Relative to docs/source/: the leading slash makes Sphinx resolve it from the source
                 # root, so a hand-supplied thumbnail can be dropped in at the same path.
-                img_path = f"/_thumbnails/{nbg.category}/{nbg.stripped_name}.png"
+                img_path = f"/_thumbnails/{generator.category}/{generator.stripped_name}.png"
                 body.append(
                     ITEM_TEMPLATE.format(
                         doc_name=doc_name,

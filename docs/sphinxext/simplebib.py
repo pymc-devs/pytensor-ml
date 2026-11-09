@@ -21,8 +21,8 @@ def _cite_role(name, rawtext, text, lineno, inliner, options=None, content=None)
     # `cite:t` names the authors in the sentence; `cite:p` is the bare marker.
     textual = name.rpartition(":")[2] == "t"
     result = []
-    for i, key in enumerate(k.strip() for k in text.split(",") if k.strip()):
-        if i:
+    for position, key in enumerate(part.strip() for part in text.split(",") if part.strip()):
+        if position:
             result.append(nodes.Text(", "))
         node = cite_ref("", key=key, textual=textual)
         result.append(node)
