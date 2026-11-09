@@ -11,6 +11,7 @@ from pytensor_ml.layers.combinators import (
     Concatenate,
     Flatten,
     Input,
+    Reshape,
     Sequential,
     Squeeze,
 )
@@ -109,6 +110,7 @@ __all__ = [
     "ReflectionPad2D",
     "ReplicationPad1D",
     "ReplicationPad2D",
+    "Reshape",
     "RotaryEmbedding",
     "Sequential",
     "Squeeze",

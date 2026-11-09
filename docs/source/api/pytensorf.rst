@@ -13,6 +13,7 @@ Compilation
     compile_predict
     rewrite_for_prediction
     rewrite_pregrad
+    rebuild
 
 Graph inspection
 ----------------

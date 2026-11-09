@@ -1,4 +1,5 @@
 import numpy as np
+import pytensor
 import pytensor.tensor as pt
 import pytest
 
@@ -182,6 +183,47 @@ def test_compile_train_accepts_a_prebuilt_loss():
     history = [float(step(X_batch)) for _ in range(50)]
 
     assert history[-1] < history[0]
+
+
+def test_compile_train_leaves_another_models_statistics_to_that_model():
+    # A GAN's discriminator loss runs through the generator, so it reads the generator's batch norm. If
+    # the discriminator's step wrote those statistics too, they would move twice per iteration.
+    noise = pt.tensor("noise", shape=(None, 4))
+    real = pt.tensor("real", shape=(None, 4))
+    generator_norm = BatchNorm("generator_bn", n_in=4)
+    fake = Sequential(Linear("generator_fc", n_in=4, n_out=4), generator_norm)(noise)
+    critic = Linear("discriminator_fc", n_in=4, n_out=1)
+
+    generator = Model(fake).initialize(seed=0)
+    discriminator = Model(critic(real)).initialize(seed=1)
+
+    discriminator_step = discriminator.compile_train(
+        sgd(1e-2), loss=pt.mean(critic(fake)) - pt.mean(critic(real)), inputs=[real, noise]
+    )
+    generator_step = generator.compile_train(sgd(1e-2), loss=-pt.mean(critic(fake)), inputs=[noise])
+
+    rng = np.random.default_rng(0)
+    real_batch, noise_batch = rng.normal(size=(2, 16, 4)).astype(config.floatX)
+    discriminator_step(real_batch, noise_batch)
+    np.testing.assert_array_equal(generator_norm.running_mean.get_value(), np.zeros(4))
+
+    generator_step(noise_batch)
+    assert not np.array_equal(generator_norm.running_mean.get_value(), np.zeros(4))
+
+
+def test_compile_train_takes_the_data_inputs_of_updates_given_in_compile_kwargs():
+    X = pt.tensor("X", shape=(None, 4))
+    priorities = pt.vector("priorities")
+    model = Model(Linear("fc", n_in=4, n_out=1)(X)).initialize(seed=0)
+    tracked = pytensor.shared(np.zeros(3, dtype=config.floatX), name="tracked")
+
+    step = model.compile_train(
+        sgd(1e-2), loss=pt.mean(model.y), compile_kwargs={"updates": {tracked: priorities}}
+    )
+
+    new_priorities = np.array([1.0, 2.0, 3.0], dtype=config.floatX)
+    step(X=np.zeros((8, 4), dtype=config.floatX), priorities=new_priorities)
+    np.testing.assert_array_equal(tracked.get_value(), new_priorities)
 
 
 def test_compile_train_reduces_loss():

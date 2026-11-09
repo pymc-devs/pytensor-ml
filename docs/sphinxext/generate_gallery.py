@@ -1,5 +1,5 @@
 # Sphinx plugin that stages every notebook under examples/ into the docs tree, extracts a thumbnail
-# from its last image output, and emits the grid-card gallery page. Categories come from the
+# from its tagged or last image output, and emits the grid-card gallery page. Categories come from the
 # subdirectory a notebook sits in; see docs/source/dev/docs.rst.
 # Adapted from gEconpy, which adapted it from PyMC / seaborn / mpld3.
 
@@ -14,6 +14,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 import sphinx
 
 from matplotlib import image
@@ -24,10 +25,12 @@ logger = sphinx.util.logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 NOTEBOOKS_ROOT = REPO_ROOT / "examples"
 
-# A notebook's path under examples/ decides where it lands: `examples/<page>/<section>/nb.ipynb`
-# puts it in a named section of that page, `examples/<page>/nb.ipynb` puts it on the page with no
-# section heading, and a notebook at the top level falls to CATCH_ALL_PAGE. Pages appear in the order
-# listed here; a page with no notebooks writes no file at all.
+# A notebook's path under examples/ decides where it lands. A folder named here is a page:
+# `examples/<page>/nb.ipynb` puts the notebook on that page with no section heading, and
+# `examples/<page>/<section>/nb.ipynb` puts it in a named section of the page. Any other folder is a
+# section of CATCH_ALL_PAGE, so `examples/<section>/nb.ipynb` lands there under that heading, and a
+# notebook at the top level lands on CATCH_ALL_PAGE with no heading. Pages appear in the order listed
+# here; a page with no notebooks writes no file at all.
 GALLERY_PAGES = (
     ("getting_started", "Getting Started", "getting_started"),
     ("gallery", "Example Gallery", "gallery"),
@@ -37,8 +40,18 @@ CATCH_ALL_PAGE = "gallery"
 # Sections are the folders themselves, titled by their folder name. List a folder here to pin where
 # it sits on the page (anything unlisted follows, alphabetically), and give it a title only when
 # title-casing the folder name would get it wrong.
-SECTION_ORDER: tuple[str, ...] = ()
-SECTION_TITLES: dict[str, str] = {}
+SECTION_ORDER: tuple[str, ...] = (
+    "feed_forward",
+    "convolutional",
+    "transformers",
+    "recurrent",
+    "bayesian",
+)
+SECTION_TITLES: dict[str, str] = {"feed_forward": "Feed-forward"}
+
+# Cell tag that picks the cell whose first image becomes the notebook's gallery thumbnail. Tag the same
+# cell `remove-cell` to keep it off the rendered page; its output stays in the notebook for extraction.
+THUMBNAIL_TAG = "gallery-thumbnail"
 
 PAGE_TITLE = """
 {title}
@@ -91,19 +104,24 @@ def is_tracked_by_git(filepath):
         return result.returncode == 0
 
 
-def create_thumbnail(infile, width=275, height=275, cx=0.5, cy=0.5, border=4):
+def _cell_images(cell):
+    return [
+        output["data"]["image/png"]
+        for output in cell.get("outputs", [])
+        if "image/png" in output.get("data", {})
+    ]
+
+
+def create_thumbnail(infile, width=275, height=275, border=4):
     im = image.imread(infile)
     rows, cols = im.shape[:2]
-    size = min(rows, cols)
-    if size == cols:
-        xslice = slice(0, size)
-        ymin = min(max(0, int(cy * rows - size // 2)), rows - size)
-        yslice = slice(ymin, ymin + size)
-    else:
-        yslice = slice(0, size)
-        xmin = min(max(0, int(cx * cols - size // 2)), cols - size)
-        xslice = slice(xmin, xmin + size)
-    thumb = im[yslice, xslice]
+    size = max(rows, cols)
+    # Pad the short side with white instead of cropping the long one, so no part of the figure (a
+    # title, an axis label) is cut off however its saved bounding box came out.
+    white = 1.0 if np.issubdtype(im.dtype, np.floating) else 255
+    thumb = np.full((size, size, im.shape[2]), white, dtype=im.dtype)
+    top, left = (size - rows) // 2, (size - cols) // 2
+    thumb[top : top + rows, left : left + cols] = im
     thumb[:border, :, :3] = thumb[-border:, :, :3] = 0
     thumb[:, :border, :3] = thumb[:, -border:, :3] = 0
 
@@ -125,8 +143,8 @@ class NotebookGenerator:
         self.staged_nb = examples_dir / category / f"{self.stripped_name}.ipynb"
         self.png_path = thumbnails_dir / category / f"{self.stripped_name}.png"
 
-        with src_nb.open(encoding="utf-8") as fid:
-            self.json_source = json.load(fid)
+        with src_nb.open(encoding="utf-8") as notebook_file:
+            self.json_source = json.load(notebook_file)
 
     def stage_notebook(self):
         self.staged_nb.parent.mkdir(parents=True, exist_ok=True)
@@ -134,13 +152,24 @@ class NotebookGenerator:
         shutil.copyfile(self.src_nb, self.staged_nb)
 
     def extract_preview_pic(self):
-        pic = None
-        for cell in self.json_source["cells"]:
-            for output in cell.get("outputs", []):
-                if "image/png" in output.get("data", []):
-                    pic = output["data"]["image/png"]
-        if pic is not None:
-            return base64.b64decode(pic)
+        """Return the first image of the cell tagged ``THUMBNAIL_TAG``, or else the last image."""
+        cells = self.json_source["cells"]
+        tagged_cells = [
+            cell for cell in cells if THUMBNAIL_TAG in cell.get("metadata", {}).get("tags", [])
+        ]
+        if tagged_cells:
+            tagged_pics = _cell_images(tagged_cells[0])
+            if tagged_pics:
+                return base64.b64decode(tagged_pics[0])
+            logger.warning(
+                f"The cell tagged {THUMBNAIL_TAG!r} in {self.src_nb.name} has no image output, "
+                f"using the last image",
+                type="thumbnail_extractor",
+            )
+
+        pics = [pic for cell in cells for pic in _cell_images(cell)]
+        if pics:
+            return base64.b64decode(pics[-1])
         return None
 
     def gen_previews(self):
@@ -154,8 +183,8 @@ class NotebookGenerator:
 
         preview = self.extract_preview_pic()
         if preview is not None:
-            with self.png_path.open("wb") as buff:
-                buff.write(preview)
+            with self.png_path.open("wb") as png_file:
+                png_file.write(preview)
             create_thumbnail(self.png_path)
         else:
             logger.warning(
@@ -173,18 +202,21 @@ def discover_notebooks() -> dict[tuple[str, str | None], list[Path]]:
     -------
     grouped : dict mapping tuple to list of pathlib.Path
         Notebook paths keyed by ``(page, section)``, where ``section`` is None for a notebook that
-        sits directly in a page's folder.
+        sits directly in a page's folder or at the top level of ``examples/``.
     """
     if not NOTEBOOKS_ROOT.exists():
         return {}
 
+    known_pages = {page for page, _, _ in GALLERY_PAGES}
     grouped: dict[tuple[str, str | None], list[Path]] = {}
     for path in sorted(NOTEBOOKS_ROOT.rglob("*.ipynb")):
         if ".ipynb_checkpoints" in path.parts:
             continue
-        parts = path.relative_to(NOTEBOOKS_ROOT).parts
-        page = parts[0] if len(parts) > 1 else CATCH_ALL_PAGE
-        section = parts[1] if len(parts) > 2 else None
+        folders = path.relative_to(NOTEBOOKS_ROOT).parts[:-1]
+        if folders and folders[0] in known_pages:
+            page, section = folders[0], (folders[1] if len(folders) > 1 else None)
+        else:
+            page, section = CATCH_ALL_PAGE, (folders[0] if folders else None)
         grouped.setdefault((page, section), []).append(path)
     return grouped
 
@@ -276,20 +308,20 @@ def main(app):
                 # Staged under the same folders it came from, so two notebooks sharing a name in
                 # different sections cannot collide.
                 relative_dir = nb_path.parent.relative_to(NOTEBOOKS_ROOT)
-                nbg = NotebookGenerator(
+                generator = NotebookGenerator(
                     src_nb=nb_path,
                     category=str(relative_dir) if relative_dir.parts else CATCH_ALL_PAGE,
                     examples_dir=examples_dir,
                     thumbnails_dir=thumbnails_dir,
                 )
-                nbg.stage_notebook()
-                nbg.gen_previews()
+                generator.stage_notebook()
+                generator.gen_previews()
 
-                doc_name = f"{nbg.category}/{nbg.stripped_name}"
+                doc_name = f"{generator.category}/{generator.stripped_name}"
                 toctree_entries.append(doc_name)
-                # Relative to docs/source/ — the leading slash makes Sphinx resolve it from the source
+                # Relative to docs/source/: the leading slash makes Sphinx resolve it from the source
                 # root, so a hand-supplied thumbnail can be dropped in at the same path.
-                img_path = f"/_thumbnails/{nbg.category}/{nbg.stripped_name}.png"
+                img_path = f"/_thumbnails/{generator.category}/{generator.stripped_name}.png"
                 body.append(
                     ITEM_TEMPLATE.format(
                         doc_name=doc_name,

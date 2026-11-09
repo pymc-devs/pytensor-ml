@@ -67,6 +67,19 @@ def test_gpt2_builder_ties_the_head_to_the_token_embedding():
     np.testing.assert_allclose(logits, final @ token_embedding.T, rtol=1e-5, atol=1e-5)
 
 
+def test_gpt2_builder_ignores_the_stored_attention_mask():
+    """Hugging Face saves each layer's causal mask as a buffer named attn.bias. The attention builds
+    its own mask, so loading must not report those tensors as unused weights."""
+    _, _, keys = build_from_config(TINY_GPT2)
+    checkpoint = {
+        key: np.zeros(keys.parameter_for(key).get_value().shape, dtype="float32")
+        for key in keys.keys()
+    }
+    checkpoint |= {f"h.{i}.attn.bias": np.tril(np.ones((1, 1, 16, 16))) for i in range(2)}
+
+    assert keys.load(checkpoint.__getitem__, checkpoint) == []
+
+
 def test_gpt2_builder_rejects_an_unknown_activation():
     with pytest.raises(ValueError, match="activation_function is 'swiglu'"):
         build_from_config({**TINY_GPT2, "activation_function": "swiglu"})

@@ -15,14 +15,25 @@ from pytensor.graph.traversal import ancestors
 from pytensor.scan import scan
 from pytensor.tensor import random as ptr
 
-from pytensor_ml.layers import BatchNorm, Dropout, DropoutLayer, Linear, Sequential
+from pytensor_ml.layers import (
+    BatchNorm,
+    CausalSelfAttention,
+    Dropout,
+    DropoutLayer,
+    Embedding,
+    Linear,
+    Sequential,
+)
+from pytensor_ml.layers.attention import AttentionLayer
 from pytensor_ml.optim import adam
 from pytensor_ml.params import step_counter
 from pytensor_ml.pytensorf import (
     collect_non_trainable_params,
+    collect_non_trainable_updates,
     collect_trainable_params,
     compile_predict,
     function,
+    rebuild,
     rewrite_for_prediction,
     rewrite_pregrad,
 )
@@ -627,3 +638,92 @@ def test_a_generator_the_caller_writes_is_left_out_and_not_refused():
         collected = collect_generator_updates([first, second], already_written=[rng])
 
     assert collected == {}
+
+
+def test_rebuild_carries_a_static_shape_into_the_layer_ops():
+    """graph_replace keeps each layer op built for its original types, so a fixed sequence length stops at
+    the first one. The attention's causal mask is sized by that length, and MLX compiles it only when
+    the length is a constant."""
+    ids = pt.matrix("ids", dtype="int64")
+    attention = CausalSelfAttention("attn", n_embd=8, n_head=2)
+    hidden = attention(Embedding("embed", n_embeddings=20, n_features=8)(ids))
+
+    fixed_ids = pt.tensor("fixed_ids", shape=(2, 5), dtype="int64")
+    fixed_hidden = rebuild(hidden, {ids: fixed_ids})
+
+    assert fixed_hidden.type.shape == (2, 5, 8)
+    [attention_node] = [
+        variable.owner
+        for variable in ancestors([fixed_hidden])
+        if variable.owner is not None and isinstance(variable.owner.op, AttentionLayer)
+    ]
+    assert attention_node.op.input_types[0].shape == (2, 2, 5, 4)
+
+
+def test_rebuild_reads_the_original_parameters_and_computes_the_same_values():
+    X = pt.matrix("X")
+    y = Sequential(Linear("fc1", n_in=3, n_out=4), Linear("fc2", n_in=4, n_out=2))(X)
+
+    fixed_X = pt.tensor("fixed_X", shape=(5, 3))
+    fixed_y = rebuild(y, {X: fixed_X})
+
+    assert set(collect_trainable_params(fixed_y)) == set(collect_trainable_params(y))
+    batch = np.random.default_rng(0).normal(size=(5, 3)).astype(config.floatX)
+    np.testing.assert_allclose(fixed_y.eval({fixed_X: batch}), y.eval({X: batch}), rtol=1e-6)
+
+
+def test_rebuild_keeps_what_no_replacement_reaches():
+    X = pt.matrix("X")
+    Z = pt.matrix("Z")
+    from_X, from_Z = pt.exp(X), pt.exp(Z)
+
+    rebuilt_X, rebuilt_Z = rebuild([from_X, from_Z], {X: pt.tensor("fixed_X", shape=(2, 2))})
+
+    assert rebuilt_X.type.shape == (2, 2)
+    assert rebuilt_Z is from_Z
+
+
+def test_rebuild_remakes_a_random_variable_from_its_node_inputs():
+    """An op's __call__ is not its make_node: a random variable's takes distribution parameters, so the
+    node inputs (generator, size, parameters) have to go back through make_node."""
+    mu = pt.vector("mu")
+    rng = shared(np.random.default_rng(0), name="rng")
+    next_rng, draw = ptr.normal(mu, rng=rng, return_next_rng=True)
+
+    fixed_next_rng, fixed_draw = rebuild([next_rng, draw], {mu: pt.tensor("fixed_mu", shape=(3,))})
+
+    assert fixed_draw.type.shape == (3,)
+    assert fixed_next_rng.owner is fixed_draw.owner
+    assert fixed_draw.owner.inputs[0] is draw.owner.inputs[0]
+
+
+def test_rebuild_keeps_a_replacement_given_for_one_output_of_a_node():
+    """The node's other output still has to be rebuilt for the new input, and doing so must not overwrite
+    the output the caller replaced."""
+    x = pt.vector("x")
+    head, tail = pt.split(x, [2, 2], n_splits=2)
+    fixed_x = pt.tensor("fixed_x", shape=(4,))
+    new_head = pt.vector("new_head")
+
+    rebuilt_head, rebuilt_tail = rebuild([head * 2, tail * 3], {x: fixed_x, head: new_head})
+
+    x_value = np.array([1.0, 2.0, 3.0, 4.0], dtype=config.floatX)
+    new_head_value = np.array([10.0, 20.0], dtype=config.floatX)
+    np.testing.assert_allclose(rebuilt_head.eval({new_head: new_head_value}), [20.0, 40.0])
+    np.testing.assert_allclose(rebuilt_tail.eval({fixed_x: x_value}), [9.0, 12.0])
+
+
+def test_rebuild_keeps_every_output_of_a_rebuilt_layer_op():
+    """Batch norm's op returns the batch statistics alongside its output, and the running statistics are
+    updated from them. Rebuilding has to carry all three outputs over, or a step compiled from the
+    rebuilt graph trains without updating its running statistics."""
+    X = pt.matrix("X")
+    norm = BatchNorm("bn", n_in=3)
+    normalized = norm(X)
+
+    fixed_X = pt.tensor("fixed_X", shape=(5, 3))
+    fixed_normalized = rebuild(normalized, {X: fixed_X})
+
+    updates = collect_non_trainable_updates(fixed_normalized)
+    assert set(updates) == {norm.running_mean, norm.running_var}
+    assert all(fixed_X in ancestors([new_value]) for new_value in updates.values())

@@ -10,8 +10,15 @@ from pytensor.tensor.variable import TensorVariable
 
 from pytensor_ml import optim
 from pytensor_ml.loss import Loss, supervised_loss
-from pytensor_ml.params import TrainableParameter
-from pytensor_ml.pytensorf import collect_graph_inputs, collect_trainable_params, compile_predict
+from pytensor_ml.params import NonTrainableParameter, TrainableParameter
+from pytensor_ml.pytensorf import (
+    collect_data_inputs,
+    collect_graph_inputs,
+    collect_non_trainable_params,
+    collect_trainable_params,
+    compile_predict,
+    function,
+)
 from pytensor_ml.state import Initializer, initialize_params
 
 
@@ -110,7 +117,9 @@ class Model:
         the step is called with one batch per data input the graph reads, then the target -- for the usual
         single-input model, ``step(X_batch, target_batch)``. Given ``loss`` instead, trains that graph
         directly, which is what an autoencoder or a language-model objective needs -- neither has a target
-        separate from its input. Either way the step applies every update in place.
+        separate from its input. Either way the step applies every update in place. It updates only this
+        model's weights and running statistics: a loss that also reads another model, as a GAN's
+        discriminator loss reads the generator, leaves that model's statistics for its own step to update.
 
         Parameters
         ----------
@@ -144,14 +153,31 @@ class Model:
         elif loss is None:
             raise ValueError("Pass either loss_fn for a supervised target, or a prebuilt loss.")
 
-        return optim.compile_train(
+        extra_outputs = list(extra_outputs or [])
+        compile_kwargs = dict(compile_kwargs or self._compile_kwargs)
+        extra_updates = compile_kwargs.pop("updates", {})
+        if inputs is None:
+            inputs = collect_data_inputs([loss, *extra_outputs, *extra_updates.values()])
+
+        step_loss, updates = optim.build_train_updates(
             loss,
             rule,
             parameters=self.weights,
-            inputs=inputs,
             extra_outputs=extra_outputs,
-            compile_kwargs=compile_kwargs or self._compile_kwargs,
+            extra_updates=extra_updates,
         )
+
+        # Pinned to their current values rather than dropped, because `function` threads back in any
+        # statistic the updates leave unwritten.
+        own_state = set(collect_non_trainable_params(self.y))
+        updates |= {
+            variable: variable
+            for variable in updates
+            if isinstance(variable, NonTrainableParameter) and variable not in own_state
+        }
+
+        outputs = [step_loss, *extra_outputs] if extra_outputs else step_loss
+        return function(list(inputs), outputs, updates=updates, **compile_kwargs)
 
     def predict(self, *inputs: np.ndarray, **named_inputs: np.ndarray) -> np.ndarray:
         """

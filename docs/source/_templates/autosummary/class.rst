@@ -32,3 +32,5 @@
    {%- endfor %}
    {% endif %}
    {% endblock %}
+
+.. bibliography::

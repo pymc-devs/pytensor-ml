@@ -1,5 +1,5 @@
-🔪 Sharp Edges 🔪
-=================
+Sharp Edges
+===========
 
 pytensor-ml is a package for defining, training, and deploying deep learning models. It is
 not the only deep learning framework, and shares many similarities with Torch, Keras,

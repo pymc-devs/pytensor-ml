@@ -61,6 +61,7 @@ class KeyMap:
         self._prefix: tuple[str, ...] = ()
         self._bindings: dict[SharedVariable, _Binding] = {}
         self._by_key: dict[str, SharedVariable] = {}
+        self._ignored: set[str] = set()
 
     @contextmanager
     def scope(self, *parts: str) -> Iterator[None]:
@@ -106,6 +107,16 @@ class KeyMap:
         self._bindings[parameter] = _Binding(key, transform)
         self._by_key[key] = parameter
 
+    def ignore(self, *parts: str) -> None:
+        """
+        Record that the key ``parts`` names under the current scope holds no parameter.
+
+        A checkpoint can store tensors that are not weights, such as an attention mask saved as a
+        buffer. Loading skips an ignored key without reporting it as unused, and a checkpoint that
+        lacks it still loads.
+        """
+        self._ignored.add(".".join(self._prefix + tuple(parts)))
+
     def key_for(self, parameter: SharedVariable) -> str:
         """Checkpoint key ``parameter`` loads from."""
         bound = self._bindings.get(parameter)
@@ -127,9 +138,9 @@ class KeyMap:
     def __len__(self) -> int:
         return len(self._bindings)
 
-    def _checkpoint_names(self, checkpoint: set[str]) -> dict[str, str]:
+    def _checkpoint_naming(self, checkpoint: set[str]) -> Callable[[str], str]:
         """
-        Every bound key paired with the name the checkpoint gives it.
+        Map a bound key to the name the checkpoint gives it.
 
         Whether a checkpoint carries the model's own leading segment depends on the class it was
         saved from: transformers drops it for a bare ``CLIPTextModel`` and keeps it for a
@@ -138,21 +149,19 @@ class KeyMap:
         """
         bound = self.keys()
         if bound <= checkpoint:
-            return {key: key for key in bound}
+            return _unchanged
 
         leading = {key.split(".", 1)[0] for key in bound}
         for prefix in sorted({key.split(".", 1)[0] for key in checkpoint} - leading):
-            renamed = {key: f"{prefix}.{key}" for key in bound}
-            if set(renamed.values()) <= checkpoint:
-                return renamed
+            if {f"{prefix}.{key}" for key in bound} <= checkpoint:
+                return lambda key: f"{prefix}.{key}"
 
         if len(leading) == 1:
             prefix = f"{leading.pop()}."
-            renamed = {key: key.removeprefix(prefix) for key in bound}
-            if set(renamed.values()) <= checkpoint:
-                return renamed
+            if {key.removeprefix(prefix) for key in bound} <= checkpoint:
+                return lambda key: key.removeprefix(prefix)
 
-        return {key: key for key in bound}
+        return _unchanged
 
     def load(self, read: Callable[[str], np.ndarray], available: Iterable[str]) -> list[str]:
         """
@@ -177,10 +186,11 @@ class KeyMap:
         Returns
         -------
         surplus : list of str
-            Checkpoint keys no parameter loads from, sorted.
+            Checkpoint keys no parameter loads from and :meth:`ignore` did not name, sorted.
         """
         checkpoint = set(available)
-        names = self._checkpoint_names(checkpoint)
+        rename = self._checkpoint_naming(checkpoint)
+        names = {key: rename(key) for key in self.keys()}
 
         missing = sorted(set(names.values()) - checkpoint)
         if missing:
@@ -214,7 +224,8 @@ class KeyMap:
                 )
             parameter.set_value(array.astype(parameter.type.dtype, copy=False), borrow=True)
 
-        surplus = sorted(checkpoint - set(names.values()))
+        ignored = {rename(key) for key in self._ignored}
+        surplus = sorted(checkpoint - set(names.values()) - ignored)
         if surplus:
             _log.info(
                 "%d checkpoint tensor(s) went unused: %s",
@@ -222,3 +233,7 @@ class KeyMap:
                 ", ".join(surplus[:5]) + (" ..." if len(surplus) > 5 else ""),
             )
         return surplus
+
+
+def _unchanged(key: str) -> str:
+    return key

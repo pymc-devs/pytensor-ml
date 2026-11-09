@@ -28,6 +28,7 @@ from pytensor_ml.layers import (
     LayerNorm,
     Linear,
     MaxPool2D,
+    Reshape,
     RMSNorm,
     Sequential,
 )
@@ -752,6 +753,27 @@ def test_flatten_reaches_a_dense_head_from_a_convolution(rng):
     head = Linear("head", n_in=features, n_out=2)
     X_np = rng.normal(size=(5, 8, 8, 3)).astype(floatX)
     assert head(flattened).eval({X: X_np}).shape == (5, 2)
+
+
+@pytest.mark.parametrize(
+    "shape, target, expected",
+    [
+        ((None, 98), (7, 7, 2), (None, 7, 7, 2)),
+        ((5, 98), (7, -1, 2), (5, 7, 7, 2)),
+    ],
+    ids=["dynamic_batch", "inferred_axis"],
+)
+def test_reshape_keeps_the_batch_axis_and_the_static_target(shape, target, expected):
+    """A convolution after the reshape is constructed from the channel count, so the target shape has
+    to survive into the static type whether or not the batch size is known."""
+    assert Reshape(shape=target)(pt.tensor("X", shape=shape)).type.shape == expected
+
+
+def test_reshape_inverts_flatten(rng):
+    X_np = rng.normal(size=(3, 2, 5, 4)).astype(floatX)
+    X = pt.tensor("X", shape=(None, 2, 5, 4))
+
+    np.testing.assert_allclose(Reshape(shape=(2, 5, 4))(Flatten(X)).eval({X: X_np}), X_np)
 
 
 def test_batch_norm_on_a_flat_input_reduces_over_the_batch_alone(rng):

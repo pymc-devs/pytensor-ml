@@ -46,17 +46,18 @@ extensions = [
     "sphinx_copybutton",
     "sphinx_codeautolink",
     "sphinx_sitemap",
+    # Needs no ogp_site_url: on Read the Docs it reads the canonical URL from the build environment.
+    "sphinxext.opengraph",
     "notfound.extension",
     "jupyter_sphinx",
-    "sphinxcontrib.bibtex",
+    "simplebib",
     "generate_gallery",
 ]
 
-# Bibliographic citations: drop new entries into docs/source/references.bib
-# and cite from prose with `{cite:t}` (textual) or `{cite:p}` (parenthetical).
-bibtex_bibfiles = ["references.bib"]
-bibtex_default_style = "unsrt"
-bibtex_reference_style = "author_year"
+# Bibliographic citations: drop new entries into docs/source/references.bib and cite from prose with
+# `{cite:t}` / `{cite:p}`. Each page renders its own numbered reference list via `{bibliography}` (see
+# docs/sphinxext/simplebib.py); the autosummary templates add one to every API page.
+simplebib_bibfiles = ["references.bib"]
 
 # Use the document path as prefix for autosectionlabel anchors so the same
 # section title in two files doesn't collide.
@@ -70,6 +71,8 @@ exclude_patterns = [
     "*/autosummary/*.rst",
     "Thumbs.db",
     ".DS_Store",
+    # Fragments that pages pull in with an include, never pages of their own.
+    "_includes/*",
 ]
 
 source_suffix = {
@@ -156,6 +159,15 @@ myst_enable_extensions = [
     "substitution",
 ]
 myst_dmath_double_inline = True
+
+# Defaults for the extra-dependencies callout in _includes/extra_installs.md. A notebook names its
+# packages by setting ``extra_dependencies`` under ``myst.substitutions`` in its metadata, and can add a
+# note with ``extra_install_notes``.
+myst_substitutions = {
+    "pip_dependencies": "{{ extra_dependencies }}",
+    "conda_dependencies": "{{ extra_dependencies }}",
+    "extra_install_notes": "",
+}
 
 # Notebooks ship pre-rendered. Re-executing them on RTD would require pinning
 # every numerical dep and would slow the build significantly; flip this to

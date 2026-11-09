@@ -21,6 +21,7 @@ Combinators
     Sequential
     Concatenate
     Flatten
+    Reshape
     Squeeze
 
 Dense

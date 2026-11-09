@@ -73,15 +73,23 @@ Adding a notebook example
 -------------------------
 
 Drop the ``.ipynb`` under ``examples/``. The ``generate_gallery`` extension
-auto-discovers it on the next build, extracts the last image output as a
-thumbnail, and emits a grid card. Ship the notebook with its outputs already
-rendered — ``nb_execution_mode`` is ``"off"``, so nothing is re-run at build
-time.
+auto-discovers it on the next build and emits a grid card for it. Ship the
+notebook with its outputs already rendered: ``nb_execution_mode`` is ``"off"``,
+so nothing is re-run at build time.
 
-To group notebooks into named categories, create subdirectories under
-``examples/`` (e.g. ``examples/introductory/foo.ipynb``). The subdir name
-becomes the category id; pretty titles are looked up in ``CATEGORY_TITLES``
-inside ``generate_gallery.py`` and fall back to title-casing the folder name.
+The card's thumbnail is the first image of the cell tagged
+``gallery-thumbnail``, or the notebook's last image when no cell carries the
+tag. The image is padded to a square with white, never cropped. To draw a
+thumbnail that does not belong on the page, end the notebook with a markdown
+cell headed ``# Thumbnail Image`` and the figure cell after it, tag both
+``remove-cell`` so myst-nb leaves them off the rendered page, and tag the figure
+cell ``gallery-thumbnail``. A square figure fills the card without padding.
+
+A folder under ``examples/`` that is not one of the pages in ``GALLERY_PAGES``
+becomes a section of the gallery page, titled from the folder name (e.g.
+``examples/transformers/foo.ipynb`` lands under "Transformers").
+``SECTION_TITLES`` in ``generate_gallery.py`` overrides a title that
+title-casing gets wrong, and ``SECTION_ORDER`` pins where sections appear.
 
 Notebooks must be tracked by git to appear in the gallery, so untracked
 work-in-progress notebooks under ``examples/`` don't pollute the build.

@@ -12,7 +12,7 @@ from pytensor_ml.pytensorf.collect import (
     collect_trainable_params,
 )
 from pytensor_ml.pytensorf.compile import compile_predict, function
-from pytensor_ml.pytensorf.rewrite import rewrite_for_prediction, rewrite_pregrad
+from pytensor_ml.pytensorf.rewrite import rebuild, rewrite_for_prediction, rewrite_pregrad
 from pytensor_ml.pytensorf.rng import RandomSeed, SeedSequenceSeed, find_rng_nodes
 
 __all__ = [
@@ -32,6 +32,7 @@ __all__ = [
     "compile_predict",
     "find_rng_nodes",
     "function",
+    "rebuild",
     "rewrite_for_prediction",
     "rewrite_pregrad",
 ]
