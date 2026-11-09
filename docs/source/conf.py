@@ -59,6 +59,10 @@ extensions = [
 # docs/sphinxext/simplebib.py); the autosummary templates add one to every API page.
 simplebib_bibfiles = ["references.bib"]
 
+# The bundled Roboto Flex is a variable font, so matplotlib cannot draw the cards' bold text with it,
+# and it lacks the back-link arrow simplebib puts in reference lists.
+ogp_social_cards = {"font": "DejaVu Sans"}
+
 # Use the document path as prefix for autosectionlabel anchors so the same
 # section title in two files doesn't collide.
 autosectionlabel_prefix_document = True
