@@ -37,6 +37,12 @@ class CiteDomain(Domain):
     def get_objects(self):
         return []
 
+    def clear_doc(self, docname):
+        pass
+
+    def merge_domaindata(self, docnames, otherdata):
+        pass
+
     def resolve_xref(self, env, fromdocname, builder, typ, target, node, contnode):
         return None
 
