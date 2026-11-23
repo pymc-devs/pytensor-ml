@@ -8,10 +8,12 @@ import pytensor.tensor as pt
 
 from pytensor.compile.builders import OpFromGraph
 from pytensor.graph.basic import Constant, Variable
+from pytensor.graph.op import io_connection_pattern
 from pytensor.graph.replace import graph_replace
 from pytensor.graph.traversal import ancestors, truncated_graph_inputs
 from pytensor.scan.utils import until
 from pytensor.tensor import TensorVariable
+from pytensor.tensor.type import continuous_dtypes
 
 from pytensor_ml.optim.lbfgs import flat_dot
 from pytensor_ml.pytensorf.rng import find_generators_drawn_from
@@ -406,6 +408,31 @@ class LineSearchOp(OpFromGraph):
         return hash((super().__hash__(), self.line_search, self.n_parameters))
 
 
+def _continuous_connection_pattern(
+    inputs: Sequence[Variable], outputs: Sequence[Variable]
+) -> list[list[bool]]:
+    """Return the connection pattern of ``outputs`` on ``inputs`` with discrete outputs disconnected."""
+    pattern = io_connection_pattern(inputs, outputs)
+    continuous = [output.type.dtype in continuous_dtypes for output in outputs]
+    return [
+        [
+            connected and is_continuous
+            for connected, is_continuous in zip(row, continuous, strict=True)
+        ]
+        for row in pattern
+    ]
+
+
+def _piece(*, inputs: Sequence[Variable], outputs: Sequence[Variable], name: str) -> OpFromGraph:
+    """Return one piece of a search's inner graph, with its discrete outputs disconnected."""
+    return OpFromGraph(
+        list(inputs),
+        list(outputs),
+        name=name,
+        connection_pattern=_continuous_connection_pattern(inputs, outputs),
+    )
+
+
 # The pieces of a `LineSearchOp`'s inner graph, by name. `start` takes the loss and slope at the current
 # point and the directions to the first state; `step` takes a state and then every input of the search to
 # the next state and whether to stop; `trial` takes a step size, the parameters, the directions and every
@@ -571,7 +598,7 @@ def search_along(
         for variable in truncated_graph_inputs(trial_outputs, ancestors_to_include=moving)
         if variable not in moving and not isinstance(variable, Constant)
     ]
-    trial = OpFromGraph([*moving, *others], trial_outputs, name=TRIAL)
+    trial = _piece(inputs=[*moving, *others], outputs=trial_outputs, name=TRIAL)
 
     # The last trial travels beside the search's state, because a search only reads scalars and the
     # gradients have to outlive the loop.
@@ -584,9 +611,9 @@ def search_along(
             for direction, gradient in zip(direction_standins, gradients)
         ),
     ]
-    start = OpFromGraph(
-        [start_value, start_slope, *direction_standins],
-        [*(initial[field] for field in fields), *first_record],
+    start = _piece(
+        inputs=[start_value, start_slope, *direction_standins],
+        outputs=[*(initial[field] for field in fields), *first_record],
         name=START,
     )
 
@@ -605,8 +632,8 @@ def search_along(
         state, value_and_slope, start_value, start_slope, first_guess
     )
     inputs = [*parameters, *directions, value0, slope0, first_trial, *others]
-    step = OpFromGraph(
-        [
+    step = _piece(
+        inputs=[
             *state.values(),
             *record,
             *parameters,
@@ -616,7 +643,7 @@ def search_along(
             first_guess,
             *others,
         ],
-        [
+        outputs=[
             *(next_state[field] for field in fields),
             *(new.astype(old.dtype) for new, old in zip(last_trial, record)),
             stop,
@@ -627,9 +654,9 @@ def search_along(
     final = {field: initial[field].type() for field in fields}
     final_record = [variable.type() for variable in first_record]
     step_size, failed = line_search.finalize(final)
-    finish = OpFromGraph(
-        [*final.values(), *final_record],
-        [step_size, failed, final["count"], *final_record],
+    finish = _piece(
+        inputs=[*final.values(), *final_record],
+        outputs=[step_size, failed, final["count"], *final_record],
         name=FINISH,
     )
 
@@ -646,7 +673,13 @@ def search_along(
     )
     outputs = finish.make_node(*(values[-1] for values in trace)).outputs
 
-    search = LineSearchOp(inputs, outputs, line_search=line_search, n_parameters=len(parameters))
+    search = LineSearchOp(
+        inputs,
+        outputs,
+        line_search=line_search,
+        n_parameters=len(parameters),
+        connection_pattern=_continuous_connection_pattern(inputs, outputs),
+    )
     found, did_fail, evaluations, last_step, last_value, *last_gradients = search.make_node(
         *inputs
     ).outputs

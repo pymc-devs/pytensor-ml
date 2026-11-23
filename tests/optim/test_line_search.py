@@ -172,6 +172,20 @@ def test_the_search_is_one_node():
     assert result.step_size.owner is result.evaluations.owner
 
 
+def test_a_gradient_flows_through_the_search():
+    """The failure flag and the trial count are discrete, so they are disconnected from the inputs and
+    differentiating the step taken does not ask them for a gradient."""
+    target = pt.scalar("target", dtype="float64")
+    loss = pt.sum((X - target) ** 2)
+    [gradient] = pt.grad(loss, [X])
+    result = search_along(loss, [X], [gradient], [-gradient], zoom_line_search())
+    moved = X - result.step_size * gradient
+
+    d_moved_d_target = pytensor.function([X, target], pt.grad(moved.sum(), target))
+
+    np.testing.assert_allclose(d_moved_d_target(np.zeros(3), 1.0), 3.0)
+
+
 def test_a_loss_that_draws_random_numbers_is_refused():
     """Every trial would draw again, so the search would compare values of different functions."""
     generator = pytensor.shared(np.random.default_rng(0), name="noise_rng")
