@@ -7,6 +7,7 @@ import pytensor
 import pytensor.tensor as pt
 
 from pytensor.compile.builders import OpFromGraph
+from pytensor.gradient import disconnected_grad
 from pytensor.graph.basic import Constant, Variable
 from pytensor.graph.op import io_connection_pattern
 from pytensor.graph.replace import graph_replace
@@ -411,7 +412,7 @@ class LineSearchOp(OpFromGraph):
 def _continuous_connection_pattern(
     inputs: Sequence[Variable], outputs: Sequence[Variable]
 ) -> list[list[bool]]:
-    """Return the connection pattern of ``outputs`` on ``inputs`` with discrete outputs disconnected."""
+    """Return ``io_connection_pattern`` with discrete outputs disconnected."""
     pattern = io_connection_pattern(inputs, outputs)
     continuous = [output.type.dtype in continuous_dtypes for output in outputs]
     return [
@@ -526,6 +527,9 @@ def search_along(
     in a ``lax.while_loop``, and mlx runs every trial its budget allows, holding the state once one is
     accepted.
 
+    Under differentiation the steps are constants: ``step_size`` and ``trial_step`` have no gradient,
+    and ``trial_value`` and ``trial_gradients`` are differentiated with ``trial_step`` held fixed.
+
     Parameters
     ----------
     loss : TensorVariable
@@ -583,7 +587,7 @@ def search_along(
 
     trial_step = first_trial.type()
     moved: dict[Variable, Variable] = {
-        parameter: parameter + trial_step.astype(parameter.dtype) * direction
+        parameter: parameter + disconnected_grad(trial_step).astype(parameter.dtype) * direction
         for parameter, direction in zip(parameters, directions)
     }
     trial_value, *trial_gradients = graph_replace([loss, *gradients], moved, strict=True)
@@ -656,7 +660,13 @@ def search_along(
     step_size, failed = line_search.finalize(final)
     finish = _piece(
         inputs=[*final.values(), *final_record],
-        outputs=[step_size, failed, final["count"], *final_record],
+        outputs=[
+            disconnected_grad(step_size),
+            failed,
+            final["count"],
+            disconnected_grad(final_record[0]),
+            *final_record[1:],
+        ],
         name=FINISH,
     )
 
