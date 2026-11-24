@@ -5,6 +5,8 @@ import pytensor
 import pytensor.tensor as pt
 import pytest
 
+from pytensor.gradient import DisconnectedInputError
+from pytensor.graph.replace import graph_replace
 from scipy.optimize import line_search as scipy_line_search
 
 from pytensor_ml.optim.line_search import (
@@ -170,6 +172,52 @@ def test_the_search_is_one_node():
 
     assert isinstance(result.step_size.owner.op, LineSearchOp)
     assert result.step_size.owner is result.evaluations.owner
+
+
+def test_differentiating_through_the_search_holds_the_step_fixed():
+    """The accepted step depends on the target here, so a gradient that passed through the search
+    would differ from one with the step held fixed."""
+    target = pt.scalar("target", dtype="float64")
+    loss = pt.sum((X - target) ** 4)
+    [gradient] = pt.grad(loss, [X])
+    result = search_along(loss, [X], [gradient], [-gradient], zoom_line_search())
+    moved = X - result.step_size * gradient
+
+    step = pt.scalar("step", dtype="float64")
+    fixed_moved = X - step * gradient
+    fixed_value, fixed_gradient = graph_replace([loss, gradient], {X: fixed_moved})
+
+    searched_costs = [moved.sum(), result.trial_value, result.trial_gradients[0].sum()]
+    held_costs = [fixed_moved.sum(), fixed_value, fixed_gradient.sum()]
+    searched = pytensor.function(
+        [X, target],
+        [
+            result.step_size,
+            *(wrt for cost in searched_costs for wrt in pt.grad(cost, [target, X])),
+        ],
+    )
+    held = pytensor.function(
+        [X, target, step],
+        [wrt for cost in held_costs for wrt in pt.grad(cost, [target, X])],
+    )
+
+    point, target_value = np.zeros(3), 1.0
+    step_size, *searched_gradients = searched(point, target_value)
+
+    for searched_gradient, held_gradient in zip(
+        searched_gradients, held(point, target_value, step_size), strict=True
+    ):
+        np.testing.assert_allclose(searched_gradient, held_gradient)
+
+
+@pytest.mark.parametrize("output", ["step_size", "trial_step"])
+def test_the_steps_have_no_gradient(output):
+    target = pt.scalar("target", dtype="float64")
+    loss = pt.sum((X - target) ** 4)
+    result = search_along(loss, [X], [pt.grad(loss, X)], [D], zoom_line_search())
+
+    with pytest.raises(DisconnectedInputError):
+        pt.grad(getattr(result, output), target)
 
 
 def test_a_loss_that_draws_random_numbers_is_refused():

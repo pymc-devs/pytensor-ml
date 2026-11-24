@@ -683,6 +683,25 @@ def test_lbfgs_stays_finite_after_it_converges(line_search):
     np.testing.assert_array_equal(p.get_value(), 0.0)
 
 
+def test_lbfgs_with_a_line_search_differentiates_like_a_fixed_rate_at_the_accepted_step():
+    """The unit first step overshoots the steep quadratic's minimum, so the accepted step is an
+    interpolation that depends on the target."""
+    p = trainable(np.zeros(3), name="w")
+    target = pt.scalar("target", dtype=floatX)
+    loss = 100.0 * pt.sum((p - target) ** 2)
+    searched = lbfgs_updates(loss, [p], line_search=zoom_line_search())
+    [accepted_step] = [state for state in searched if state.name == "lbfgs/line_search/step_size"]
+    step_size = pt.scalar("step_size", dtype=floatX)
+    fixed = lbfgs_updates(loss, [p], learning_rate=step_size, namespace="fixed")
+
+    searched_step = function([target], [searched[accepted_step], grad(searched[p].sum(), target)])
+    fixed_step = function([target, step_size], grad(fixed[p].sum(), target))
+
+    step_size_value, searched_gradient = searched_step(0.1)
+
+    np.testing.assert_allclose(searched_gradient, fixed_step(0.1, step_size_value), rtol=RTOL)
+
+
 def test_lbfgs_parameters_of_different_dtypes_reach_the_minimum():
     # The curvatures and the identity scale are cross-parameter dots, so they are kept at the widest
     # parameter dtype while each parameter keeps its own.
