@@ -424,6 +424,23 @@ def _continuous_connection_pattern(
     ]
 
 
+def _tensor_inputs(variables: Sequence[Variable]) -> list[Variable]:
+    """Return ``variables`` with each computed non-tensor replaced by the inputs it is computed from."""
+    lifted: list[Variable] = []
+    seen: set[Variable] = set()
+    pending = list(reversed(variables))
+    while pending:
+        variable = pending.pop()
+        if variable in seen:
+            continue
+        seen.add(variable)
+        if isinstance(variable, TensorVariable) or variable.owner is None:
+            lifted.append(variable)
+        else:
+            pending.extend(reversed(variable.owner.inputs))
+    return lifted
+
+
 def _piece(*, inputs: Sequence[Variable], outputs: Sequence[Variable], name: str) -> OpFromGraph:
     """Return one piece of a search's inner graph, with its discrete outputs disconnected."""
     return OpFromGraph(
@@ -597,9 +614,13 @@ def search_along(
         *trial_gradients,
     ]
     moving = [trial_step, *parameters, *directions]
+    # `scan` turns a non-tensor non-sequence into a tensor outside the loop while its inner graph keeps
+    # the original type, so the trial piece takes the tensors those non-tensors are computed from.
     others = [
         variable
-        for variable in truncated_graph_inputs(trial_outputs, ancestors_to_include=moving)
+        for variable in _tensor_inputs(
+            truncated_graph_inputs(trial_outputs, ancestors_to_include=moving)
+        )
         if variable not in moving and not isinstance(variable, Constant)
     ]
     trial = _piece(inputs=[*moving, *others], outputs=trial_outputs, name=TRIAL)

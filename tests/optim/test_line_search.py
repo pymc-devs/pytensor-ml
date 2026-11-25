@@ -281,6 +281,20 @@ def test_the_search_moves_shared_parameters_along_a_direction_of_them():
     assert (bool(failed), int(evaluations)) == expected[1:]
 
 
+def test_the_search_takes_a_loss_that_indexes_with_a_scalar_tensor():
+    """The index becomes a non-tensor scalar inside the loss, which the loop cannot carry as an input."""
+    index = pt.lscalar("index")
+    loss = OBJECTIVES["quadratic"](X) + X[index] ** 2
+    result = search_along(loss, [X], [pt.grad(loss, X)], [D], zoom_line_search())
+
+    run = pytensor.function([X, D, index], [result.step_size, result.trial_value])
+    step_size, trial_value = run(np.zeros(2), np.array([1.0, 0.0]), 0)
+
+    # The search accepts the first trial, x = [1, 0], where the loss is (1 - 3)^2 / 2 + (0 - 3)^2 / 2 + 1^2.
+    assert step_size == 1.0
+    np.testing.assert_allclose(trial_value, 7.5)
+
+
 def test_a_parameter_the_loss_does_not_read_is_refused():
     unused = pt.vector("unused", dtype="float64")
     loss = OBJECTIVES["quadratic"](X)
