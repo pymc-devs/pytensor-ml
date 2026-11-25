@@ -2,6 +2,7 @@ from functools import cache
 
 import numpy as np
 import pytensor
+import pytensor.scalar as ps
 import pytensor.tensor as pt
 import pytest
 
@@ -293,6 +294,14 @@ def test_the_search_takes_a_loss_that_indexes_with_a_scalar_tensor():
     # The search accepts the first trial, x = [1, 0], where the loss is (1 - 3)^2 / 2 + (0 - 3)^2 / 2 + 1^2.
     assert step_size == 1.0
     np.testing.assert_allclose(trial_value, 7.5)
+
+
+def test_a_loss_that_reads_a_scalar_input_is_refused():
+    index = ps.int64("index")
+    loss = OBJECTIVES["quadratic"](X) + X[index] ** 2
+
+    with pytest.raises(ValueError, match="Convert index with"):
+        search_along(loss, [X], [pt.grad(loss, X)], [D], zoom_line_search())
 
 
 def test_a_parameter_the_loss_does_not_read_is_refused():

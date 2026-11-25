@@ -623,6 +623,13 @@ def search_along(
         )
         if variable not in moving and not isinstance(variable, Constant)
     ]
+    non_tensors = [variable for variable in others if not isinstance(variable, TensorVariable)]
+    if non_tensors:
+        names = ", ".join(str(variable) for variable in non_tensors)
+        raise ValueError(
+            f"A line search passes the loss's inputs into a loop, which carries only tensors. Convert "
+            f"{names} with pt.as_tensor_variable before the loss reads them."
+        )
     trial = _piece(inputs=[*moving, *others], outputs=trial_outputs, name=TRIAL)
 
     # The last trial travels beside the search's state, because a search only reads scalars and the
